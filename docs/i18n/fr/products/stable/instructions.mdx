@@ -1,0 +1,233 @@
+---
+title: "Instructions du Stable AMM"
+description: "L'ensemble des instructions actuellement appelables — Deposit, Withdraw, SwapBaseIn, SwapBaseOut, WithdrawPnl — plus les instructions supprimées lors de la mise à jour du 2026-06-22."
+---
+
+<Info>
+  **Cette page est traduite automatiquement par IA. La version anglaise fait foi.**
+
+  [Voir la version anglaise →](/docs/en/products/stable/instructions)
+</Info>
+
+<Info>
+  Le Stable AMM est un **programme indépendant** avec son propre ID de programme. Ce n'est **pas** un mode du programme AMM v4, et il n'est pas tradé « via » AMM v4 — il est déployé, mis à jour et appelé séparément. Il ressemble à AMM v4 uniquement par ses conventions de frais et de disposition des comptes.
+</Info>
+
+<Warning>
+  **Mise à jour du 2026-06-22 — suppression du code OpenBook (market) mort.** Le Stable AMM **a cessé de poster des ordres sur OpenBook il y a longtemps** ; le chemin de market-making du carnet d'ordres est dormant depuis des années. Cette mise à jour supprime les comptes et le code liés au marché restants — elle ne **change pas** le comportement du trading en direct.
+
+  Deux conséquences pour les intégrateurs :
+
+  1. **Dispositions de comptes plus petites.** `SwapBaseIn` / `SwapBaseOut` (**18 → 9**), `Deposit` (**14 → 12**), et `Withdraw` (**21/22 → 12**) suppriment les comptes Serum/market morts. Les anciennes dispositions restent analysables pour la compatibilité rétroactive. `WithdrawPnl` (**16 → 10**) est un **changement de rupture difficile sans chemin de compatibilité** (admin uniquement).
+  2. **La plupart des instructions sont supprimées.** Seules `SwapBaseIn`, `SwapBaseOut`, `Deposit`, `Withdraw`, et `WithdrawPnl` restent appelables. Toutes les autres instructions ne peuvent plus être appelées.
+
+  Journal des modifications : [`reference/changelog`](/docs/i18n/fr/reference/changelog).
+</Warning>
+
+## Inventaire des instructions
+
+### Appelables
+
+| Instruction | Catégorie | Notes |
+|-------------|-----------|-------|
+| `Deposit` | Liquidité | Ajouter de la liquidité, recevoir des LP. Nouvelle disposition de 12 comptes ; l'ancienne disposition de 14 comptes reste compatible. |
+| `Withdraw` | Liquidité | Brûler des LP, recevoir les deux côtés. Nouvelle disposition de 12 comptes ; l'ancienne disposition de 21/22 comptes reste compatible. |
+| `SwapBaseIn` | Swap | Swap à entrée exacte. Nouvelle disposition de 9 comptes ; l'ancienne disposition de 18 comptes reste compatible. |
+| `SwapBaseOut` | Swap | Swap à sortie exacte. Nouvelle disposition de 9 comptes ; l'ancienne disposition de 18 comptes reste compatible. |
+| `WithdrawPnl` | Admin | Récupérer les frais de protocole accumulés. Nouvelle disposition de 10 comptes (**rupture difficile — pas de compatibilité avec l'ancienne disposition**). |
+
+### Supprimées (plus appelables)
+
+Celles-ci ont été supprimées lors de la mise à jour du 2026-06-22 et ne peuvent plus être invoquées. Voir [Instructions supprimées](#instructions-supprimées).
+
+| Instruction | Ancienne catégorie | Ancien objectif |
+|-------------|-------------------|-----------------|
+| `Initialize` | Cycle de vie | Créer un pool. |
+| `PreInitialize` | Cycle de vie | Aide de pré-allocation héritée. |
+| `InitModelData` | Configuration du modèle | Créer et initialiser la table de recherche. |
+| `UpdateModelData` | Configuration du modèle | Remplir jusqu'à 5 éléments de table par appel. |
+| `MonitorStep` | Crank | Régler les remplissages OpenBook, reposter les ordres. |
+| `SetParams` | Admin | Modifier les paramètres du pool. |
+| `WithdrawSrm` | Hérité | Récupérer les remboursements de réduction de frais SRM. |
+| `SimulateInfo` | Diagnostic | Aide de devis en lecture seule. |
+
+## `Deposit`
+
+Ajouter de la liquidité, recevoir des jetons LP.
+
+**Arguments**
+
+```
+max_coin_amount: u64
+max_pc_amount: u64
+base_side: u64          // 0 = base sur coin, 1 = base sur pc
+```
+
+**Comptes** — nouvelle disposition, 12 comptes (inscriptible `W`, signataire `S`)
+
+| # | Nom | W | S | Notes |
+|---|-----|---|---|-------|
+| 0 | `token_program` |   |   | SPL Token. |
+| 1 | `amm` | W |   | `AmmInfo` du pool. |
+| 2 | `amm_authority` |   |   | PDA à l'échelle du programme. |
+| 3 | `amm_target_orders` | W |   | |
+| 4 | `amm_lp_mint` | W |   | Mint LP. |
+| 5 | `amm_coin_vault` | W |   | Coffre-fort coin du pool. |
+| 6 | `amm_pc_vault` | W |   | Coffre-fort pc du pool. |
+| 7 | `model_data_account` |   |   | **Table de recherche en lecture seule.** |
+| 8 | `user_source_coin` | W |   | Entrée coin de l'utilisateur. |
+| 9 | `user_source_pc` | W |   | Entrée pc de l'utilisateur. |
+| 10 | `user_dest_lp` | W |   | ATA LP de l'utilisateur. |
+| 11 | `user_source_owner` |   | S | Signataire de la transaction. |
+
+**Compatibilité** : `amm_open_orders` (ancien #3) et `serum_market` (ancien #9) sont supprimés. Quand **14** comptes sont passés, l'instruction est analysée avec l'ancienne disposition de 14 comptes ; les comptes Serum sont ignorés.
+
+**Mathématiques** — pro-rata standard utilisant la table de recherche pour calculer le ratio. Le SDK calcule la paire coin/pc pour le montant LP souhaité et vérifie par rapport aux plafonds maximaux.
+
+## `Withdraw`
+
+Brûler des LP, recevoir les deux côtés pro-rata.
+
+**Arguments**
+
+```
+amount: u64            // Jetons LP à brûler
+```
+
+**Comptes** — nouvelle disposition, 12 comptes (inscriptible `W`, signataire `S`)
+
+| # | Nom | W | S | Notes |
+|---|-----|---|---|-------|
+| 0 | `token_program` |   |   | SPL Token. |
+| 1 | `amm` | W |   | `AmmInfo` du pool. |
+| 2 | `amm_authority` |   |   | PDA à l'échelle du programme. |
+| 3 | `amm_target_orders` | W |   | |
+| 4 | `amm_lp_mint` | W |   | Mint LP. |
+| 5 | `amm_coin_vault` | W |   | Coffre-fort coin du pool. |
+| 6 | `amm_pc_vault` | W |   | Coffre-fort pc du pool. |
+| 7 | `model_data_account` |   |   | **Table de recherche en lecture seule.** |
+| 8 | `user_source_lp` | W |   | Source LP de l'utilisateur. |
+| 9 | `user_dest_coin` | W |   | Sortie coin de l'utilisateur. |
+| 10 | `user_dest_pc` | W |   | Sortie pc de l'utilisateur. |
+| 11 | `user_lp_owner` |   | S | Signataire de la transaction. |
+
+**Compatibilité** : neuf comptes Serum (`amm_open_orders`, `serum_program`, `serum_market`, `serum_coin_vault`, `serum_pc_vault`, `serum_vault_signer`, `serum_event_q`, `serum_bids`, `serum_asks`) sont supprimés. Les anciennes dispositions de **21** ou **22** comptes sont toujours acceptées. Notez cependant que la **logique de frais de parrainage pour le 22e compte optionnel `referrer_pc_wallet` a été supprimée** — il peut toujours être passé mais n'a plus d'effet.
+
+**Préconditions**
+
+- `user_source_lp` détient au moins `amount`.
+
+**Postconditions**
+
+- `amount` jetons LP sont brûlés.
+- L'utilisateur reçoit les montants coin et pc selon le pro-rata actuel, ajustés pour les frais accumulés.
+
+## `SwapBaseIn`
+
+Swap à entrée exacte utilisant la table de recherche pour la tarification.
+
+**Arguments**
+
+```
+amount_in: u64
+minimum_amount_out: u64
+```
+
+**Comptes** — nouvelle disposition, 9 comptes (inscriptible `W`, signataire `S`)
+
+| # | Nom | W | S | Notes |
+|---|-----|---|---|-------|
+| 0 | `spl_token program` |   |   | SPL Token. |
+| 1 | `amm` | W |   | `AmmInfo` du pool. |
+| 2 | `amm_authority` |   |   | PDA à l'échelle du programme. |
+| 3 | `amm_coin_vault` | W |   | Coffre-fort coin du pool. |
+| 4 | `amm_pc_vault` | W |   | Coffre-fort pc du pool. |
+| 5 | `model_data_account` |   |   | **Table de recherche en lecture seule.** |
+| 6 | `user_source_token` | W |   | Compte de jeton d'entrée de l'utilisateur. |
+| 7 | `user_destination_token` | W |   | Compte de jeton de sortie de l'utilisateur. |
+| 8 | `user_source_owner` |   | S | Utilisateur (signataire de la transaction). |
+
+**Compatibilité** : les neuf comptes OpenBook (`amm_open_orders`, `serum_program`, `serum_market`, `serum_bids`, `serum_asks`, `serum_event_queue`, `serum_coin_vault`, `serum_pc_vault`, `serum_vault_signer`) sont supprimés. Si le nombre de comptes passés n'est **pas 9**, l'instruction est analysée avec l'ancienne disposition de **18 comptes** ; les comptes Serum doivent toujours occuper leurs positions, mais leur contenu n'est plus validé ni utilisé.
+
+**Préconditions**
+
+- `amm.status` permet le swap.
+- `user_source_token` détient ≥ `amount_in`.
+
+**Postconditions**
+
+- L'utilisateur perd `amount_in`, gagne `amount_out ≥ minimum_amount_out`.
+- Les frais du pool incrémentent les compteurs `need_take_pnl_*`.
+
+**Mathématiques** — Interpolation de table de recherche comme décrit dans [`products/stable/math`](/docs/i18n/fr/products/stable/math).
+
+## `SwapBaseOut`
+
+Swap à sortie exacte (inverse de `SwapBaseIn`). Même disposition de 9 comptes, direction mathématique différente.
+
+**Arguments**
+
+```
+max_amount_in: u64
+amount_out: u64
+```
+
+## `WithdrawPnl`
+
+Admin uniquement. Récupérer les frais de protocole accumulés de `need_take_pnl_*` dans les comptes PnL désignés.
+
+<Warning>
+  **Changement de rupture difficile — pas de chemin de compatibilité.** Cette instruction n'a **pas** d'analyse pour l'ancienne disposition. L'envoi de l'ancienne disposition échoue avec des erreurs de validation telles que `InvalidTokenCoin` en raison du désalignement des comptes (ancien #3 était `open_orders`). Les outils d'administration qui appellent `WithdrawPnl` **doivent** être mis à jour vers la nouvelle disposition de 10 comptes.
+</Warning>
+
+**Arguments** — aucun (piloté par l'état).
+
+**Comptes** — nouvelle disposition, 10 comptes fixes, admin uniquement (inscriptible `W`, signataire `S`)
+
+| # | Nom | W | S | Notes |
+|---|-----|---|---|-------|
+| 0 | `spl_token program` |   |   | SPL Token. |
+| 1 | `amm` | W |   | `AmmInfo` du pool. |
+| 2 | `amm_authority` |   |   | PDA à l'échelle du programme. |
+| 3 | `amm_coin_vault` | W |   | Coffre-fort coin du pool. |
+| 4 | `amm_pc_vault` | W |   | Coffre-fort pc du pool. |
+| 5 | `amm_target_orders` | W |   | |
+| 6 | `model_data` |   |   | Table de recherche. |
+| 7 | `user_coin` | W |   | Compte coin de l'admin (reçoit les frais). |
+| 8 | `user_pc` | W |   | Compte pc de l'admin (reçoit les frais). |
+| 9 | `amm_admin` |   | S | Admin du pool (signataire). |
+
+**Changement logique** : quand les fonds disponibles du pool sont insuffisants pour retirer le PnL accumulé, le pool n'est **plus** mis en `CancelAllOrdersState` / `Disabled` ; l'instruction retourne `TakePnlError` directement. Le `referrer_pc_wallet` optionnel a également été supprimé.
+
+**Préconditions**
+
+- `amm_admin` doit être autorisé.
+
+**Postconditions**
+
+- `need_take_pnl_coin` et `need_take_pnl_pc` sont transférés aux comptes de l'admin.
+- Les compteurs sont remis à zéro.
+
+## Instructions supprimées
+
+Les instructions suivantes ont été supprimées lors de la mise à jour du 2026-06-22 et **ne peuvent plus être appelées**. Elles sont documentées ici uniquement pour que les intégrateurs les reconnaissent dans les transactions historiques et les SDK.
+
+- **`Initialize`** — autrefois amorçait un nouveau pool Stable AMM. Supprimée.
+- **`PreInitialize`** — aide de pré-allocation héritée. Supprimée.
+- **`InitModelData`** — autrefois créait et initialisait la table de recherche `ModelDataInfo`. Supprimée.
+- **`UpdateModelData`** — autrefois remplissait jusqu'à 5 éléments de table de recherche par appel. Supprimée.
+- **`MonitorStep`** — le crank OpenBook qui réglait les remplissages et repostait la grille d'ordres. Déjà longtemps dormant après que le pool ait cessé de poster sur OpenBook ; maintenant supprimée.
+- **`SetParams`** — modifications des paramètres d'administration (statut, frais, propriétaire, clé de données de modèle, etc.). Supprimée.
+- **`WithdrawSrm`** — récupérait les remboursements de réduction de frais SRM des pools de l'ère Serum précoce. Supprimée.
+- **`SimulateInfo`** — aide de devis en lecture seule. Supprimée ; utilisez les aides de courbe stable hors chaîne du SDK pour les devis (voir [Démos de code](/docs/i18n/fr/products/stable/code-demos)).
+
+## Où aller ensuite
+
+- [Comptes](/docs/i18n/fr/products/stable/accounts) — pour les dispositions et tailles des champs de compte.
+- [Mathématiques](/docs/i18n/fr/products/stable/math) — pour la logique d'interpolation de table de recherche.
+- [Démos de code](/docs/i18n/fr/products/stable/code-demos) — pour voir comment appeler celles-ci depuis le SDK.
+
+Sources :
+
+- `raydium-stable/program/src/instruction.rs` (enum et pack/unpack)
+- `raydium-stable/program/src/processor.rs` (logique d'exécution)

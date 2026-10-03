@@ -1,0 +1,71 @@
+---
+title: "SDK & API"
+description: "Referensi untuk TypeScript SDK Raydium, REST API, Anchor IDL, dan pola integrasi untuk Rust, Python, dan alat AI."
+---
+
+<Info>
+  **Halaman ini diterjemahkan secara otomatis oleh AI. Versi bahasa Inggris adalah acuan resmi.**
+
+  [Lihat versi bahasa Inggris →](/docs/en/sdk-api/index)
+</Info>
+
+## Halaman ini untuk siapa
+
+Pengembang yang mengintegrasikan Raydium dari off-chain (TS/JS, Python, backend) atau dari program Solana lain (Rust CPI). Juga untuk agen AI dan integrator alat coding — lihat [Integrasi AI](/docs/i18n/id/sdk-api/ai-integration).
+
+<Info>
+  **Ingin menjalankan sesuatu terlebih dahulu?** Tiga skrip end-to-end — swap, deploy pool CPMM, deploy pool CLMM — tersedia di [Mulai cepat](/docs/i18n/id/quick-start). Skrip swap dan CPMM adalah file tunggal yang dapat Anda tempel dan jalankan; alur CLMM memerlukan beberapa langkah tambahan. Jalankan transaksi nyata terlebih dahulu, kemudian kembali ke sini untuk referensi lengkap.
+</Info>
+
+## Pilih jalur integrasi Anda
+
+Lima jalur untuk dipilih. Jalur yang tepat tergantung pada apa yang memanggil Raydium dan seberapa banyak kontrol yang Anda butuhkan.
+
+| Jalur | Terbaik untuk | Latensi | Logika kustom | Bahasa |
+|---|---|---|---|---|
+| [Trade API](/docs/i18n/id/sdk-api/trade-api) | Backend, bot, Blink — di mana pun Anda ingin tx yang dibangun server | Terendah | Terbatas (rute preset) | Apa pun |
+| [TypeScript SDK](/docs/i18n/id/sdk-api/typescript-sdk) | Aplikasi Node/TS dan frontend yang membutuhkan akses builder penuh | Sedang | Penuh | TS / JS |
+| [Integrasi Python](/docs/i18n/id/sdk-api/python-integration) | Backend Python dan pipeline ML | Sedang | Penuh (pembuatan instr manual) | Python |
+| [Rust CPI](/docs/i18n/id/sdk-api/rust-cpi) | Program komposisi yang memanggil Raydium dari on-chain | N/A (on-chain) | Penuh + dapat dikomposisi | Rust |
+| [Anchor IDL](/docs/i18n/id/sdk-api/anchor-idl) | Codegen untuk bahasa tanpa dukungan pihak pertama (Go, Kotlin, Swift, ...) | Variabel | Penuh | Apa pun dengan alat codegen Anchor |
+
+Jika Anda tidak yakin: backend dan bot → **Trade API**; frontend dan aplikasi kontrol penuh → **TypeScript SDK**; komposisi on-chain → **Rust CPI**.
+
+## Isi bab
+
+<CardGroup cols={2}>
+  <Card title="TypeScript SDK" icon="js" href="/docs/i18n/id/sdk-api/typescript-sdk">
+    `@raydium-io/raydium-sdk-v2`: instalasi, inisialisasi, modul inti (pool, farm, launch), pembangun transaksi, jebakan umum.
+  </Card>
+  <Card title="REST API" icon="cloud" href="/docs/i18n/id/sdk-api/rest-api">
+    Endpoint publik untuk info pool, info mint, harga, dan transaksi yang dibangun server. Batas laju, panduan caching, versioning.
+  </Card>
+  <Card title="Trade API" icon="right-left" href="/docs/i18n/id/sdk-api/trade-api">
+    Transaksi swap yang dibangun server: quote, build, sign, send. Pola integrasi bebas SDK untuk backend, bot, dan Blink.
+  </Card>
+  <Card title="Anchor IDL" icon="file-code" href="/docs/i18n/id/sdk-api/anchor-idl">
+    Tempat menemukan IDL setiap program, cara meregenerasi klien darinya, apa yang harus diperhatikan saat IDL diperbarui.
+  </Card>
+  <Card title="Rust CPI" icon="rust" href="/docs/i18n/id/sdk-api/rust-cpi">
+    Pola untuk memanggil program Raydium dari program Solana lain — konstruksi daftar akun, benih penandatangan, penanganan kesalahan.
+  </Card>
+  <Card title="Integrasi Python" icon="python" href="/docs/i18n/id/sdk-api/python-integration">
+    Resep `solders` + `solana-py` untuk membangun swap/operasi pool Raydium dari Python. Berguna untuk backend dan bot.
+  </Card>
+  <Card title="Integrasi AI" icon="robot" href="/docs/i18n/id/sdk-api/ai-integration">
+    Server MCP, indeks `llms.txt`, menu salin per halaman, file konteks pra-bangun untuk Claude Code / Cursor / Windsurf dan agen coding lainnya.
+  </Card>
+</CardGroup>
+
+## Disiplin versi
+
+Setiap sampel kode di setiap halaman dalam bab ini memiliki banner di bagian atas:
+
+```
+SDK:       @raydium-io/raydium-sdk-v2 vX.Y.Z
+Program:   see /reference/program-addresses
+Cluster:   mainnet-beta
+Verified:  YYYY-MM-DD
+```
+
+Jika Anda menyentuh sampel kode, perbarui banner.

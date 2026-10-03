@@ -1,0 +1,369 @@
+---
+title: "LaunchLab code demos"
+description: "End-to-end TypeScript: create a LaunchLab launch, buy and sell on the bonding curve, graduate into a CPMM pool, and collect creator fees."
+---
+
+<Info>
+  **Version banner.**
+
+  - SDK: `@raydium-io/raydium-sdk-v2@0.2.64-alpha`
+  - Cluster: Solana `mainnet-beta`
+  - Program ID: see [`reference/program-addresses`](/docs/en/reference/program-addresses)
+  - Last verified: **2026-09-09** against SDK `0.2.64-alpha` source, [`raydium-sdk-V2-demo/src/launchpad`](https://github.com/raydium-io/raydium-sdk-V2-demo/tree/master/src/launchpad), and the `raydium-launch` program source
+
+  Pin the SDK version in your `package.json`. The bonding-curve interface has evolved between minor releases.
+</Info>
+
+## Setup
+
+Demos here mirror files in [`raydium-sdk-V2-demo/src/launchpad`](https://github.com/raydium-io/raydium-sdk-V2-demo/tree/master/src/launchpad). Bootstrap follows the demo repo's [`config.ts.template`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/config.ts.template):
+
+```ts
+import { Connection, Keypair, clusterApiUrl, PublicKey } from "@solana/web3.js";
+import { Raydium, TxVersion } from "@raydium-io/raydium-sdk-v2";
+import BN from "bn.js";
+import fs from "node:fs";
+
+const connection = new Connection(process.env.RPC_URL ?? clusterApiUrl("mainnet-beta"));
+const owner = Keypair.fromSecretKey(
+  new Uint8Array(JSON.parse(fs.readFileSync(process.env.KEYPAIR!, "utf8"))),
+);
+const raydium = await Raydium.load({
+  owner,
+  connection,
+  cluster: "mainnet",
+  disableFeatureCheck: true,
+  blockhashCommitment: "finalized",
+});
+export const txVersion = TxVersion.V0;
+```
+
+## Create a launch
+
+Source: [`src/launchpad/createMint.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/createMint.ts) (and [`createBonkMintApi.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/createBonkMintApi.ts) for the API-driven Bonk variant)
+
+Most of the launch's economics are **not** arguments — they come from the `GlobalConfig` you bind to via `configId`, and the SDK fills the rest from the API's default params. You pass the mint's identity, the config to bind, and (optionally) a first buy:
+
+```ts
+import {
+  LAUNCHPAD_PROGRAM,
+  DEVNET_PROGRAM_ID,
+  LaunchpadConfig,
+  getPdaLaunchpadConfigId,
+} from "@raydium-io/raydium-sdk-v2";
+import { Keypair, PublicKey } from "@solana/web3.js";
+import { NATIVE_MINT } from "@solana/spl-token";
+
+const programId = LAUNCHPAD_PROGRAM;          // devnet: DEVNET_PROGRAM_ID.LAUNCHPAD_PROGRAM
+
+// The base mint is a keypair you generate and sign with.
+const pair  = Keypair.generate();
+const mintA = pair.publicKey;
+
+// Bind a GlobalConfig: (quote mint, curve_type, index).
+const configId = getPdaLaunchpadConfigId(programId, NATIVE_MINT, 0, 0).publicKey;
+const configData = await raydium.connection.getAccountInfo(configId);
+if (!configData) throw new Error("config not found");
+const configInfo = LaunchpadConfig.decode(configData.data);
+const mintBInfo = await raydium.token.getTokenInfo(configInfo.mintB);
+
+const { execute, transactions, extInfo } = await raydium.launchpad.createLaunchpad({
+  programId,
+  mintA,
+  decimals: 6,
+  name:   "Example Token",
+  symbol: "EXMPL",                 // must be 10 characters or fewer
+  uri:    "https://example.com/metadata.json",   // must be non-empty
+  migrateType: "amm",              // "amm" | "cpmm"
+
+  configId,
+  configInfo,                      // optional; the SDK re-reads configId when omitted
+  mintBDecimals: mintBInfo.decimals,
+  mintBProgram:  new PublicKey(mintBInfo.programId),
+
+  // Optional first buy in the same bundle.
+  createOnly: true,                // true = create the mint only
+  buyAmount:  new BN(1000),        // ignored when createOnly is true
+  slippage:   new BN(100),         // 100 = 1%
+
+  extraSigners: [pair],            // the base-mint keypair must sign
+  txVersion: TxVersion.V0,
+
+  // Defaults come from the bound config's API defaults; override only if you must:
+  // supply:            new BN(1_000_000_000_000_000),
+  // totalSellA:        new BN(793_100_000_000_000),
+  // totalFundRaisingB: new BN(85_000_000_000),   // 85 SOL when mintB is SOL
+  // totalLockedAmount: new BN(0),
+  // cliffPeriod:       new BN(0),                // seconds
+  // unlockPeriod:      new BN(0),                // seconds
+  // platformId:        new PublicKey("4Bu96XjU84XjPDSpveTVf6LYGCkfW5FK7SNkREWcEfV4"), // Raydium's, the default
+});
+
+// createLaunchpad returns MULTIPLE transactions - execute them in order.
+const { txIds } = await execute({ sequentially: true });
+console.log("Pool:", extInfo.address.poolId.toBase58());
+console.log("Base mint:", mintA.toBase58());
+console.log("Create txs:", txIds);
+```
+
+Notes:
+
+- There is **no** `curveType`, `graduationFractionBps`, `initialK`, `quoteMint`, `openTime`, `fees` or `postGraduationLpPolicy` argument. The curve shape and the quote mint are properties of the `GlobalConfig` you bind; fee rates live on `GlobalConfig` and `PlatformConfig`; LP disposal at graduation is a `PlatformConfig` setting. See [`products/launchlab/instructions`](/docs/en/products/launchlab/instructions#initialize) for exactly what `InitializeV2` accepts.
+- `symbol` longer than 10 characters and an empty `uri` are both rejected client-side before any RPC.
+- Passing `transferFeeExtensionParams` switches the builder to `InitializeWithToken2022` and forces `migrateType` to `"cpmm"`.
+- The builder returns a `transactions` array; `createOnly: false` adds the first-buy transaction. Always `execute({ sequentially: true })` — the mint must exist before the buy lands.
+
+## Fetch launch state
+
+Source: [`src/launchpad/poolInfo.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/poolInfo.ts)
+
+There is no `getLaunchById`. The pool id is a PDA of `(programId, mintA, mintB)`, and `getRpcPoolInfo` returns the decoded `PoolState` with its bound `configInfo` attached:
+
+```ts
+import { getPdaLaunchpadPoolId, Curve } from "@raydium-io/raydium-sdk-v2";
+
+const poolId = getPdaLaunchpadPoolId(programId, mintA, NATIVE_MINT).publicKey;
+const poolInfo = await raydium.launchpad.getRpcPoolInfo({ poolId });
+
+console.log("status:", poolInfo.status);
+console.log("base sold:", poolInfo.realA.toString(), "/", poolInfo.totalSellA.toString());
+console.log("quote raised:", poolInfo.realB.toString(), "/", poolInfo.totalFundRaisingB.toString());
+
+// Current spot price on the curve.
+const price = Curve.getPrice({
+  poolInfo,
+  curveType: poolInfo.configInfo.curveType,
+  decimalA: poolInfo.mintDecimalsA,
+  decimalB: poolInfo.mintDecimalsB,
+});
+console.log("price:", price.toString());
+```
+
+`getRpcPoolsInfo({ poolIdList })` is the batched form and returns a `poolInfoMap` keyed by pool id — use it for portfolio views instead of looping. If you want to decode the raw accounts yourself, `LaunchpadPool.decode` and `LaunchpadConfig.decode` are exported.
+
+## Buy — exact quote in
+
+Source: [`src/launchpad/buy.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/buy.ts)
+
+The off-chain quote helper is **`Curve.buyExactIn`**, a static method on the exported `Curve` class — not a method on `raydium.launchpad`. The transaction builder is **`buyToken`**. Both need the platform's fee rates, which live on a separate `PlatformConfig` account:
+
+```ts
+import { Curve, PlatformConfig, toTransferFeeConfig } from "@raydium-io/raydium-sdk-v2";
+
+const inAmount = new BN(1).mul(new BN(10).pow(new BN(9)));   // 1 SOL
+const slippage = new BN(100);                                 // 100 = 1%
+
+const poolInfo = await raydium.launchpad.getRpcPoolInfo({ poolId });
+const platformData = await raydium.connection.getAccountInfo(poolInfo.platformId);
+const platformInfo = PlatformConfig.decode(platformData!.data);
+
+const mintInfo  = await raydium.token.getTokenInfo(mintA);
+const mintBInfo = await raydium.token.getTokenInfo(poolInfo.mintB);
+const epochInfo = await raydium.connection.getEpochInfo();
+
+// Off-chain preview — mirrors the on-chain curve math.
+const res = Curve.buyExactIn({
+  poolInfo,
+  amountB: inAmount,
+  protocolFeeRate: poolInfo.configInfo.tradeFeeRate,
+  platformFeeRate: platformInfo.feeRate,
+  creatorFeeRate:  platformInfo.creatorFeeRate,
+  curveType:       poolInfo.configInfo.curveType,
+  shareFeeRate:    new BN(0),
+  transferFeeConfigA: mintInfo.extensions.feeConfig  ? toTransferFeeConfig(mintInfo,  epochInfo.epoch) : undefined,
+  transferFeeConfigB: mintBInfo.extensions.feeConfig ? toTransferFeeConfig(mintBInfo, epochInfo.epoch) : undefined,
+  slot: await raydium.connection.getSlot(),
+});
+console.log("expected out:", res.amountA.amount.sub(res.amountA.fee ?? new BN(0)).toString());
+
+const { execute, extInfo } = await raydium.launchpad.buyToken({
+  programId,
+  mintA,
+  mintAProgram: new PublicKey(mintInfo.programId),
+  mintB:        poolInfo.mintB,
+  mintBProgram: new PublicKey(mintBInfo.programId),
+  transferFeeConfigB: toTransferFeeConfig(mintBInfo, epochInfo.epoch),
+  poolInfo,
+  configInfo:      poolInfo.configInfo,
+  platformFeeRate: platformInfo.feeRate,
+  buyAmount:       inAmount,
+  slippage,                       // BN in bps; the SDK derives minMintAAmount from it
+  txVersion: TxVersion.V0,
+});
+
+console.log("expected receive amount:", extInfo.decimalOutAmount.toString());
+const { txId } = await execute({ sendAndConfirm: true });
+console.log("Buy tx:", txId);
+```
+
+You can pass `minMintAAmount` explicitly instead of `slippage`; omit both and the SDK computes the bound from live RPC data. `shareFeeRate` must not exceed `poolInfo.configInfo.maxShareFeeRate`, and it only applies when you also pass a `shareFeeReceiver`.
+
+## Buy — exact base out
+
+The builder is **`buyTokenExactOut`**, and the amount arguments are `outAmount` (base you want) and `maxBuyAmount` (quote you will spend at most). `Curve.buyExactOut({ poolInfo, amountA, ... })` is the matching off-chain preview.
+
+```ts
+const { execute, extInfo } = await raydium.launchpad.buyTokenExactOut({
+  programId,
+  mintA,
+  mintAProgram: new PublicKey(mintInfo.programId),
+  mintB:        poolInfo.mintB,
+  mintBProgram: new PublicKey(mintBInfo.programId),
+  poolInfo,
+  configInfo:      poolInfo.configInfo,
+  platformFeeRate: platformInfo.feeRate,
+
+  outAmount:    new BN(1_000_000).mul(new BN(10).pow(new BN(6))),  // 1M base
+  maxBuyAmount: new BN(2).mul(new BN(10).pow(new BN(9))),          // cap at 2 SOL
+  slippage:     new BN(100),
+
+  txVersion: TxVersion.V0,
+});
+
+console.log("out:", extInfo.outAmount.toString(), "max spent:", extInfo.maxSpentAmount.toString());
+await execute({ sendAndConfirm: true });
+```
+
+Useful for "buy exactly X tokens" UIs. The builder rejects an `outAmount` of zero client-side, and the program reverts if the curve has moved enough that the quote requirement exceeds `maxBuyAmount`.
+
+## Sell
+
+Source: [`src/launchpad/sell.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/sell.ts)
+
+The builder is **`sellToken`** (`sellTokenExactOut` for the exact-quote-out variant), with `sellAmount` and an optional `minAmountB`. `Curve.sellExactIn({ poolInfo, amountA, ... })` previews it.
+
+```ts
+const inAmount = new BN(500_000).mul(new BN(10).pow(new BN(6)));  // 0.5M base
+
+const res = Curve.sellExactIn({
+  poolInfo,
+  amountA: inAmount,
+  protocolFeeRate: poolInfo.configInfo.tradeFeeRate,
+  platformFeeRate: platformInfo.feeRate,
+  creatorFeeRate:  platformInfo.creatorFeeRate,
+  curveType:       poolInfo.configInfo.curveType,
+  shareFeeRate:    new BN(0),
+  transferFeeConfigA: mintInfo.extensions.feeConfig  ? toTransferFeeConfig(mintInfo,  epochInfo.epoch) : undefined,
+  transferFeeConfigB: mintBInfo.extensions.feeConfig ? toTransferFeeConfig(mintBInfo, epochInfo.epoch) : undefined,
+  slot: await raydium.connection.getSlot(),
+});
+console.log("expected quote out:", res.amountB.toString());
+
+const { execute } = await raydium.launchpad.sellToken({
+  programId,
+  mintA,
+  mintAProgram: new PublicKey(mintInfo.programId),
+  mintB:        poolInfo.mintB,
+  mintBProgram: new PublicKey(mintBInfo.programId),
+  poolInfo,
+  configInfo:      poolInfo.configInfo,
+  platformFeeRate: platformInfo.feeRate,
+  sellAmount:      inAmount,
+  slippage:        new BN(100),
+  txVersion: TxVersion.V0,
+});
+
+await execute({ sendAndConfirm: true });
+```
+
+The curve's sell path is symmetric to the buy path: reducing `real_a` by `sellAmount` returns `quote_out` equal to the integrated area under the curve between `real_a − sellAmount` and `real_a`, minus the sell fee. `sellAmount` must be greater than zero — the builder rejects zero before any RPC.
+
+## Graduation
+
+<Warning>
+  **Graduation is not something an integrator can trigger.** There is no `raydium.launchpad.graduate`, no `autoGraduate` flag on the buy builders, and no `willGraduate` field on their return value. On-chain, graduation is `MigrateToCpswap` (or the legacy `MigrateToAmm`), and both instructions constrain their signer to a wallet recorded on the binding `GlobalConfig` — `migrate_to_cpswap_wallet` and `migrate_to_amm_wallet` respectively. A call from any other signer fails with `InvalidOwner`. It is **not** permissionless, and no MEV bot can race it.
+</Warning>
+
+Those wallets are operated by Raydium's graduation crank, so in practice migration lands seconds after the threshold is crossed regardless of who made the final buy. From an integrator's side the only thing to do is treat the status transition as a fast event: poll `getRpcPoolInfo` (or subscribe over gRPC, below) and switch your UI from the curve to the resulting CPMM pool when `status` changes.
+
+See [`products/launchlab/instructions`](/docs/en/products/launchlab/instructions#migratetoamm-/-migratetocpswap) for the account lists, the migration fee, and how LP is split at graduation.
+
+## Collect creator fees
+
+Source: [`src/launchpad/claimCreatorFee.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/claimCreatorFee.ts) (single mint) and [`collectAllCreatorFees.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/collectAllCreatorFees.ts) (batched)
+
+The method is **`claimCreatorFee`** (and `claimMultipleCreatorFee` for the batched form). It is keyed by the **quote mint**, not by a launch — one call sweeps the signer's accrued creator fees in that mint across their launches:
+
+```ts
+import { NATIVE_MINT } from "@solana/spl-token";
+
+const { execute } = await raydium.launchpad.claimCreatorFee({
+  programId,
+  mintB: NATIVE_MINT,          // the quote mint to claim in
+  // mintBProgram: TOKEN_PROGRAM_ID,   // or TOKEN_2022_PROGRAM_ID
+  txVersion: TxVersion.V0,
+});
+
+await execute({ sendAndConfirm: true });
+```
+
+Transfers the accrued creator-fee counter to the creator's ATA on the quote mint. Callable pre- or post-graduation; use it periodically rather than waiting for a huge balance to accumulate. Platform operators have the parallel `claimPlatformFee` / `claimAllPlatformFee` / `claimVaultPlatformFee` builders.
+
+## Track a launch through its lifecycle
+
+Putting it together, a monitoring script might look like:
+
+```ts
+async function watch(poolId: PublicKey) {
+  const startStatus = (await raydium.launchpad.getRpcPoolInfo({ poolId })).status;
+
+  while (true) {
+    const p = await raydium.launchpad.getRpcPoolInfo({ poolId });
+    const progress = Number(p.realB.toString()) / Number(p.totalFundRaisingB.toString());
+
+    console.log(`status=${p.status}`, `progress=${(progress * 100).toFixed(2)}%`);
+
+    if (p.status !== startStatus) {
+      console.log("status changed - the launch has migrated; switch to the pool page");
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 10_000));
+  }
+}
+```
+
+Polling `getRpcPoolInfo` on a 10-second timer is fine for a single launch. For an indexer, use the gRPC subscription below instead — `getRpcPoolsInfo({ poolIdList })` batches, but polling hundreds of pools still burns RPC credits for no benefit.
+
+## Watch configs and pools over gRPC
+
+Source: [`src/grpc/launchpadPoolInfo.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/grpc/launchpadPoolInfo.ts)
+
+Subscribes to the LaunchLab program over Yellowstone gRPC and logs every `GlobalConfig` and `PoolState` update with each mint's token program. Two `datasize` filters on one `accounts` subscription separate the two account types, so a single stream covers both.
+
+The demo is the shortest correct reference for classifying a launch's mints, which the [Token-2022 quote-mint release](/docs/en/reference/changelog/2026-08-24-launchlab-token2022-quote-mint) makes necessary:
+
+- **Pools** are classified straight from `PoolState.token_program_flag`, decoding bit0 for the base mint and bit1 for the quote mint with no mint fetch at all. Testing the whole byte against `0` — which was sufficient while quote mints were legacy-only — misreads a legacy base mint as Token-2022 whenever the quote mint is Token-2022.
+- **Configs** cannot be classified that way: a `GlobalConfig` stores its quote mint's address and no program flag, so the demo reads the mint account's owner once and caches it per mint.
+
+It also cross-checks the two against each other, which is a useful assertion to keep in your own indexer. Note that `create` versus `update` is inferred from the demo's own caches, seeded at startup from `getProgramAccounts`; with that seeding disabled, read "create" as "first seen on this stream".
+
+gRPC access is not part of the public RPC surface — see the demo repo's [`src/grpc/README.md`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/grpc/README.md).
+
+## Rust CPI
+
+Calling LaunchLab from your own Anchor program is rare (most launch integrations are TS-side only). If you do:
+
+- The crate is **`raydium-launchpad`** (lib name `raydium_launchpad`), version `0.2.0`, and it does expose a `cpi` feature. There is **no** `raydium_launchlab`.
+- It is **not published on crates.io** — depend on it by git revision, the same way as the other Raydium program crates.
+- The CPI entry points are named after the on-chain instructions, not after the SDK's TypeScript methods: `buy_exact_in`, `buy_exact_out`, `sell_exact_in`, `sell_exact_out`, `claim_creator_fee`, `create_vesting_account`, `claim_vested_token`. `migrate_to_amm` / `migrate_to_cpswap` are signer-gated to the `GlobalConfig` migration wallets and are not callable from an integrator program.
+
+See [`sdk-api/rust-cpi`](/docs/en/sdk-api/rust-cpi) for the crate-pinning rules — in particular the Anchor version split, which decides whether one crate can CPI into both LaunchLab and CLMM.
+
+## Pitfalls
+
+- **Confusing on-chain instruction names with SDK method names.** The program has `buy_exact_in` / `sell_exact_in`; the SDK has `buyToken` / `sellToken`. `buyExactIn` and `sellExactIn` exist only as **static methods on `Curve`**, and they compute a quote — they do not build a transaction.
+- **Forgetting `extraSigners`.** `createLaunchpad` creates the base mint from a keypair you generate, so that keypair has to sign. Omit `extraSigners: [pair]` and the transaction fails signature verification.
+- **Not choosing the quote mint.** You don't pass one. The quote mint is a property of the `GlobalConfig` you bind through `configId` — `getPdaLaunchpadConfigId(programId, quoteMint, curveType, index)`. To launch against a different quote mint, bind a different config; `raydium.api.fetchLaunchConfigs()` lists the available ones with their default params.
+- **Metadata size.** Long `uri` strings push the Metaplex CPI over the budget. Keep `uri` under ~200 chars — most CDN-hosted JSON metadata fits easily. `symbol` is hard-capped at 10 characters.
+- **Treating graduation as a race you can enter.** It isn't — see the warning above. Your UI should still treat `status` transitions as fast events, because Raydium's crank lands the migration within seconds of the threshold being crossed.
+
+## Where to go next
+
+- [`products/launchlab/bonding-curve`](/docs/en/products/launchlab/bonding-curve) — curve math.
+- [`products/cpmm/code-demos`](/docs/en/products/cpmm/code-demos) — what to do with the resulting pool.
+- [`user-flows/launch-token-launchlab`](/docs/en/user-flows/launch-token-launchlab) — the end-to-end launch-a-token guide, including off-chain steps.
+
+Sources:
+
+- [Raydium SDK v2](https://github.com/raydium-io/raydium-sdk-V2)
+- Raydium LaunchLab program source

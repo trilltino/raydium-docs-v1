@@ -86,10 +86,10 @@ If your PR adds or modifies code samples, include the verification date in the p
 
 ## Cross-references
 
-- **Internal links** use absolute paths starting with `/`, e.g. `/products/cpmm/instructions`. Don't link to the `.mdx` extension.
-- **Program IDs** live in `reference/program-addresses.mdx`. Other pages link to it; they don't hardcode IDs.
-- **Error codes** live in `reference/error-codes.mdx`. Instruction pages link to the specific anchor (e.g. `/reference/error-codes#clmm`).
-- **Math definitions** live in `algorithms/`. Per-product `math.mdx` pages give the product-specific *instantiation* and link back.
+- **Internal links** use absolute paths starting with `/`, e.g. `/docs/en/products/cpmm/instructions`. Don't link to the `.mdx` extension.
+- **Program IDs** live in `docs/en/reference/program-addresses.mdx`. Other pages link to it; they don't hardcode IDs.
+- **Error codes** live in `docs/en/reference/error-codes.mdx`. Instruction pages link to the specific anchor (e.g. `/docs/en/reference/error-codes#clmm`).
+- **Math definitions** live in `docs/en/algorithms/`. Per-product `math.mdx` pages give the product-specific *instantiation* and link back.
 
 ## Diagrams
 
@@ -107,11 +107,11 @@ Before requesting review, please confirm:
 - [ ] No `TODO`, `FIXME`, `XXX`, `coming soon`, or placeholder text remains.
 - [ ] Internal links use absolute `/path` form, not relative paths.
 - [ ] If you renamed or moved a page, set up a redirect in `docs.json` so external links keep working.
-- [ ] If you **added, removed, or renamed any page** under the English root, you ran `python3 scripts/sync-locales.py` and committed the resulting `docs.json` so every locale stays in lock-step. CI runs `--check` and will fail otherwise.
+- [ ] If you **added, removed, or renamed any page** under `docs/en`, you ran `python3 scripts/sync-locales.py` and committed the resulting `docs.json` so every locale stays in lock-step. CI runs `--check` and will fail otherwise.
 
 ## Keeping locales in sync — `scripts/sync-locales.py`
 
-The English tree at the repo root is the source of truth. The thirteen locale trees (`zh`, `zh-Hant`, `ja`, `ko`, `ru`, `es`, `de`, `fr`, `pt`, `tr`, `vi`, `id`, `ar`) mirror its structure, but individual pages may not be translated yet. To keep `docs.json` honest, the repo ships a small idempotent script:
+The English tree under `docs/en` is the source of truth. The thirteen locale trees under `docs/i18n` (`zh`, `zh-Hant`, `ja`, `ko`, `ru`, `es`, `de`, `fr`, `pt`, `tr`, `vi`, `id`, `ar`) mirror its structure, but individual pages may not be translated yet. To keep `docs.json` honest, the repo ships a small idempotent script:
 
 ```bash
 python3 scripts/sync-locales.py            # rewrite docs.json in place
@@ -122,16 +122,16 @@ python3 scripts/sync-locales.py --diff     # preview a unified diff and exit
 What the script does, end to end:
 
 - Walks the English `tabs` tree and mirrors it into every locale's `tabs`. Existing translated tab/group/sub-group labels are preserved by position; brand-new English entries fall back to the English label until a translator localizes them.
-- For every English page slug `<path>`: if `<locale>/<path>.mdx` exists on disk it goes into the locale's nav as `<locale>/<path>`; otherwise the page is **omitted** from the locale's nav and a redirect `/<locale>/<path>` → `/<path>` is appended to the top-level `redirects` array. Direct URL visits to a not-yet-translated locale page therefore land on the English version instead of 404'ing.
-- Mintlify `openapi`-driven groups (no `pages:` array, just `{source, directory}`) are mirrored too — the `source` and `directory` get the `<locale>/` prefix automatically.
+- For every English page slug `docs/en/<path>`: if `docs/i18n/<locale>/<path>.mdx` exists on disk it goes into the locale's nav as `docs/i18n/<locale>/<path>`; otherwise the page is **omitted** from the locale's nav and a redirect `/docs/i18n/<locale>/<path>` -> `/docs/en/<path>` is appended to the top-level `redirects` array. Direct URL visits to a not-yet-translated locale page therefore land on the English version instead of 404'ing.
+- Mintlify `openapi`-driven groups (no `pages:` array, just `{source, directory}`) are mirrored too — the `source` and `directory` get the `docs/i18n/<locale>/` prefix automatically.
 - Empty groups and tabs are dropped from the locale's nav after pruning.
 
-Running the script never duplicates work: every redirect whose source begins with a known locale prefix is regenerated from scratch, so re-runs are stable. Manually-added redirects (anything else, including the existing `/en` → `/` rule) are kept untouched.
+Running the script never duplicates work: every redirect whose source begins with a known locale content prefix is regenerated from scratch, so re-runs are stable. Manually-added redirects are kept untouched.
 
 When to run it:
 
-- After **adding** a page under the English root.
-- After **removing** or **renaming** a page under the English root.
+- After **adding** a page under `docs/en`.
+- After **removing** or **renaming** a page under `docs/en`.
 - After **translating** a previously-missing locale page (so the locale picks it up in nav and the redundant fallback redirect is dropped).
 - After **adding a new locale** (see "Adding a new locale" below).
 
@@ -146,26 +146,26 @@ The architecture explicitly excludes a few things; PRs adding them will be decli
 
 ## Translations
 
-This repository is multi-language. Each locale lives under its own top-level directory and is wired into `docs.json` under `navigation.languages`.
+This repository is multi-language. Each locale lives under `docs/i18n/<locale>` and is wired into `docs.json` under `navigation.languages`.
 
 ### Current locales
 
 | Code | Directory | URL prefix | Status |
 |------|-----------|-----------|--------|
-| `en` | repo root (no prefix) | `/<path>` | Source of truth. All new content lands in English first; the default locale lives at the root rather than under an `en/` directory. |
-| `zh` | [`zh/`](./zh/) | `/zh/<path>` | Simplified Chinese. |
-| `zh-Hant` | [`zh-Hant/`](./zh-Hant/) | `/zh-Hant/<path>` | Traditional Chinese. |
-| `ja` | [`ja/`](./ja/) | `/ja/<path>` | Japanese. |
-| `ko` | [`ko/`](./ko/) | `/ko/<path>` | Korean. |
-| `ru` | [`ru/`](./ru/) | `/ru/<path>` | Russian. |
-| `es` | [`es/`](./es/) | `/es/<path>` | Spanish. |
-| `de` | [`de/`](./de/) | `/de/<path>` | German. |
-| `fr` | [`fr/`](./fr/) | `/fr/<path>` | French. |
-| `pt` | [`pt/`](./pt/) | `/pt/<path>` | Portuguese. |
-| `tr` | [`tr/`](./tr/) | `/tr/<path>` | Turkish. |
-| `vi` | [`vi/`](./vi/) | `/vi/<path>` | Vietnamese. |
-| `id` | [`id/`](./id/) | `/id/<path>` | Indonesian. |
-| `ar` | [`ar/`](./ar/) | `/ar/<path>` | Arabic (right-to-left). |
+| `en` | [`docs/en/`](./docs/en/) | `/docs/en/<path>` | Source of truth. All new content lands in English first. |
+| `zh` | [`docs/i18n/zh/`](./docs/i18n/zh/) | `/docs/i18n/zh/<path>` | Simplified Chinese. |
+| `zh-Hant` | [`docs/i18n/zh-Hant/`](./docs/i18n/zh-Hant/) | `/docs/i18n/zh-Hant/<path>` | Traditional Chinese. |
+| `ja` | [`docs/i18n/ja/`](./docs/i18n/ja/) | `/docs/i18n/ja/<path>` | Japanese. |
+| `ko` | [`docs/i18n/ko/`](./docs/i18n/ko/) | `/docs/i18n/ko/<path>` | Korean. |
+| `ru` | [`docs/i18n/ru/`](./docs/i18n/ru/) | `/docs/i18n/ru/<path>` | Russian. |
+| `es` | [`docs/i18n/es/`](./docs/i18n/es/) | `/docs/i18n/es/<path>` | Spanish. |
+| `de` | [`docs/i18n/de/`](./docs/i18n/de/) | `/docs/i18n/de/<path>` | German. |
+| `fr` | [`docs/i18n/fr/`](./docs/i18n/fr/) | `/docs/i18n/fr/<path>` | French. |
+| `pt` | [`docs/i18n/pt/`](./docs/i18n/pt/) | `/docs/i18n/pt/<path>` | Portuguese. |
+| `tr` | [`docs/i18n/tr/`](./docs/i18n/tr/) | `/docs/i18n/tr/<path>` | Turkish. |
+| `vi` | [`docs/i18n/vi/`](./docs/i18n/vi/) | `/docs/i18n/vi/<path>` | Vietnamese. |
+| `id` | [`docs/i18n/id/`](./docs/i18n/id/) | `/docs/i18n/id/<path>` | Indonesian. |
+| `ar` | [`docs/i18n/ar/`](./docs/i18n/ar/) | `/docs/i18n/ar/<path>` | Arabic (right-to-left). |
 
 Each non-English locale mirrors the English tree page-for-page. Pages that haven't been translated yet are simply absent from the locale's directory — `scripts/sync-locales.py` (see above) keeps `docs.json` in sync with what's actually on disk and emits per-locale redirect rules so direct URL visits to untranslated pages fall through to the English version. Translators don't need to maintain stub files for missing pages.
 
@@ -173,12 +173,12 @@ Want to add another language? Open an issue first so we can scope review capacit
 
 ### Translation workflow
 
-1. **Pick a page.** Find a page whose English source exists at the repo root but whose locale equivalent is missing under `<locale>/`. The full list is whatever `python3 scripts/sync-locales.py --diff` shows as "redirect" entries for that locale. Small, self-contained pages (glossary entries, single user flows) make good first translations.
+1. **Pick a page.** Find a page whose English source exists under `docs/en` but whose locale equivalent is missing under `docs/i18n/<locale>`. The full list is whatever `python3 scripts/sync-locales.py --diff` shows as "redirect" entries for that locale. Small, self-contained pages (glossary entries, single user flows) make good first translations.
 2. **Open an issue first** if you're claiming a non-trivial page. This avoids two contributors translating the same page in parallel. Title format: `[<locale>] Translate /<path>`.
-3. **Translate from the matching English file** at the repo root. The directory tree under the root and under `<locale>/` is identical — translating `products/cpmm/instructions.mdx` means creating `<locale>/products/cpmm/instructions.mdx`.
+3. **Translate from the matching English file** under `docs/en`. The directory tree under `docs/en` and under `docs/i18n/<locale>` is identical — translating `docs/en/products/cpmm/instructions.mdx` means creating `docs/i18n/<locale>/products/cpmm/instructions.mdx`.
 4. **Keep code blocks unchanged.** Variable names, SDK calls, JSON keys, and file paths stay in their original form. Only translate comments inside code if they are explanatory prose.
 5. **Translate frontmatter.** Both `title` and `description` should be in the target language.
-6. **Use locale-prefixed internal links.** Inside a translated page, write cross-references as `/<locale>/products/cpmm/math` — never as `/products/cpmm/math`. If the target page hasn't been translated yet, the redirect emitted by `scripts/sync-locales.py` will catch the URL and serve the English version instead, so the link works either way and never needs to be edited later.
+6. **Use locale-prefixed internal links.** Inside a translated page, write cross-references as `/docs/i18n/<locale>/products/cpmm/math` — never as `/docs/en/products/cpmm/math`. If the target page hasn't been translated yet, the redirect emitted by `scripts/sync-locales.py` will catch the URL and serve the English version instead, so the link works either way and never needs to be edited later.
 7. **Match terminology.** A short glossary lives in `AGENTS.md`. For Chinese, prefer "兑换" over "交换" for swap, "流动性提供者" for LP, "联合曲线" for bonding curve. If you introduce a new term, add it to the glossary so future translators stay consistent.
 8. **Translate JSX-component bodies, not the components themselves.** Keep `<Card>`, `<CardGroup>`, `<Info>`, `<Tip>` as-is, but translate their inner text and the `title` prop.
 9. **Run `python3 scripts/sync-locales.py`** so the locale's nav picks up the new page (and the redundant fallback redirect is removed). Then `mint dev` to preview and `mint broken-links` to verify cross-references resolve.
@@ -201,7 +201,7 @@ The script does most of the heavy lifting. Workflow:
    ```json
    { "language": "<locale>", "tabs": [] }
    ```
-3. Translate the landing page first — `<locale>/index.mdx` is what readers hit when they switch locales. Add it on disk under the new directory.
+3. Translate the landing page first — `docs/i18n/<locale>/index.mdx` is what readers hit when they switch locales. Add it on disk under the new directory.
 4. Run `python3 scripts/sync-locales.py`. The script will mirror the English nav into the new locale, fall back to English labels (you can translate them later), and add a fallback redirect for every page you haven't translated yet.
 5. Optionally start translating high-traffic pages (the Quick Start chapter, the product overviews) to seed the locale.
 6. Open a PR titled `i18n: bootstrap <locale>` with the resulting `docs.json` change plus your seeded translations. Subsequent PRs fill in pages and replace English labels with translations as they land.

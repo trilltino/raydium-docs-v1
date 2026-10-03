@@ -1,0 +1,82 @@
+---
+title: "Stable AMM'ye genel bakış"
+description: "Stable AMM, sabit-çarpım eğrisinin yerini interpolasyonlu bir arama tablosuyla alan bağımsız bir Raydium programıdır ve ilişkili varlıklar için kayıpları azaltır."
+---
+
+<Info>
+  **Bu sayfa yapay zekâ tarafından otomatik olarak çevrilmiştir. İngilizce sürüm esas alınır.**
+
+  [İngilizce sürümü görüntüle →](/docs/en/products/stable/overview)
+</Info>
+
+## Bir paragrafta özet
+
+Stable AMM, **bağımsız bir Raydium programıdır** — AMM v4'ün bir modu değil, kendi dağıtımıdır — ve eğri formülünü **önceden doldurulmuş bir arama tablosuyla** değiştirir. x·y=k kullanmak yerine, havuz seyrek bir (x, y, fiyat) noktaları dizisini depolar ve fiyat tekliflemesi için **ikili arama + doğrusal interpolasyon** kullanır. Bu tasarım stablecoin çiftleri ve bilinen fiyat ilişkilerine sahip diğer varlıklar için mükemmeldir: 1'e 1 sabitlenmiş tokenler arasındaki swaplar neredeyse sıfır kayıpla gerçekleşir. Bu **saf bir AMM**'dir: tüm likidite havuzun kendi kasalarında bulunur. (Yaşamının erken döneminde bir OpenBook pazar yapıcılığı yolu vardı, ancak bu yol yıllardır hareketsiz kalmıştır; [2026-06-22 yükseltmesi](/docs/i18n/tr/reference/changelog) sonunda ölü pazar kodunu kaldırmıştır.) Likidite şu anda sınırlıdır; çoğu entegratör Stable havuzlara [AMM Routing programı](/docs/i18n/tr/products/routing) aracılığıyla ulaşır.
+
+## Neden xy=k yerine arama tablosu
+
+Sabit-çarpım AMM'ler dar fiyat bandlarına sahip çiftlerde yüksek kayıp yaşarlar. Bir USDC-USDT swapı neredeyse hiçbir şey maliyetli olmamalıdır; sabit-çarpım havuzunda, k=x·y küçük hacim için bile bir fiyat hareketini zorunlu kılar. Arama tablosu, havuz yöneticisinin *gerçek* fiyat ilişkisini ifade etmesine izin verir:
+
+- Stablecoinler için: tabloyu 1:1 etrafında yoğunlaştırın, böylece mikro-swaplar ~0 kayıpla gerçekleşir.
+- Teminatlı çiftler için: hedef oranı kodlayın ve ızgaranın ücret/teşvik yüzeyini şekillendirmesine izin verin.
+
+Tablo şimdi **sabitlenmiştir** — tarihsel olarak `UpdateModelData` talimatı aracılığıyla doldurulmuştu, ancak bu talimat o zamandan beri kaldırılmıştır, bu nedenle mevcut havuzlar tablolarını olduğu gibi tutar. Zincir üstü maliyet sadece interpolasyon aramasıdır — bir formülü yeniden hesaplamaktan çok daha ucuzdur.
+
+## Nasıl çalışır: model-veri hesabı
+
+Havuz bir `ModelDataInfo` hesabı tutar — **50.000 elemanlı bir dizi** `DataElement` yapılarından. Her eleman şunları tutar:
+
+```
+DataElement {
+  x: u64,           // tablo X koordinatı
+  y: u64,           // tablo Y koordinatı
+  price: u64,       // (x, y) konumundaki fiyat
+}
+```
+
+Sadece ilk `valid_data_count` elemanları doldurulur; geri kalanlar sıfırlanır. Swap sırasında program:
+
+1. **Geçerli havuz rezervlerinden bir oran hesaplar** ve bu oranı parantez içine alan iki tablo elemanını bulmak için ikili arama kullanır.
+2. **İki parantez noktası arasında doğrusal olarak interpolasyon yapar** ve teklif fiyatını alır.
+3. **Ücretleri uygular** (giriş miktarının %0,02'si) ve sonucu kullanıcıya döndürür.
+
+Tablo hesaplarındaki `multiplier` alanı, x ve y'nin azaltılmış bir ölçekte depolanması olasılığını hesaba katar (örneğin, 18 ondalık yerine 6 ondalık). Fiyat keşfi buna göre yeniden ölçeklendirir.
+
+## Karşılaştırma: Stable AMM vs. AMM v4 vs. CPMM
+
+| Boyut | Stable AMM | AMM v4 | CPMM |
+|-----------|-----------|--------|------|
+| Eğri | Arama tablosu + interpolasyon | Sabit çarpım (xy=k) | Sabit çarpım |
+| Birincil kullanım durumu | Stablecoinler, sabitlenmiş çiftler | Genel çiftler, eski derin likidite | Genel çiftler, yeni dağıtımlar |
+| OpenBook bağımlılığı | **Hayır** (pazar yolu uzun süredir hareketsiz; ölü kod 2026-06'da kaldırıldı) | **Evet** | Hayır |
+| Token-2022 | Hayır | Hayır | Evet |
+| Kayıp profili | 1:1'de minimal | Dar oranlarda yüksek | Aralık genelinde orta |
+| Yönetici tarafından ayarlanabilir eğri | Artık hayır (`UpdateModelData` kaldırıldı; tablolar şimdi sabit) | Hayır (`SetParams` sadece) | Hayır |
+| Tablo boyutu | ~50k eleman × 24 bayt | N/A | N/A |
+| Swap başına hesaplama | ~5k–15k CU (ikili arama + interpolasyon) | ~150k–200k CU | ~60k–100k CU |
+| Swap başına hesap sayısı | 9 (yeni düzen; 18 eski uyumluluk) | ~18 (AMM + OpenBook) | ~11 |
+
+## Zihinsel model
+
+Stable AMM havuzu, tüm likiditeyi kendi kasalarında tutan **interpolasyonlu arama-tablosu AMM**'sidir. Sabit-çarpım havuzundan temel fark, fiyat keşfi eğrisinin sabit kodlanmamış olmasıdır — havuzun `ModelDataInfo` hesabına pişirilmiş seyrek bir dizidir. Şu anda çağrılabilir işlemler **doğrudan swap** (kullanıcı ↔ havuz), **yatırma / çekme** (LP işlemleri) ve **`WithdrawPnl`** (yönetici ücret taraması) olur. OpenBook krankı (`MonitorStep`) — havuz siparişleri göndermeyi bıraktığından beri uzun süredir hareketsiz — ve havuz kurulumu/yönetici talimatları kaldırılmıştır.
+
+## Stable AMM doğru seçim olduğunda
+
+- Bir stablecoin veya diğer ilişkili varlık çiftini işletiyorsunuz ve sıkı, öngörülebilir fiyatlandırma istiyorsunuz.
+- Çiftinizin fiyat ilişkisine derin bilginiz var ve bunu doğrudan bir eğri olarak kodlamak istiyorsunuz.
+- AMM v4 için zaten entegrasyonlarınız var ve sadece farklı bir eğri çeşidine ihtiyacınız var.
+
+Sıkı korelasyon gereksinimi olmayan yeni, genel amaçlı bir havuz için [CPMM](/docs/i18n/tr/products/cpmm) daha basit ve daha likit varsayılandır.
+
+## Sonraki adımlar
+
+- [Hesaplar](/docs/i18n/tr/products/stable/accounts) — `AmmInfo`, `ModelDataInfo`, `DataElement` alan referansı.
+- [Matematik](/docs/i18n/tr/products/stable/math) — ikili arama, interpolasyon ve ücret uygulaması.
+- [Talimatlar](/docs/i18n/tr/products/stable/instructions) — çağrılabilir küme (swap, yatırma, çekme, `WithdrawPnl`) ve kaldırılan talimatlar.
+- [Ücretler](/docs/i18n/tr/products/stable/fees) — %0,02 ücret ve 88 / 12 bölünmesi.
+- [Kod örnekleri](/docs/i18n/tr/products/stable/code-demos) — yönlendirme ve doğrudan entegrasyon.
+
+Kaynaklar:
+
+- [`reference/program-addresses`](/docs/i18n/tr/reference/program-addresses) kanonik program kimliği için
+- [`reference/changelog`](/docs/i18n/tr/reference/changelog) 2026-06-22 pazar-kodu-kaldırma yükseltmesi için

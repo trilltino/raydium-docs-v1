@@ -1,0 +1,108 @@
+---
+title: "Biaya Stable AMM"
+description: "Satu tingkat biaya rendah: biaya perdagangan kotor 0,02%, 88% LP / 12% protokol. Struct Fees sama dengan AMM v4, angka berbeda. Tanpa biaya dana, tanpa biaya kreator."
+---
+
+<Info>
+  **Halaman ini diterjemahkan secara otomatis oleh AI. Versi bahasa Inggris adalah acuan resmi.**
+
+  [Lihat versi bahasa Inggris →](/docs/en/products/stable/fees)
+</Info>
+
+## Model biaya
+
+Stable AMM menggunakan kembali **`Fees` struct** dari AMM v4, tetapi bukan **angka-angka** AMM v4. Pool Stable mengenakan biaya jauh lebih rendah, yang sesuai dengan desain pool untuk aset dengan harga serupa. Hanya ada satu tingkat biaya per pool (ditetapkan saat inisialisasi); pool tidak dapat dikonfigurasi ulang ke tingkat yang lebih tinggi.
+
+| Field | Nilai on-chain | Makna |
+|-------|----------------|---------|
+| `swap_fee_numerator / swap_fee_denominator` | `2 / 10_000` | **Biaya perdagangan kotor: 0,02%** dari volume input. Ini adalah satu-satunya biaya yang benar-benar dikenakan. |
+| `trade_fee_numerator / trade_fee_denominator` | `0 / 10_000` | **Nol.** Field warisan yang dulunya digunakan untuk penetapan harga pesanan OpenBook; dipertahankan untuk kompatibilitas tata letak, tidak lagi dibaca. |
+| `pnl_numerator / pnl_denominator` | `12 / 100` | **Bagian protokol dari biaya: 12%** — yaitu, `0,02% × 12% = 0,0024%` dari volume. |
+| `min_separate_numerator / min_separate_denominator` | `4 / 10_000` | Ambang batas pemisahan minimum yang digunakan saat memisahkan PnL dari biaya kotor. |
+
+<Note>
+  Ini bukan "nilai default" — ini adalah nilai pada **setiap** pool Stable mainnet yang aktif. Ketiga pool (USDT/USDC `2EXiumdi14E9b8Fy62QcA5Uh6WdHS2b38wtSxp72Mibj`, `9DTY3rv8xRa3CnoPoWJCMcQUSY7kUHZAoFKNsBhx8DDz`, `9f4FtV6ikxUZr8fAjKSGNPPnUHJEwi4jNk8d79twbyFf`) membawa set identik di atas, dan dengan `SetParams` dihapus dalam upgrade 2026-06-22 tidak ada lagi instruksi apa pun yang dapat mengubahnya. Diverifikasi dengan mendekode field `AmmInfo.fees` dari pool mainnet yang aktif.
+</Note>
+
+Tidak ada **biaya dana** dan **biaya kreator** — ini adalah penemuan pasca-AMM v4 (CPMM/CLMM). Stable AMM mendahului konvensi tersebut.
+
+## Cara pemisahan dihitung
+
+Pada setiap swap:
+
+```
+gross_fee = ceil(amount_in * (swap_fee_numerator / swap_fee_denominator))    // 0.02% dari amount_in
+pnl_portion = gross_fee * (pnl_numerator / pnl_denominator)                  // 12% dari gross_fee
+lp_portion = gross_fee − pnl_portion                                          // 88% dari gross_fee
+```
+
+- **`lp_portion`** tetap di vault, menaikkan `k`, dan menguntungkan LP saat penebusan.
+- **`pnl_portion`** menambah `AmmInfo.out_put.need_take_pnl_coin` atau `need_take_pnl_pc` (tergantung token input) dan disapu oleh `WithdrawPnl`.
+
+Sama dengan **trik penjaga invariant** CPMM: jumlah PnL berada di vault secara fisik tetapi dikurangi dari "cadangan efektif" yang digunakan dalam matematika kurva, sehingga menghapusnya tidak menggeser harga.
+
+## PnL OpenBook (tidak digunakan lagi)
+
+Awal dalam hidupnya, pool juga memposting pesanan limit di OpenBook; ketika pesanan tersebut terisi, pool mendapatkan atau kehilangan spread pembuat pasar/pengambil, diselesaikan selama `MonitorStep`, dan melacak hasilnya dalam penghitung `out_put.total_pnl_{coin,pc}`. **Jalur tersebut telah tidak aktif selama bertahun-tahun** — pool tidak memiliki pesanan terbuka, jadi satu-satunya akrual biaya adalah bagian protokol 0,0024% yang dijelaskan di atas. Penghitung `total_pnl_*` tetap dalam tata letak tetapi tidak lagi bertambah. Upgrade [2026-06-22](/docs/i18n/id/reference/changelog) menghapus kode OpenBook yang tersisa (termasuk `MonitorStep`). CPMM menjadi default untuk pool baru sebagian karena kopling sebelumnya ke OpenBook; Stable AMM independen dari order-book.
+
+## Pengumpulan
+
+Multisig Raydium (atau siapa pun yang mengontrol `amm_admin`) memanggil `WithdrawPnl` untuk menyapu:
+
+1. Mentransfer `need_take_pnl_coin` dan `need_take_pnl_pc` dari vault ke akun yang ditunjuk admin.
+2. Mengosongkan penghitung.
+
+Operasi ini tidak menggerakkan kurva. LP tidak melihat perubahan harga.
+
+<Warning>
+  `WithdrawPnl` diubah dalam upgrade 2026-06-22: sekarang menggunakan **tata letak 10-akun tetap, hanya admin, tanpa jalur kompatibilitas** (tata letak lama gagal dengan kesalahan seperti `InvalidTokenCoin`), dan ketika dana yang tersedia di pool tidak cukup untuk menutupi PnL, ia mengembalikan `TakePnlError` secara langsung alih-alih menonaktifkan pool. Lihat [`products/stable/instructions`](/docs/i18n/id/products/stable/instructions#withdrawpnl).
+</Warning>
+
+## Penebusan biaya LP
+
+Tidak ada instruksi "kumpulkan biaya" khusus. Biaya LP terakumulasi di vault, menaikkan cadangan. LP merealisasikannya dengan membakar LP melalui `Withdraw`. Nilai token LP tumbuh seiring pertumbuhan cadangan.
+
+## Visualisasi: kemana \$10.000 volume pergi
+
+Pada `Swap` berat USDC sebesar \$10.000 terhadap pool Stable yang aktif:
+
+```
+Biaya perdagangan kotor (0,02%):       $2.0000
+  Bagian LP   (0,0176%):         $1.7600  → tetap di pool, menaikkan k
+  Bagian PnL  (0,0024%):         $0.2400  → need_take_pnl_pc, disapu oleh WithdrawPnl
+Pengguna menerima (minus kurva):  $9,998.00
+```
+
+Volume \$10.000 yang sama melalui pool AMM v4 membayar \$25.00, dan melalui pool CPMM `index=0` \$25.00 — **12,5× lebih banyak**. Celah tersebut adalah poin produk: pasangan stabil bergerak sangat sedikit, jadi LP membutuhkan kompensasi sangat sedikit untuk risiko inventaris, dan kurva ketat ditambah biaya rendah adalah apa yang membuat swap stabil-ke-stabil besar tetap kompetitif.
+
+## Tabel perbandingan
+
+| | Stable AMM | AMM v4 | CPMM `index=0` |
+|---|---|---|---|
+| Biaya perdagangan | **0,02%** | 0,25% | 0,25% |
+| LP | 0,0176% | 0,22% | 0,21% |
+| Protokol | 0,0024% | 0,03% | 0,03% |
+| Dana | Tidak ada | Tidak ada | 0,01% |
+| Kreator | Tidak ada | Tidak ada | 0 secara default |
+| Dapat dikonfigurasi | Tidak | Tidak | Ya (per `AmmConfig`) |
+
+Matriks lengkap: [`reference/fee-comparison`](/docs/i18n/id/reference/fee-comparison).
+
+## Catatan integrator
+
+- **Penawaran:** Selalu baca `AmmInfo` dari chain; jangan hardcode biaya. Dengan `SetParams` sekarang dihapus, parameter biaya pada pool yang ada secara efektif tetap.
+- **Jangan asumsikan tingkat AMM v4.** Struct `Fees` dibagikan dengan AMM v4, jadi mudah untuk menyalin `25 / 10_000` AMM v4 ke penawaran Stable. Pool Stable mengenakan `2 / 10_000`. Penawaran pool Stable pada 0,25% melebih-lebihkan biaya sebesar 12,5×.
+- **Kurva vs. biaya:** Penerapan biaya independen dari apakah kurva adalah formula (x·y=k di AMM v4) atau tabel pencarian (Stable). Keduanya mengambil biaya dari jumlah input sebelum menyentuh kurva.
+- **Tanpa reward:** Pool Stable tidak mendukung emisi reward on-pool. Farm ekosistem (Farm v3/v5/v6) menangani staking di tempat lain.
+
+## Ke mana selanjutnya
+
+- [`products/stable/math`](/docs/i18n/id/products/stable/math) — penerapan biaya dalam matematika swap.
+- [`products/stable/instructions`](/docs/i18n/id/products/stable/instructions) — daftar akun `WithdrawPnl`.
+- [`products/amm-v4/fees`](/docs/i18n/id/products/amm-v4/fees) — derivasi biaya lebih dalam untuk jalur OpenBook.
+- [`reference/fee-comparison`](/docs/i18n/id/reference/fee-comparison) — semua produk berdampingan.
+
+Sumber:
+
+- `raydium-stable/program/src/state.rs` (struct `Fees`)
+- Field `AmmInfo.fees` on-chain pada pool mainnet yang aktif

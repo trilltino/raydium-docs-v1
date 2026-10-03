@@ -1,0 +1,183 @@
+---
+title: "Rủi ro Oracle và Token"
+description: "Cách Raydium xử lý các đầu vào oracle và những rủi ro cụ thể do các tiện ích mở rộng Token-2022 gây ra — freeze authority, transfer hook, permanent delegate, default-frozen — bao gồm những gì các chương trình bảo vệ và những gì người dùng phải chấp nhận."
+---
+
+<Info>
+  **Trang này được dịch tự động bằng AI. Phiên bản tiếng Anh là bản chính thức.**
+
+  [Xem bản tiếng Anh →](/docs/en/security/oracle-and-token-risks)
+</Info>
+
+<Info>
+  Các sản phẩm cốt lõi của Raydium không phụ thuộc vào các oracle bên ngoài để định giá — trạng thái pool *chính là* oracle. Tuy nhiên, API và SDK sử dụng các oracle bên ngoài để hiển thị giá USD cho người dùng, và các mint Token-2022 mang lại một bộ kiểm soát phong phú hơn so với SPL Token, một số trong đó thay đổi cơ bản mô hình tin tưởng của một pool. Trang này liệt kê cả hai.
+</Info>
+
+## Oracle trong Raydium
+
+### Nội bộ: pool chính là oracle
+
+Đối với AMM v4, CPMM và CLMM, định nghĩa của giao thức về "giá hiện tại" được lấy từ trạng thái pool một mình:
+
+- AMM v4 / CPMM: `price = vaultB_balance / vaultA_balance` (tính đến số chữ số thập phân).
+- CLMM: `price = (sqrtPriceX64 / 2^64)^2 × 10^(decimalsA - decimalsB)`.
+
+Không có oracle bên ngoài nào được tham khảo trong quá trình swap, deposit hoặc withdrawal. Đây là phần "không cần tin tưởng" của thiết kế AMM: nếu toán học pool là chính xác, không có sự thao túng bên ngoài của một nguồn cấp giá nào có thể làm hỏng nó.
+
+### CLMM `ObservationState` như một oracle TWAP
+
+Các pool CLMM duy trì một tài khoản `ObservationState` ghi lại các ảnh chụp `sqrt_price` lịch sử. Các chương trình khác có thể kết hợp với điều này để lấy được một giá trung bình có trọng số theo thời gian chống thao túng:
+
+```rust
+// Một TWAP đơn giản: trung bình của (hiện tại, N slot trước đó).
+let obs_now  = load_observation(pool, Clock::slot());
+let obs_past = load_observation(pool, Clock::slot() - 300);  // ~2 phút trước
+let twap = (obs_now.price_cumulative - obs_past.price_cumulative)
+         / (obs_now.slot - obs_past.slot);
+```
+
+Đây là cùng một mô hình mà Uniswap V3 sử dụng. Một sự thao túng giá ngắn hạn (một cá voi tạm thời đẩy pool) không làm hỏng TWAP vì nó được lấy trung bình trên hàng trăm slot.
+
+Các chương trình cần một nguồn cấp giá an toàn hơn cho các mint CLMM (oracle thanh lý, định giá tùy chọn, v.v.) nên sử dụng TWAP ObservationState thay vì giá tức thời.
+
+**Đừng sử dụng giá CLMM tức thời cho khả năng kết hợp.** Một swap lớn duy nhất có thể đẩy giá spot 10%+ trên một pool nông; TWAP làm giảm điều này. Xem [`products/clmm/accounts#observation-state`](/docs/i18n/vi/products/clmm/accounts) để biết bố cục dữ liệu.
+
+### Bên ngoài: định giá USD trên frontend/API
+
+Frontend của Raydium và `api-v3.raydium.io` hiển thị các giá trị USD (TVL, fee APR, $ volume). Những giá trị này đến từ:
+
+- **Pyth** như oracle chính cho các mint chính.
+- **Giá aggregator của Jupiter** như fallback.
+- **Giá được lấy từ pool** cho các mint long-tail không có phạm vi bảo hiểm oracle bên ngoài.
+
+Các hiển thị USD hoàn toàn là mục đích thẩm mỹ — các hoạt động on-chain không bao giờ đọc Pyth, và không có toán học pool nào sử dụng USD. Nếu Pyth ngừng cung cấp dữ liệu cho một mint, UI hiển thị "—"; pool tiếp tục hoạt động.
+
+### Thao túng oracle không áp dụng cho các pool Raydium
+
+Vì trạng thái pool là oracle, không có "cuộc tấn công oracle" theo nghĩa mà tài liệu bug-bounty có ý — không có nguồn dữ liệu bên ngoài có thể thao túng mà kẻ tấn công có thể làm hỏng. Các cuộc tấn công kinh tế trên trạng thái pool (thao túng kiểu flash-loan) được đề cập trong [`security/attack-vectors`](/docs/i18n/vi/security/attack-vectors).
+
+## Rủi ro tiện ích mở rộng Token-2022
+
+SPL Token-2022 (hay còn gọi là "Token Extensions") thêm hành vi có thể cấu hình vào các mint thông qua các tiện ích mở rộng. Một số tiện ích mở rộng thay đổi các thuộc tính tin tưởng của các pool bao gồm chúng. Các chương trình Raydium xử lý một số tự động và hiển thị những chương trình khác dưới dạng cảnh báo người dùng.
+
+### Phí chuyển giao
+
+**Nó là gì:** Một phí có thể cấu hình (phần trăm của chuyển giao, tối đa một giới hạn `maximum_fee` theo các điều khoản tuyệt đối) được trả bởi người gửi cho quyền tác giả mint trên mỗi chuyển giao.
+
+**Rủi ro:** Phí có thể được thay đổi bởi quyền tác giả cấu hình phí của mint. Nếu bạn gửi thanh khoản khi phí là 1%, và quyền tác giả nâng nó lên 50%, các swap tiếp theo sẽ trả lại ít hơn nhiều so với dự kiến.
+
+**Giảm thiểu trong Raydium:** Các pool đọc `transferFeeConfig` hiện tại tại thời điểm swap và điều chỉnh toán học. Pool chính nó không bị hỏng, nhưng người dùng thấy kết quả tồi tệ hơn. Quyền tác giả phí cũng có thể lên lịch một thay đổi phí bị trì hoãn; UI của Raydium đánh dấu các pool có những thay đổi phí sắp tới.
+
+**Rủi ro còn lại:** Nếu một quyền tác giả phí độc hại thay đổi phí trong quá trình swap đang diễn ra của bạn, `minimumAmountOut` của bạn bảo vệ phía dưới — tx hoàn nguyên. Nếu bạn tin tưởng nhà phát hành mint, điều này là tốt; nếu bạn không, đừng LP.
+
+### Transfer hook
+
+**Nó là gì:** Một chuyển giao gọi một chương trình riêng biệt (the "hook") để chạy xác thực tùy chỉnh hoặc các tác dụng phụ.
+
+**Rủi ro:** Hook có thể chặn bất kỳ chuyển giao nào, bao gồm các chuyển giao nội bộ của pool trong quá trình swap. Một hook có thể nâng cấp có thể trở thành độc hại sau — những gì an toàn tại thời điểm gửi có thể trở thành không thể hoán đổi tại thời điểm rút.
+
+**Giảm thiểu trong Raydium:** Raydium liệt kê một ID chương trình hook trong trạng thái pool. Các tích hợp nên hiển thị ID chương trình hook cho người dùng để họ có thể xác minh đó là chương trình dự kiến (không thể nâng cấp, được kiểm toán).
+
+**Rủi ro còn lại:** Nếu một hook có thể nâng cấp và quyền tác giả của nó trở thành thù địch, pool có thể bị đóng băng. Raydium không chặn các pool có transfer hook, nhưng nó đánh dấu chúng. Chỉ LP vào một pool transfer-hook nếu hook được xác minh là an toàn.
+
+### Freeze authority
+
+**Nó là gì:** Freeze authority của một mint có thể đóng băng bất kỳ tài khoản token nào giữ mint đó, ngăn chặn tất cả các chuyển giao.
+
+**Rủi ro:** Một freeze authority có khả năng đóng băng tài khoản vault của pool sẽ có hiệu lực đóng cửa pool — người dùng không thể rút, các nhà giao dịch không thể swap. Điều này áp dụng cho SPL Token *và* Token-2022; nó không phải là mới với Token-2022, nhưng nó vẫn là một rủi ro.
+
+**Giảm thiểu trong Raydium:** Không có ở cấp độ chương trình — freeze của SPL Token là không rõ ràng đối với pool. UI của Raydium cảnh báo trên các pool có các mint có thể đóng băng. Người dùng gửi nên xác minh freeze authority là null hoặc một multisig mà họ tin tưởng (USDC có freeze authority; đó là nhà phát hành Circle).
+
+**Rủi ro còn lại:** Chấp nhận rằng các mint có thể đóng băng có thể bị đóng băng. Các mint chính (USDC, USDT, USDY) có freeze authority được giữ bởi nhà phát hành và chỉ được sử dụng để tuân thủ quy định; điều này thường là chấp nhận được.
+
+#### CLMM restricted-issuer position NFT
+
+CLMM áp dụng một kiểm soát bổ sung cho các freeze authority của nhà phát hành bị hạn chế KYC được chọn. Khi freeze authority của một trong hai mint pool khớp với danh sách được mã hóa cứng của chương trình, các vị trí mới được mở thông qua `OpenPositionV2` hoặc `OpenPositionWithToken22Nft` có tài khoản token NFT của chúng bị đóng băng ngay lập tức. PDA pool tương ứng là freeze authority của mint NFT vị trí.
+
+Điều này ngăn chặn vị trí được chuyển giao đến một ví không được phê duyệt hoặc từ việc thay đổi chủ sở hữu tài khoản token của nó. Nó **không** cấp cho nhà phát hành token cơ bản quyền kiểm soát NFT vị trí: chỉ có PDA pool CLMM là freeze authority của NFT vị trí, và chương trình sử dụng nó để thaw chỉ như một phần của `ClosePosition` trước khi burn. Quản lý thanh khoản và bộ sưu tập phí hoặc phần thưởng tiếp tục yêu cầu chủ sở hữu NFT.
+
+Các vị trí hiện có vẫn không bị đóng băng. Các tích hợp phải coi khả năng chuyển giao là trạng thái dành riêng cho vị trí và đọc cờ `isFrozen` của tài khoản token NFT.
+
+### Permanent delegate
+
+**Nó là gì:** Một tiện ích mở rộng Token-2022 chỉ định một đại biểu vĩnh viễn có thể chuyển giao token từ bất kỳ chủ sở hữu nào mà không cần phê duyệt.
+
+**Rủi ro:** Đại biểu vĩnh viễn có thể rút hết vault của pool bất kỳ lúc nào.
+
+**Giảm thiểu trong Raydium:** CPMM và CLMM **từ chối tạo pool** với các mint có permanent delegate. Khởi tạo hoàn nguyên. Không có pool Raydium đang chạy nào có một mint permanent-delegate.
+
+**Rủi ro còn lại:** Không (miễn là kiểm tra là chính xác, mà cả hai cuộc kiểm toán đã xác minh).
+
+### Non-transferable
+
+**Nó là gì:** Các mint không thể được chuyển giao bởi các chủ sở hữu.
+
+**Rủi ro:** Các pool phụ thuộc vào khả năng chuyển giao để di chuyển token giữa các ATA người dùng và vault pool. Các mint không thể chuyển giao một cách tầm thường phá vỡ các pool.
+
+**Giảm thiểu trong Raydium:** Tạo pool hoàn nguyên trên các mint không thể chuyển giao. Các farm cũng từ chối các mint staking không thể chuyển giao.
+
+### Default-frozen / close-authority / interest-bearing
+
+Các tiện ích mở rộng tác động thấp hơn được xử lý bởi Raydium:
+
+- **Default-frozen**: các tài khoản token mới cần được thaw trước khi sử dụng. Raydium xử lý điều này một cách minh bạch khi tạo ATA.
+- **Close-authority**: một quyền tác giả được chỉ định có thể đóng các tài khoản token. Các vault pool được sở hữu bởi quyền tác giả được lấy từ chương trình của pool, vì vậy close-authority trên *mint* không áp dụng cho vault.
+- **Interest-bearing**: số dư được hiển thị tích lũy lãi; `amount` vẫn cố định nhưng `uiAmount` tăng. Toán học pool Raydium sử dụng `amount`, không phải lãi tích lũy; hiển thị điều chỉnh riêng biệt.
+
+### Mint authority
+
+Không phải là rủi ro cụ thể của Token-2022, nhưng đáng lưu ý: nếu một mint giữ lại mint authority, chủ sở hữu có thể làm tăng cung cấp theo ý muốn. Đối với các token được phát hành, điều này làm loãng LP ở giá hiện tại của pool. LaunchLab từ chối tạo các lần phát hành trừ khi mint authority là null.
+
+## Nhãn rủi ro trong UI
+
+Frontend của Raydium gắn nhãn cho mỗi pool với các thẻ rủi ro áp dụng:
+
+- **TRANSFER_FEE** — phí chuyển giao khác không.
+- **TRANSFER_HOOK** — tiện ích mở rộng transfer-hook hoạt động.
+- **FREEZE** — mint có freeze authority.
+- **MINT** — mint có mint authority (cung cấp có thể tăng).
+- **CLOSE** — mint có close authority.
+
+Các aggregator tiêu thụ API của Raydium nên hiển thị các nhãn này cho người dùng.
+
+## Danh sách kiểm tra tích hợp
+
+Trước khi kết hợp với một pool Raydium:
+
+- [ ] Kiểm tra các tiện ích mở rộng của mỗi mint thông qua `getMint(mint, TOKEN_2022_PROGRAM_ID)`.
+- [ ] Bỏ qua các pool nơi bất kỳ mint nào có permanent_delegate hoặc non_transferable (những cái này không nên tồn tại trong Raydium, nhưng phòng thủ sâu).
+- [ ] Kiểm tra freeze authority cho cả hai mint; chỉ null hoặc quyền tác giả đáng tin cậy.
+- [ ] Trước khi cung cấp chuyển giao vị trí, escrow hoặc Burn & Earn, xác nhận tài khoản token NFT vị trí CLMM không bị đóng băng.
+- [ ] Đối với các pool transfer-hook, xác minh ID chương trình hook so với danh sách trắng.
+- [ ] Kích thước tiếp xúc so với các kịch bản phí chuyển giao (điều gì sẽ xảy ra nếu phí đi đến mức tối đa?).
+- [ ] Sử dụng CLMM TWAP (ObservationState) thay vì giá spot để định giá phái sinh.
+
+## Tuyên bố chấp nhận rủi ro còn lại
+
+Các chương trình của Raydium thực thi những gì có thể được thực thi ở cấp độ chương trình:
+
+- Tạo pool từ chối các mint permanent-delegate / non-transferable.
+- Toán học swap điều chỉnh chính xác cho các phí chuyển giao hiện tại.
+- ObservationState cung cấp một oracle chống thao túng.
+
+Rủi ro còn lại mà người dùng phải chấp nhận:
+
+- Freeze authority của một mint có thể đóng băng pool.
+- Phí authority của một mint có thể nâng phí chuyển giao (tối đa giới hạn `maximum_fee`) bất kỳ lúc nào.
+- Một chương trình transfer-hook có thể được nâng cấp thành mã độc hại.
+- Tỷ lệ tích lũy của một mint interest-bearing có thể được thay đổi.
+
+Phòng thủ phù hợp là sự siêng năng trước LP: đừng gửi vào các pool có các mint có quyền tác giả tập trung mà bạn không tin tưởng. Raydium không thể quyết định sự tin tưởng đó cho bạn; nó chỉ có thể hiển thị các sự kiện liên quan.
+
+## Con trỏ
+
+- [`algorithms/token-2022-transfer-fees`](/docs/i18n/vi/algorithms/token-2022-transfer-fees) — điều chỉnh toán học cho các mint phí chuyển giao.
+- [`security/attack-vectors`](/docs/i18n/vi/security/attack-vectors) — cách những rủi ro này biểu hiện dưới dạng các cuộc tấn công cụ thể.
+- [`integration-guides/wallet-integration`](/docs/i18n/vi/integration-guides/wallet-integration) — hiển thị các nhãn rủi ro Token-2022.
+- [`products/clmm/accounts`](/docs/i18n/vi/products/clmm/accounts) — bố cục ObservationState.
+
+Nguồn:
+
+- [Tài liệu tiện ích mở rộng SPL Token-2022](https://www.solana-program.com/docs/token-2022/extensions).
+- Logic xác thực khởi tạo pool: `src/raydium/cpmm/instrument.ts`, `src/raydium/clmm/instrument.ts`.
+- [Pyth](https://pyth.network) — oracle giá bên ngoài được sử dụng trên frontend.

@@ -1,0 +1,309 @@
+---
+title: "إطلاق رمز (LaunchLab)"
+description: "إطلاق رمز شامل عبر LaunchLab: اختيار المنحنى، الإعدادات الأولية، مراقبة نشاط منحنى الربط قبل التخرج، والتحقق من مجموعة CPMM المتخرجة."
+---
+
+<Info>
+  **هذه الصفحة مُترجَمة آليًا بواسطة الذكاء الاصطناعي. النسخة الإنجليزية هي المرجع المعتمد.**
+
+  [عرض النسخة الإنجليزية →](/docs/en/user-flows/launch-token-launchlab)
+</Info>
+
+<Info>
+  LaunchLab هو مكان الإطلاق الأساسي في Raydium. يودع المشروع إمداده من الرموز في منحنى ربط؛ يتاجر المشترون مقابل المنحنى باستخدام SOL (أو رمز اقتباس آخر)؛ عند الوصول إلى عتبة التخرج، تهاجر أصول المنحنى تلقائيًا إلى مجموعة CPMM، ويصبح الرمز قابلاً للتداول بحرية. تشرح هذه الصفحة سير العملية بالكامل من جانب المشروع.
+</Info>
+
+## ما تحتاجه
+
+- **رمز Mint** — الرمز الذي تريد بيعه. يجب أن يكون مُنشأً حديثًا مع:
+  - الإمداد الكامل مُنشأ في محفظتك (حتى تتمكن من الإيداع في المنحنى).
+  - سلطة Mint ملغاة قبل الإطلاق (وإلا يمكن لعب سعر المنحنى من خلال عمليات Mint الجديدة).
+- **البيانات الوصفية** — الاسم والرمز والصورة والروابط الاجتماعية. بيانات وصفية Metaplex أو ما شابه.
+- **محفظة** — ~1 SOL لإيجار الإنشاء + تمويل الخزينة + رسوم الأولوية (التخرج نفسه يُدفع من قبل المتخرج، وليس منك).
+- **قرار بشأن**:
+  - نوع المنحنى (تربيعي مقابل CPMM الاحتياطيات الافتراضية).
+  - عتبة التخرج.
+  - سياسة التخلص من LP (حرق / قفل / إلى المنشئ).
+  - السعر الأولي والحد الأقصى.
+
+## اختيار المنحنى
+
+يدعم LaunchLab عائلتي منحنيات:
+
+### تربيعي (`curve_type = 0`)
+
+يزداد السعر تربيعيًا مع الإمداد المباع. شعور "الإطلاق العادل" الكلاسيكي — المشترون الأوائل يحصلون على ميزة سعرية، المشترون المتأخرون يدفعون أكثر، السعر يتسارع بسلاسة.
+
+```
+price(s) = a * s^2 + b * s + c
+```
+
+حيث `s` هو الإمداد المباع. عادةً `a > 0` (محدب). الفارق بين السعر الأولي والسعر عند التخرج محدد مسبقًا بناءً على `a, b, c` والحد الأقصى.
+
+الأفضل لـ: الإطلاقات الجديدة، الرموز الفكاهية، المشاريع المدفوعة بالمجتمع.
+
+### CPMM الاحتياطيات الافتراضية (`curve_type = 1`)
+
+يحاكي AMM ذا الناتج الثابت باستخدام احتياطيات *افتراضية* — يتصرف المنحنى مثل CPMM مع `x * y = k` لكن المجموعة تبدأ مع رموز اصطناعية لا تُسحب أبدًا.
+
+```
+price = virtual_quote_reserve / virtual_base_reserve
+```
+
+مع شراء المشترين، ينخفض `virtual_base_reserve` ويزداد `virtual_quote_reserve` — يبدو المنحنى متطابقًا مع ما ستبدو عليه CPMM بعد التخرج. انتقال أسلس.
+
+الأفضل لـ: الإطلاقات التي تريد استمرارية سعر متوقعة بعد التخرج.
+
+## شرح واجهة المستخدم
+
+على [raydium.io/launchpad/create](https://raydium.io/launchpad/create):
+
+1. **الرمز.** الصق عنوان Mint. تجلب واجهة المستخدم البيانات الوصفية وتعرضها.
+2. **نوع المنحنى.** اختر تربيعي أو CPMM افتراضي؛ تعرض واجهة المستخدم معاينة رسم بياني للسعر لكل منهما.
+3. **عتبة التخرج.** الافتراضي: ينتهي المنحنى بعد بيع كل `total_base_supply`. بديل: الانتهاء عند `graduation_quote_amount` محدد (مثلاً 85 SOL).
+4. **رمز الاقتباس.** SOL (الافتراضي)، USDC، أو أي رمز آخر. SOL هو المعيار.
+5. **سياسة التخلص من LP:**
+   - **حرق** — رموز LP مرسلة إلى عنوان غير قابل للاستخدام عند التخرج. لا يمكن للمنشئ سحب السيولة؛ يثق المستخدمون بالمجموعة إلى الأبد.
+   - **قفل** — رموز LP مرسلة إلى ضمان مقفول زمنيًا لمدة `lock_duration`.
+   - **إلى المنشئ** — رموز LP مرسلة إلى المنشئ. الأكثر مرونة، الأقل تقليلاً للثقة.
+
+   تستخدم الإطلاقات الموثوقة الحرق.
+
+6. **المراجعة.** تلخص واجهة المستخدم: نطاق السعر المتوقع، الجمع الأولي إذا انتهى المنحنى، إعدادات CPMM للتخرج.
+7. **التوقيع.** معاملة واحدة تنشئ حالة الإطلاق + خزينة الأساس + خزينة الاقتباس، وتنقل `total_base_supply` من محفظتك إلى خزينة الأساس.
+
+## شرح برمجي
+
+شكل المنحنى ورمز الاقتباس والهدف المرفوع وسياسة التخلص من LP **ليست** معاملات — تأتي من `GlobalConfig` التي تربطها وتأتي من `PlatformConfig` التي يعمل الإطلاق تحتها. ما تمرره هو هوية Mint والإعدادات المراد الربط بها، وبشكل اختياري عملية شراء أولى:
+
+```ts
+import {
+  Raydium,
+  TxVersion,
+  LAUNCHPAD_PROGRAM,
+  LaunchpadConfig,
+  getPdaLaunchpadConfigId,
+} from "@raydium-io/raydium-sdk-v2";
+import { Keypair, PublicKey } from "@solana/web3.js";
+import { NATIVE_MINT } from "@solana/spl-token";
+import BN from "bn.js";
+
+const raydium = await Raydium.load({ connection, owner, cluster: "mainnet" });
+const programId = LAUNCHPAD_PROGRAM;
+
+// تُنشئ زوج مفاتيح Mint الأساسي وتوقع به.
+const pair  = Keypair.generate();
+const mintA = pair.publicKey;
+
+// ربط إعدادات: (رمز الاقتباس، curve_type، الفهرس). هذا ما يحدد شكل المنحنى
+// ورمز الاقتباس والهدف المرفوع.
+const configId   = getPdaLaunchpadConfigId(programId, NATIVE_MINT, 0, 0).publicKey;
+const configData = await raydium.connection.getAccountInfo(configId);
+const configInfo = LaunchpadConfig.decode(configData!.data);
+const mintBInfo  = await raydium.token.getTokenInfo(configInfo.mintB);
+
+const { execute, extInfo } = await raydium.launchpad.createLaunchpad({
+  programId,
+  mintA,
+  decimals: 6,
+  name:   "My New Token",
+  symbol: "MYNEW",                    // 10 أحرف أو أقل
+  uri:    "https://example.com/metadata.json",
+  migrateType: "amm",                 // "amm" | "cpmm"
+
+  configId,
+  configInfo,
+  mintBDecimals: mintBInfo.decimals,
+  mintBProgram:  new PublicKey(mintBInfo.programId),
+
+  createOnly: true,                   // true = إنشاء Mint بدون عملية شراء أولى
+  buyAmount:  new BN(1000),
+  slippage:   new BN(100),            // 100 = 1%
+
+  extraSigners: [pair],               // يجب أن يوقع زوج مفاتيح Mint الأساسي
+  txVersion: TxVersion.V0,
+  computeBudgetConfig: { units: 400_000, microLamports: 50_000 },
+});
+
+// يُرجع createLaunchpad عدة معاملات - قم بتشغيلها بالترتيب.
+const { txIds } = await execute({ sequentially: true });
+console.log("Pool ID:", extInfo.address.poolId.toBase58());
+console.log("Base mint:", mintA.toBase58());
+```
+
+يسرد `raydium.api.fetchLaunchConfigs()` الإعدادات المتاحة مع إمدادها الافتراضي ومبلغ البيع والهدف المرفوع، حتى تتمكن من إظهار المستخدم ما يعنيه إعداد معين قبل التوقيع. النسخة المشروحة بالكامل، بما في ذلك متغير Token-2022: [`products/launchlab/code-demos`](/docs/i18n/ar/products/launchlab/code-demos#create-a-launch).
+
+## مراقبة ما قبل التخرج
+
+تتبع النشاط عبر API:
+
+يحتوي LaunchLab على مضيفي API خاصين به، منفصلين عن `api-v3.raydium.io`:
+
+```ts
+// معلومات على مستوى Mint، مفهرسة بواسطة Mint الأساسي (مفصولة بفواصل للدفعة).
+const r = await fetch(
+  `https://launch-mint-v1.raydium.io/get/by/mints?ids=${mintA.toBase58()}`,
+).then((r) => r.json());
+console.log(r.data.rows[0]);
+
+// متاح أيضًا: /main/configs (قائمة الإعدادات) على نفس المضيف، و
+// https://launch-history-v1.raydium.io/kline و /trade للسعر والملء.
+```
+
+أو اقرأ حالة السلسلة مباشرة. معرف المجموعة هو PDA من `(programId, mintA, mintB)`:
+
+```ts
+import { getPdaLaunchpadPoolId, Curve } from "@raydium-io/raydium-sdk-v2";
+
+const poolId = getPdaLaunchpadPoolId(programId, mintA, NATIVE_MINT).publicKey;
+const poolInfo = await raydium.launchpad.getRpcPoolInfo({ poolId });
+
+console.log({
+  status:      poolInfo.status,
+  baseSold:    poolInfo.realA.toString(),
+  totalSellA:  poolInfo.totalSellA.toString(),
+  quoteRaised: poolInfo.realB.toString(),
+  raiseTarget: poolInfo.totalFundRaisingB.toString(),
+});
+```
+
+يُعبّر عن التقدم بشكل أفضل بمصطلحات **السعر** بدلاً من كسر الجمع، لأن المنحنى غير خطي. يفعل مستودع العرض التوضيحي [`getFinishRate.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/getFinishRate.ts) ذلك باستخدام `Curve.getPrice` و `Curve.getPoolEndPriceReal` و `Curve.getPoolInitPriceByPool`:
+
+```
+finishRate = (currentPrice − initPrice) / (endPrice − initPrice)   // مقيد إلى 1
+```
+
+### المقاييس المراد مراقبتها
+
+- **معدل البيع**: نسبة الأساس المباع. عتبة التخرج عادةً عند 80–100% مباع.
+- **السعر الحالي**: مشتق من المنحنى عند `baseSold` الحالي.
+- **المشترون الفريدون**: عدد الدافعين المختلفين عبر الفهرس.
+- **نسبة الشراء إلى البيع**: الإطلاقات المبكرة ترى ضغط شراء ثقيل يتباطأ.
+
+إذا كان البيع `<10%` بعد 24 ساعة، فكر فيما إذا كان التسويق كافيًا. لا ينقذ LaunchLab الإطلاقات التي لم تحظ بالاهتمام الكافي.
+
+## التخرج
+
+التخرج معاملة منفصلة، وهو **ليس** قابلاً للاستدعاء من قبل أي شخص: `MigrateToCpswap` و `MigrateToAmm` القديم يتطلب كل منهما أن يطابق الموقّع محفظة مسجلة على `GlobalConfig` الربط (`migrate_to_cpswap_wallet` / `migrate_to_amm_wallet`)، وأي موقّع آخر يحصل على `InvalidOwner`. لا توجد مكافأة. تلك المحافظ يديرها كرنك التخرج في Raydium، الذي ينقل الهجرة في غضون ثوانٍ من تجاوز العتبة. لا إجراء مطلوب منك كمنشئ بعد الإعداد الأولي.
+
+### ما يفعله التخرج
+
+1. يقرأ أرصدة الخزينة.
+2. يغلق المنحنى (لا مزيد من عمليات الشراء/البيع مقابله).
+3. ينشئ مجموعة CPMM جديدة مع أرصدة الخزينة كسيولة أولية.
+4. يُنشئ رموز LP أولية بناءً على أرصدة الخزينة.
+5. يتخلص من رموز LP وفقًا للسياسة المكونة (حرق / قفل / إلى المنشئ).
+
+بعد التخرج، تكون مجموعة CPMM مباشرة وتتاجر عبر التوجيه العادي لـ Raydium.
+
+### مراقبة التخرج
+
+راقب `status` على حالة المجموعة وبدّل واجهة المستخدم الخاصة بك عند التغيير:
+
+```ts
+const before = (await raydium.launchpad.getRpcPoolInfo({ poolId })).status;
+
+setInterval(async () => {
+  const p = await raydium.launchpad.getRpcPoolInfo({ poolId });
+  if (p.status !== before) console.log("migrated - switch to the CPMM pool page");
+}, 10_000);
+```
+
+عنوان المجموعة المتخرجة هو CPMM PDA لـ `(cpswap config, token0, token1)`، لذا يمكنك اشتقاقه بدلاً من الانتظار ليتم الإبلاغ عنه. بالنسبة للفهرس، اشترك عبر gRPC بدلاً من الاستقصاء — انظر [`products/launchlab/code-demos`](/docs/i18n/ar/products/launchlab/code-demos#watch-configs-and-pools-over-grpc).
+
+لا توجد مسار "تخرج يدوي" لمنشئ أو طرف ثالث. إذا تجاوز الإطلاق عتبته ولم يهاجر، فهذه مسألة تشغيلية لمحفظة الهجرة، وليس شيء يمكنك فرضه من عميل.
+
+## بعد التخرج
+
+### التحقق من مجموعة CPMM
+
+```ts
+const pool = await raydium.cpmm.getPoolInfoFromRpc({ poolId: cpmmPoolId });
+console.log("CPMM price:", pool.poolInfo.price);
+console.log("CPMM TVL:  ", pool.poolInfo.tvl);
+```
+
+يجب أن تحتوي مجموعة CPMM على (تقريبًا):
+
+- رصيد رمز الأساس: `total_base_supply - baseSold` + بقايا المنحنى.
+- رصيد رمز الاقتباس: `quoteRaised - graduationFee`.
+- السعر: يطابق آخر سعر منحنى.
+
+### التحقق من التخلص من LP
+
+- **حرق**: يُظهر إمداد Mint من LP مرسل إلى 1nc1nerator11111111111111111111111111111111 أو ما شابه.
+- **قفل**: رموز LP في PDA الضمان مع طابع زمني للفتح.
+- **إلى المنشئ**: رموز LP في محفظة المنشئ.
+
+### جمع رسوم المنشئ
+
+إذا قمت بتكوين حصة رسوم المنشئ، اتصل بشكل دوري:
+
+المُنشئ هو `claimCreatorFee`، وهو مفهرس برمز **الاقتباس** بدلاً من الإطلاق — استدعاء واحد يكتسح رسوم المنشئ المتراكمة في هذا الرمز:
+
+```ts
+import { NATIVE_MINT } from "@solana/spl-token";
+
+await raydium.launchpad.claimCreatorFee({
+  programId,
+  mintB: NATIVE_MINT,      // رمز الاقتباس للمطالبة به
+  txVersion: TxVersion.V0,
+});
+```
+
+استخدم `claimMultipleCreatorFee` للدفعة عبر الرموز. تتراكم الرسوم من تجارة المنحنى قبل التخرج، وبعد التخرج من مسار رسوم المنشئ في مجموعة CPMM عندما يتركك `platform_cp_creator` للمنصة كمنشئ مسجل للمجموعة — انظر [`products/launchlab/platform-config`](/docs/i18n/ar/products/launchlab/platform-config).
+
+## قائمة التحقق من الإعلان
+
+يجب أن يتضمن الإعلان بعد التخرج:
+
+- [ ] تجزئة معاملة التخرج.
+- [ ] معرف مجموعة CPMM الجديد.
+- [ ] إثبات التخلص من LP (معاملة الحرق / معاملة القفل / محفظة المنشئ).
+- [ ] ETA لتغطية المجمع (عادةً ما تفهرس المحافظ في غضون 5 دقائق).
+- [ ] التحقق من عقد الرمز (مطابقة عنوان Mint عبر قنوات الإعلان).
+
+## الأخطاء الشائعة
+
+### 1. سلطة Mint لم تُلغَ
+
+إذا كان `baseMint.mintAuthority` لا يزال مفتاحًا تتحكم فيه، يمكنك إنشاء إمداد جديد والبيع في منحنيك الخاص. الإطلاقات التي لم تلغِ عادةً ما تُعلّم كمخاطر عالية أو غير موثوقة من قبل المجمعات ومواقع الإدراج. ألغِ قبل الإطلاق.
+
+### 2. معاملات منحنى خاطئة
+
+المنحنيات التربيعية مع `a` مرتفع جدًا تجعل الرموز المبكرة مجانية (السعر ≈ 0) والرموز اللاحقة سخيفة. المنحنيات مع `a` منخفض جدًا تجعل المنحنى خطيًا تقريبًا (فقدان شعور "الربط"). اختبر المعاملات على devnet أولاً.
+
+### 3. عتبة التخرج مرتفعة جدًا
+
+إذا كان التخرج يتطلب رأس مال أكثر من الطلب الواقعي، فإن المنحنى لا يتخرج أبدًا والمشترون عالقون برموز يمكنهم فقط بيعها مرة أخرى للمنحنى (بأسعار أسوأ). اختر عتبة يمكنك فعلاً تحقيقها.
+
+### 4. عمليات احتيال رمز الاقتباس
+
+إذا كان رمز الاقتباس الخاص بك رمزًا مخصصًا (وليس SOL/USDC)، فلن يثق المستخدمون به. التزم بـ SOL أو USDC للاقتباس.
+
+### 5. نسيت تمويل خزينة الأساس
+
+ينقل SDK `totalBaseSupply` من محفظتك عند الإنشاء. إذا لم تكن محفظتك تحتويها، ستعود المعاملة. أكد الرصيد قبل التوقيع.
+
+### 6. التخلص من LP = الحرق غير قابل للعكس
+
+بمجرد إرسال LP إلى 1nc1nerator، لا يمكن لأحد سحب السيولة، *بما فيك أنت*. هذه هي النقطة — تقليل الثقة. لا تختر الحرق إذا لم تكن متأكدًا.
+
+### 7. فئة رسوم CPMM بعد التخرج
+
+تستخدم المجموعة المتخرجة إعدادات CPMM الافتراضية لـ LaunchLab (0.25%). إذا كنت تريد 1% أو 0.01%، فأنت بحاجة إلى إنشاء مجموعة CPMM ثانية بنفسك بعد التخرج ونقل السيولة — محرج، وتجزئة. اقبل الافتراضي، أو أطلق عبر إنشاء CPMM المباشر بدلاً من LaunchLab.
+
+## المؤشرات
+
+- [`products/launchlab/overview`](/docs/i18n/ar/products/launchlab/overview) — مفهوم LaunchLab ودورة حياته.
+- [`products/launchlab/bonding-curve`](/docs/i18n/ar/products/launchlab/bonding-curve) — رياضيات المنحنى بالتفصيل.
+- [`products/launchlab/instructions`](/docs/i18n/ar/products/launchlab/instructions) — مرجع التعليمات الكامل.
+- [`products/launchlab/vesting`](/docs/i18n/ar/products/launchlab/vesting) — ميكانيكا جدول الاستحقاق.
+- [`algorithms/bonding-curves`](/docs/i18n/ar/algorithms/bonding-curves) — رياضيات منحنى الربط العامة.
+- [`user-flows/creating-a-launchlab-token`](/docs/i18n/ar/user-flows/creating-a-launchlab-token) — شرح واجهة المستخدم لمنشئي الرموز (أوضاع JustSendit و LaunchLab).
+- [`user-flows/how-creator-fees-work`](/docs/i18n/ar/user-flows/how-creator-fees-work) — نظرة عامة على رسوم المنشئ قبل وبعد الهجرة.
+
+المصادر:
+
+- وحدة Raydium SDK v2 `launchpad`.
+- حالة الإطلاق عبر نقاط نهاية `api-v3.raydium.io`.

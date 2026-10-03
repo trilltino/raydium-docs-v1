@@ -1,0 +1,78 @@
+---
+title: "Schnelleinstieg"
+description: "Drei Skripte zum Swappen, Erstellen eines CPMM-Pools und Erstellen eines CLMM-Pools mit einer initialen Position — echte On-Chain-Ausgabe, minimale Konfiguration. Die Swap- und CPMM-Skripte sind sofort einsatzbereit; der CLMM-Flow erfordert ein paar zusätzliche Schritte."
+---
+
+<Info>
+  **Diese Seite wurde mit KI automatisch übersetzt. Maßgeblich ist stets die englische Version.**
+
+  [Englische Version ansehen →](/docs/en/quick-start/index)
+</Info>
+
+<Info>
+  **Was dieses Kapitel ist.** Drei End-to-End-Skripte, die jeweils eine echte On-Chain-Operation gegen Raydium durchführen. Die Swap- und CPMM-Skripte sind einzelne Dateien, die Sie einfügen, mit Umgebungsvariablen konfigurieren und ausführen. Das CLMM-Skript ist ein Multi-File-Flow — siehe dessen eigene Seite für weitere Details. Nutzen Sie diese, um Ihr Setup zu validieren, bevor Sie etwas Größeres bauen.
+
+  **Was dieses Kapitel nicht ist.** Referenzdokumentation. Für die vollständige Builder-API, Parameterreferenz und Spezialfälle siehe [SDK & API](/docs/i18n/de/sdk-api) und die produktspezifischen `code-demos`-Seiten.
+</Info>
+
+## Voraussetzungen
+
+Führen Sie dies einmalig aus:
+
+```bash icon="terminal"
+mkdir raydium-quickstart && cd raydium-quickstart
+npm init -y
+npm install @raydium-io/raydium-sdk-v2 @solana/web3.js @solana/spl-token bn.js
+```
+
+Sie benötigen:
+
+- **Node 18+** mit ESM-Unterstützung (`"type": "module"` in `package.json` oder `.mjs`-Erweiterung).
+- **Ein Solana-Keypair** unter `~/.config/solana/id.json` (oder überall — setzen Sie `KEYPAIR`). Siehe [`solana-fundamentals/toolchain`](/docs/i18n/de/solana-fundamentals/toolchain#solana-cli) zum Generieren eines Keypairs.
+- **Ein finanziertes Wallet.** Das Swap-Skript benötigt nur seinen Eingabebetrag plus einen kleinen Puffer — ein CPMM-Swap kostet etwa 0,0015 SOL an Netzwerkgebühren (siehe [`reference/fee-comparison`](/docs/i18n/de/reference/fee-comparison#network-fees-per-typical-operation)), plus einmalige Miete, wenn der Swap ein Token-Konto für Sie öffnen muss. Das Erstellen eines Pools kostet mehr: Das CPMM-Skript allein trägt eine einmalige Pool-Erstellungsgebühr von etwa 0,15 SOL vor Seed-Liquidität oder Miete. Siehe den Setup-Abschnitt jedes Skripts für die aktuelle Zahl, bevor Sie Ihr Wallet finanzieren.
+- **Eine RPC-URL.** Kostenlose öffentliche RPC funktioniert zum Testen; für mehr als einen Smoke-Test verwenden Sie einen bezahlten Anbieter.
+
+Setzen Sie diese einmalig pro Shell:
+
+```bash icon="terminal"
+export RPC_URL="https://api.mainnet-beta.solana.com"
+export KEYPAIR="$HOME/.config/solana/id.json"
+```
+
+<Info>
+  **Cluster.** Alle drei Skripte verwenden standardmäßig Mainnet. Devnet benötigt `RPC_URL=https://api.devnet.solana.com` plus `cluster: "devnet"` im Skript — für die beiden Pool-Erstellungs-Skripte ist das nicht die einzige Änderung; siehe den Setup-Abschnitt jedes Skripts für weitere erforderliche Änderungen. Beachten Sie, dass die Pool-Seed-Liquidität auf Devnet spärlich ist; rechnen Sie damit, Ihre eigenen Test-Token zu prägen.
+</Info>
+
+## Die drei Skripte
+
+<CardGroup cols={3}>
+  <Card title="Swap von der CLI" icon="right-left" href="/docs/i18n/de/quick-start/swap-from-cli">
+    Quotieren und führen Sie einen Swap durch einen CPMM-Pool aus — der schnellste Weg, um zu bestätigen, dass Ihr Setup funktioniert.
+  </Card>
+  <Card title="CPMM-Pool bereitstellen" icon="droplet" href="/docs/i18n/de/quick-start/deploy-cpmm-pool">
+    Erstellen Sie einen neuen CPMM-Pool für ein Tokenpaar Ihrer Wahl, mit initialer Liquidität auf der 0,25%-Gebührenebene.
+  </Card>
+  <Card title="CLMM-Pool bereitstellen" icon="chart-line" href="/docs/i18n/de/quick-start/deploy-clmm-pool">
+    Erstellen Sie einen neuen CLMM-Pool und öffnen Sie eine initiale konzentrierte Position, standardmäßig auf der niedrigsten Gebührenebene.
+  </Card>
+</CardGroup>
+
+## Nach diesem Kapitel
+
+Jedes Skript gibt sein On-Chain-Ergebnis aus — ein Swap-Angebot und Transaktionslink, neue Pool-Adressen oder eine neue Position und deren NFT — und eine einzelne Zeile, die auf die nächste Seite im [SDK & API](/docs/i18n/de/sdk-api)-Kapitel für die Operation verweist, die es durchgeführt hat. Wenn Sie bereit sind, Ihre eigene Integration zu schreiben:
+
+- **Backends und Bots** → [Trade API](/docs/i18n/de/sdk-api/trade-api).
+- **Frontends und Full-Control-Apps** → [TypeScript SDK](/docs/i18n/de/sdk-api/typescript-sdk).
+- **On-Chain-Komposition** → [Rust CPI](/docs/i18n/de/sdk-api/rust-cpi).
+- **Auswahl zwischen ihnen** → die Vergleichstabelle oben auf [SDK & API](/docs/i18n/de/sdk-api).
+
+## Versionsbanner
+
+```text
+SDK:       @raydium-io/raydium-sdk-v2@0.2.64-alpha   (pin advanced 2026-09-09)
+Programs:  see /reference/program-addresses
+Cluster:   mainnet-beta (also runs on devnet with the change noted above)
+Verified:  2026-09-09 (checked against 0.2.64-alpha source and the demo repo)
+```
+
+Wenn ein Skript bei einer neueren SDK-Version bricht, überprüfen Sie die Versionshinweise des SDK — die Builder-Rückgabeformen haben sich zwischen Minor-Releases entwickelt.

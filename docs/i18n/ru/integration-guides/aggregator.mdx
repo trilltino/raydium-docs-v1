@@ -1,0 +1,214 @@
+---
+title: "Интеграция агрегатора"
+description: "Как обнаруживать пулы Raydium, получать котировки по CPMM / CLMM / AMM v4 и маршрутизировать атомарные свопы через нужный набор программ. Написано для DEX-агрегаторов и UI свопов кошельков."
+---
+
+<Info>
+  **Эта страница переведена с помощью ИИ. За эталон принимается английская версия.**
+
+  [Открыть английскую версию →](/docs/en/integration-guides/aggregator)
+</Info>
+
+<Info>
+  Задача агрегатора — предоставить пользователю лучшую цену среди множества пулов, возможно разделив один входной объём между несколькими маршрутами пулов и выполнив это атомарно. На этой странице описаны специфичные для Raydium части этой задачи: обнаружение, котирование и сборка транзакций.
+</Info>
+
+## Обнаружение
+
+### Инвентарь пулов
+
+Вам нужен полный список активных пулов Raydium для каждого продукта. Три варианта:
+
+1. **REST API** (самый простой): `GET https://api-v3.raydium.io/pools/info/list?poolType=all&pageSize=1000&page=1` возвращает пулы партиями по 1000. Пагинируйте, пока не получите все. Кешируйте на 1–5 минут.
+2. **Сканирование on-chain**: `getProgramAccounts` на программах CPMM, CLMM и AMM v4, отфильтрованные по дискриминатору аккаунта состояния. Выдаёт ~каждый активный пул за ~10 секунд RPC. Полезно, когда API недоступен или rate-limited.
+3. **Гибридный подход**: используйте API как основной источник; запускайте ежедневное сканирование on-chain как проверку. Команда обязуется поддерживать API полным, но пулы, созданные через прямой CPI (без фронтенда), иногда могут отставать.
+
+### Поиск по паре монет
+
+Для конкретной пары `(mintA, mintB)` используйте `GET /pools/info/mint?mint1=...&mint2=...&poolType=all&sort=liquidity`. Возвращает каждый пул при любом уровне комиссии и типе продукта. До ~10 результатов на пару — обычное дело для популярных монет; сортируйте по TVL и берите топ несколько для маршрутизации.
+
+## Котирование
+
+Математика котирования отличается по продуктам. Используйте чистые математические функции SDK, чтобы не переписывать:
+
+<Warning>
+  Три продукта **не** имеют одной сигнатуры. `computeAmountOut` существует только на
+  `raydium.liquidity` (AMM v4) и как `PoolUtils.computeAmountOut(Format)` для CLMM; эквивалент CPMM
+  называется `computeSwapAmount` и принимает другие параметры. Напишите три вызова
+  явно, а не параметризуйте по продукту.
+</Warning>
+
+```ts
+// CPMM — computeSwapAmount, и `pool` должен быть CpmmComputeData из getPoolInfoFromRpc
+const { computePoolInfo } = await raydium.cpmm.getPoolInfoFromRpc(cpmmPoolId);   // base58 string
+const cpmmQuote = raydium.cpmm.computeSwapAmount({
+  pool: computePoolInfo,
+  amountIn,
+  outputMint: mintOut,
+  slippage: 0,        // compute exact expected; layer slippage at route level
+});
+// -> { allTrade, amountIn, amountOut, minAmountOut, fee, executionPrice, priceImpact, swapResult }
+
+// CLMM — crosses ticks; deterministic but more expensive.
+// `poolInfo` must be a ComputeClmmPoolInfo (the `computePoolInfo` from
+// clmm.getPoolInfoFromRpc), and both `tickarrayBitmapExtension` and
+// `blockTimestamp` are required.
+const { amountOut: clmmOut, remainingAccounts } = PoolUtils.computeAmountOutFormat({
+  poolInfo:  computeClmmPoolInfo,
+  tickarrayBitmapExtension,
+  tickArrayCache,
+  amountIn,
+  tokenOut:  mintOutToken,
+  slippage:  0,
+  epochInfo: await raydium.fetchEpochInfo(),
+  blockTimestamp: Math.floor(Date.now() / 1000),
+});
+// -> { amountOut, minAmountOut, fee, priceImpact, remainingAccounts, ... }
+
+// AMM v4 — amountIn is a BN, slippage a number, and the returns are plain BNs
+const ammV4Quote = raydium.liquidity.computeAmountOut({
+  poolInfo: ammV4Pool,       // needs baseReserve / quoteReserve / version / status spliced in
+  amountIn,
+  mintIn,
+  mintOut,
+  slippage: 0,
+});
+// -> { amountOut, minAmountOut, currentPrice, executionPrice, priceImpact, fee }
+```
+
+Для сравнения агрегаторов используйте `amountOut` (до slippage) из каждого.
+
+### Свежесть кеша
+
+Состояние пула устаревает быстро. Рекомендуемые целевые показатели свежести:
+
+| Тип пула | Частота переполучения | Причина |
+|-----------|---------------------|-----|
+| CPMM с `<$100k` TVL | `<10s` | Резервы движутся при каждом свопе. |
+| CPMM с `>$10M` TVL | 30–60s | Резервы доминируют; маленькие своды — шум. |
+| CLMM | `<30s` | Границы тиков; один большой своп может переконфигурировать ликвидность. |
+| AMM v4 | `<30s` | Движения на стороне OpenBook не захватываются в хранилищах. |
+
+Для агрегатора, берущего котировки с интерактивной задержкой, подпишитесь на обновления аккаунтов WebSocket (`accountSubscribe`) на каждом релевантном состоянии пула. Это переворачивает модель с опроса на push.
+
+### Корректировки Token-2022
+
+Если какая-либо монета в маршруте имеет комиссию за передачу Token-2022, математика котирования должна корректировать входы и выходы согласно [`algorithms/token-2022-transfer-fees`](/docs/i18n/ru/algorithms/token-2022-transfer-fees). SDK обрабатывает это, если `poolInfo.mintA.extensions.transferFeeConfig` заполнен. Подтвердите, посмотрев на поле `.extensions` перед доверием к котировке.
+
+## Маршрутизация
+
+### Маршруты с одним пулом
+
+Большинство маршрутов — с одним пулом. Выберите пул с наибольшим `amountOut`. Если несколько близки, разрешайте ничью по уровню комиссии (ниже лучше), затем по TVL (больше безопаснее).
+
+### Разделённая маршрутизация
+
+Для больших сводов, где один пул имеет >5% ценового влияния, разделите между пулами. Простой жадный алгоритм:
+
+```
+remaining = amountIn
+routes    = []
+while remaining > 0:
+    best_pool, best_size = argmax over pools of:
+        marginal_out_per_in(pool, current_size_toward_pool + epsilon)
+    size = min(remaining, best_pool.max_size_at_target_impact)
+    routes.append((best_pool, size))
+    remaining -= size
+```
+
+Это производит вектор маршрутизации `[(pool_A, 0.6), (pool_B, 0.3), (pool_C, 0.1)]`, который минимизирует совокупное влияние. Правильное решение выпуклой оптимизации (например, уравнивание предельных цен между пулами) в практике находится в пределах ~1% от жадного результата.
+
+### Многоскачковые маршруты
+
+`USDC → RAY → SOL` через два отдельных пула — обычно, когда ни один прямой пул `USDC-SOL` не даёт хорошую котировку (редко). Применяйте границы slippage для каждого скачка; каждый скачок обеспечивает свой `minAmountOut`. См. [`algorithms/slippage-and-price-impact`](/docs/i18n/ru/algorithms/slippage-and-price-impact).
+
+Многоскачковый маршрут через один и тот же пул (например, два скачка CLMM на `SOL-USDC`) всегда субоптимален против одного скачка — не генерируйте такие маршруты.
+
+## Сборка транзакций
+
+### Односкачковый, однопульный
+
+Для одного пула вызовите собственный построитель свопов этого типа пула — `raydium.liquidity.swap`, `raydium.cpmm.swap` или `raydium.clmm.swap`. `raydium.tradeV2.swap` — это исполнитель маршрута *многоскачкового* и принимает совершенно другую форму (`{ swapInfo, swapPoolKeys, routeProgram, ownerInfo, txVersion }`); нет `raydium.trade`.
+
+```ts
+const { execute } = await raydium.liquidity.swap({
+  poolKeys:        poolInfo,
+  amountIn,
+  amountOut:       quote.minAmountOut,
+  fixedSide:       "in",
+  inputMint:       mintIn,
+  txVersion:       TxVersion.V0,
+  computeBudgetConfig: {
+    units:         250_000,
+    microLamports: priorityFee,
+  },
+});
+```
+
+### Разделённые и многоскачковые
+
+Составляйте ATA + инструкции вручную. Паттерн:
+
+```
+[1] ComputeBudget set_compute_unit_limit
+[2] ComputeBudget set_compute_unit_price
+[3] createATA (if needed, once per mint the user doesn't hold)
+[4..N] SwapInstruction for each (pool, size) in routes
+[N+1] CloseAccount (if you wrap/unwrap SOL)
+```
+
+Всё внутри одной транзакции для атомарности. Для 3-пульного разделения на V0 с таблицами поиска адресов это обычно занимает ~1100 байт. Для 4+ пулов, ограничение размера транзакции заставляет либо многотранзакционность, либо консолидацию на хаб-монете.
+
+### Атомарность
+
+Агрегаторы должны гарантировать атомарность: либо весь маршрут приземляется, либо ничего. Инструкции свопа Raydium откатываются на `ExceededSlippage`, поэтому многопульный маршрут, где один скачок не удаётся, вызывает откат всей транзакции. Бесплатно.
+
+Единственное исключение: если ваш маршрут проходит через Raydium + сторонний DEX, убедитесь, что этот DEX также имеет модель отката на slippage. Некоторые программы игнорируют границы slippage (редко).
+
+## Подводные камни
+
+### 1. Устаревшие котировки
+
+Между тем, как пользователь видит «Вы получите 125.43 RAY» и приземлением транзакции, резервы могут сдвинуться. Переполучите состояние пула непосредственно перед отправкой; переквотируйте; если новая котировка >1% хуже, приостановитесь и переподтвердите с пользователем.
+
+### 2. Чёрные списки пулов
+
+Некоторые пулы Raydium — это мошеннические токены с комиссиями передачи, установленными на 99%, или с нетрансферабельными расширениями. REST API помечает их (см. поле `tags`); пропускайте любой пул, помеченный `scam` или `honeypot`. Запуск собственных проверок безопасности поверх тегов Raydium — разумно.
+
+### 3. Требование observation-state на CLMM
+
+CLMM `SwapV2` принимает аккаунт `observation_state`. SDK заполняет его для вас; вручную построенные инструкции часто забывают, что вызывает откат программы с `AccountNotFound`. Всегда включайте его.
+
+### 4. Таблицы поиска адресов
+
+Raydium поддерживает публичные таблицы поиска для своих наиболее используемых аккаунтов (основные монеты, ID программ, AmmConfigs). Агрегаторы должны их использовать — это экономит ~100 байт на транзакцию и позволяет большим маршрутам поместиться в V0. Получение адресов LUT:
+
+```ts
+const raydiumLUTs = await raydium.getRaydiumLutAddresses();
+```
+
+### 5. Обработка перегрузки
+
+Во время окон высокого объёма транзакции могут сидеть в mempool несколько блоков. Агрессивный повтор при истечении TX (не при откате — откаты детерминированы) рекомендуется. Опция `sendAndConfirm` SDK делает базовые повторы; производственные агрегаторы накладывают свою логику (Jito bundles, многоRPC трансляция) сверху.
+
+## Контрольный список
+
+Перед запуском в production проверьте:
+
+- [ ] Обнаружение пулов охватывает CPMM + CLMM + AMM v4 полностью.
+- [ ] Котировки совпадают с котировками собственного UI Raydium в пределах 1 базисного пункта на нескольких тестовых сводах.
+- [ ] Разделённая маршрутизация включается для сводов >5% влияния на любой один пул.
+- [ ] Приоритетные комиссии рассчитаны против недавних комиссий программы пула (см. [`integration-guides/priority-fee-tuning`](/docs/i18n/ru/integration-guides/priority-fee-tuning)).
+- [ ] Комиссии передачи Token-2022 вычислены и отображены пользователю.
+- [ ] Транзакции откатываются чисто, когда slippage превышен.
+- [ ] Логика повтора различает истечение tx (повтор) от отката (не повторять).
+
+## Ссылки
+
+- [`integration-guides/routing-and-mev`](/docs/i18n/ru/integration-guides/routing-and-mev) — устойчивость к сэндвичам, bundles.
+- [`integration-guides/priority-fee-tuning`](/docs/i18n/ru/integration-guides/priority-fee-tuning) — размер инструкций compute-budget.
+- [`sdk-api/rest-api`](/docs/i18n/ru/sdk-api/rest-api) — endpoints списков пулов.
+
+Источники:
+
+- [Raydium SDK v2 `trade` module](https://github.com/raydium-io/raydium-sdk-V2)

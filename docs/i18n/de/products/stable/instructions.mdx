@@ -1,0 +1,233 @@
+---
+title: "Stable AMM Anweisungen"
+description: "Der aktuell aufrufbare Befehlssatz — Deposit, Withdraw, SwapBaseIn, SwapBaseOut, WithdrawPnl — sowie die Anweisungen, die beim Upgrade vom 2026-06-22 entfernt wurden."
+---
+
+<Info>
+  **Diese Seite wurde mit KI automatisch übersetzt. Maßgeblich ist stets die englische Version.**
+
+  [Englische Version ansehen →](/docs/en/products/stable/instructions)
+</Info>
+
+<Info>
+  Stable AMM ist ein **unabhängiges Programm** mit eigener Program ID. Es ist **kein** Modus des AMM v4 Programms und wird nicht „durch" AMM v4 gehandelt — es wird separat bereitgestellt, aktualisiert und aufgerufen. Es ähnelt AMM v4 nur in Gebühren- und Account-Layout-Konventionen.
+</Info>
+
+<Warning>
+  **Upgrade vom 2026-06-22 — Entfernung von inaktivem OpenBook (Market) Code.** Stable AMM **hat schon lange keine Aufträge mehr auf OpenBook gepostet**; der Orderbook-Market-Making-Pfad ist seit Jahren inaktiv. Dieses Upgrade löscht die verbleibenden marktbezogenen Accounts und Code — es ändert **nicht** das Live-Trading-Verhalten.
+
+  Zwei Konsequenzen für Integratoren:
+
+  1. **Kleinere Account-Layouts.** `SwapBaseIn` / `SwapBaseOut` (**18 → 9**), `Deposit` (**14 → 12**), und `Withdraw` (**21/22 → 12**) entfernen die inaktiven Serum/Market-Accounts. Alte Layouts werden aus Gründen der Rückwärtskompatibilität weiterhin geparst. `WithdrawPnl` (**16 → 10**) ist eine **harte Breaking Change ohne Kompatibilitätspfad** (nur Admin).
+  2. **Die meisten Anweisungen werden entfernt.** Nur `SwapBaseIn`, `SwapBaseOut`, `Deposit`, `Withdraw` und `WithdrawPnl` bleiben aufrufbar. Alle anderen Anweisungen können nicht mehr aufgerufen werden.
+
+  Changelog: [`reference/changelog`](/docs/i18n/de/reference/changelog).
+</Warning>
+
+## Anweisungsbestand
+
+### Aufrufbar
+
+| Anweisung | Kategorie | Hinweise |
+|-----------|-----------|---------|
+| `Deposit` | Liquidität | Liquidität hinzufügen, LP erhalten. Neues 12-Account-Layout; altes 14-Account-Layout noch kompatibel. |
+| `Withdraw` | Liquidität | LP verbrennen, beide Seiten erhalten. Neues 12-Account-Layout; altes 21/22-Account-Layout noch kompatibel. |
+| `SwapBaseIn` | Swap | Exact-Input-Swap. Neues 9-Account-Layout; altes 18-Account-Layout noch kompatibel. |
+| `SwapBaseOut` | Swap | Exact-Output-Swap. Neues 9-Account-Layout; altes 18-Account-Layout noch kompatibel. |
+| `WithdrawPnl` | Admin | Protokollgebühren einziehen. Neues 10-Account-Layout (**harte Breaking Change — keine Kompatibilität mit altem Layout**). |
+
+### Entfernt (nicht mehr aufrufbar)
+
+Diese wurden beim Upgrade vom 2026-06-22 entfernt und können nicht mehr aufgerufen werden. Siehe [Entfernte Anweisungen](#entfernte-anweisungen).
+
+| Anweisung | Frühere Kategorie | Früherer Zweck |
+|-----------|-------------------|----------------|
+| `Initialize` | Lebenszyklus | Pool erstellen. |
+| `PreInitialize` | Lebenszyklus | Legacy-Vorab-Zuordnungs-Helfer. |
+| `InitModelData` | Modelleinrichtung | Lookup-Tabelle erstellen und initialisieren. |
+| `UpdateModelData` | Modelleinrichtung | Bis zu 5 Tabellenelemente pro Aufruf einfügen. |
+| `MonitorStep` | Crank | OpenBook-Fills abwickeln, Aufträge neu posten. |
+| `SetParams` | Admin | Pool-Parameter ändern. |
+| `WithdrawSrm` | Legacy | SRM-Gebührenrabatt-Rückerstattungen einziehen. |
+| `SimulateInfo` | Diagnose | Read-Only-Quote-Helfer. |
+
+## `Deposit`
+
+Liquidität hinzufügen, LP-Token erhalten.
+
+**Argumente**
+
+```
+max_coin_amount: u64
+max_pc_amount: u64
+base_side: u64          // 0 = base on coin, 1 = base on pc
+```
+
+**Accounts** — neues Layout, 12 Accounts (schreibbar `W`, Unterzeichner `S`)
+
+| # | Name | W | S | Hinweise |
+|---|------|---|---|----------|
+| 0 | `token_program` |   |   | SPL Token. |
+| 1 | `amm` | W |   | Pool's `AmmInfo`. |
+| 2 | `amm_authority` |   |   | Programmweite PDA. |
+| 3 | `amm_target_orders` | W |   | |
+| 4 | `amm_lp_mint` | W |   | LP Mint. |
+| 5 | `amm_coin_vault` | W |   | Pool Coin Vault. |
+| 6 | `amm_pc_vault` | W |   | Pool PC Vault. |
+| 7 | `model_data_account` |   |   | **Read-Only Lookup-Tabelle.** |
+| 8 | `user_source_coin` | W |   | Coin-Eingabe des Benutzers. |
+| 9 | `user_source_pc` | W |   | PC-Eingabe des Benutzers. |
+| 10 | `user_dest_lp` | W |   | LP ATA des Benutzers. |
+| 11 | `user_source_owner` |   | S | Transaktionsunterzeichner. |
+
+**Kompatibilität**: `amm_open_orders` (altes #3) und `serum_market` (altes #9) werden entfernt. Wenn **14** Accounts übergeben werden, wird die Anweisung mit dem alten 14-Account-Layout geparst; die Serum-Accounts werden ignoriert.
+
+**Mathematik** — Standard-Pro-Rata unter Verwendung der Lookup-Tabelle zur Berechnung des Verhältnisses. Das SDK berechnet das Coin/PC-Paar für die gewünschte LP-Menge und prüft gegen maximale Obergrenzen.
+
+## `Withdraw`
+
+LP verbrennen, beide Seiten pro-rata erhalten.
+
+**Argumente**
+
+```
+amount: u64            // LP-Token zum Verbrennen
+```
+
+**Accounts** — neues Layout, 12 Accounts (schreibbar `W`, Unterzeichner `S`)
+
+| # | Name | W | S | Hinweise |
+|---|------|---|---|----------|
+| 0 | `token_program` |   |   | SPL Token. |
+| 1 | `amm` | W |   | Pool's `AmmInfo`. |
+| 2 | `amm_authority` |   |   | Programmweite PDA. |
+| 3 | `amm_target_orders` | W |   | |
+| 4 | `amm_lp_mint` | W |   | LP Mint. |
+| 5 | `amm_coin_vault` | W |   | Pool Coin Vault. |
+| 6 | `amm_pc_vault` | W |   | Pool PC Vault. |
+| 7 | `model_data_account` |   |   | **Read-Only Lookup-Tabelle.** |
+| 8 | `user_source_lp` | W |   | LP-Quelle des Benutzers. |
+| 9 | `user_dest_coin` | W |   | Coin-Ausgabe des Benutzers. |
+| 10 | `user_dest_pc` | W |   | PC-Ausgabe des Benutzers. |
+| 11 | `user_lp_owner` |   | S | Transaktionsunterzeichner. |
+
+**Kompatibilität**: neun Serum-Accounts (`amm_open_orders`, `serum_program`, `serum_market`, `serum_coin_vault`, `serum_pc_vault`, `serum_vault_signer`, `serum_event_q`, `serum_bids`, `serum_asks`) werden entfernt. Die alten **21-** oder **22-Account**-Layouts werden weiterhin akzeptiert. Beachten Sie jedoch, dass die **Referral-Fee-Logik für den 22. optionalen `referrer_pc_wallet` Account entfernt wurde** — er kann weiterhin übergeben werden, hat aber keine Auswirkung mehr.
+
+**Vorbedingungen**
+
+- `user_source_lp` hält mindestens `amount`.
+
+**Nachbedingungen**
+
+- `amount` LP-Token werden verbrannt.
+- Der Benutzer erhält Coin- und PC-Beträge gemäß dem aktuellen Pro-Rata, angepasst für aufgelaufene Gebühren.
+
+## `SwapBaseIn`
+
+Exact-Input-Swap unter Verwendung der Lookup-Tabelle für Preisgestaltung.
+
+**Argumente**
+
+```
+amount_in: u64
+minimum_amount_out: u64
+```
+
+**Accounts** — neues Layout, 9 Accounts (schreibbar `W`, Unterzeichner `S`)
+
+| # | Name | W | S | Hinweise |
+|---|------|---|---|----------|
+| 0 | `spl_token program` |   |   | SPL Token. |
+| 1 | `amm` | W |   | Pool's `AmmInfo`. |
+| 2 | `amm_authority` |   |   | Programmweite PDA. |
+| 3 | `amm_coin_vault` | W |   | Pool Coin Vault. |
+| 4 | `amm_pc_vault` | W |   | Pool PC Vault. |
+| 5 | `model_data_account` |   |   | **Read-Only Lookup-Tabelle.** |
+| 6 | `user_source_token` | W |   | Input-Token-Account des Benutzers. |
+| 7 | `user_destination_token` | W |   | Output-Token-Account des Benutzers. |
+| 8 | `user_source_owner` |   | S | Benutzer (Transaktionsunterzeichner). |
+
+**Kompatibilität**: die neun OpenBook-Accounts (`amm_open_orders`, `serum_program`, `serum_market`, `serum_bids`, `serum_asks`, `serum_event_queue`, `serum_coin_vault`, `serum_pc_vault`, `serum_vault_signer`) werden entfernt. Wenn die Anzahl der übergebenen Accounts **nicht 9** ist, wird die Anweisung mit dem alten **18-Account**-Layout geparst; die Serum-Accounts müssen weiterhin ihre Positionen einnehmen, aber ihr Inhalt wird nicht mehr validiert oder verwendet.
+
+**Vorbedingungen**
+
+- `amm.status` erlaubt Swap.
+- `user_source_token` hält ≥ `amount_in`.
+
+**Nachbedingungen**
+
+- Benutzer verliert `amount_in`, gewinnt `amount_out ≥ minimum_amount_out`.
+- Pool-Gebühren erhöhen `need_take_pnl_*` Zähler.
+
+**Mathematik** — Lookup-Tabellen-Interpolation wie in [`products/stable/math`](/docs/i18n/de/products/stable/math) beschrieben.
+
+## `SwapBaseOut`
+
+Exact-Output-Swap (Umkehrung von `SwapBaseIn`). Gleiches 9-Account-Layout, andere Mathematik-Richtung.
+
+**Argumente**
+
+```
+max_amount_in: u64
+amount_out: u64
+```
+
+## `WithdrawPnl`
+
+Nur Admin. Aufgelaufene Protokollgebühren von `need_take_pnl_*` in designierte PnL-Accounts einziehen.
+
+<Warning>
+  **Harte Breaking Change — kein Kompatibilitätspfad.** Diese Anweisung hat **kein** Parsing für das alte Layout. Das Senden des alten Layouts schlägt mit Validierungsfehlern wie `InvalidTokenCoin` fehl, da die Accounts nicht ausgerichtet sind (altes #3 war `open_orders`). Admin-Tools, die `WithdrawPnl` aufrufen, **müssen** auf das neue 10-Account-Layout aktualisiert werden.
+</Warning>
+
+**Argumente** — keine (zustandsgesteuert).
+
+**Accounts** — neues Layout, feste 10 Accounts, nur Admin (schreibbar `W`, Unterzeichner `S`)
+
+| # | Name | W | S | Hinweise |
+|---|------|---|---|----------|
+| 0 | `spl_token program` |   |   | SPL Token. |
+| 1 | `amm` | W |   | Pool's `AmmInfo`. |
+| 2 | `amm_authority` |   |   | Programmweite PDA. |
+| 3 | `amm_coin_vault` | W |   | Pool Coin Vault. |
+| 4 | `amm_pc_vault` | W |   | Pool PC Vault. |
+| 5 | `amm_target_orders` | W |   | |
+| 6 | `model_data` |   |   | Lookup-Tabelle. |
+| 7 | `user_coin` | W |   | Coin-Account des Admins (erhält Gebühr). |
+| 8 | `user_pc` | W |   | PC-Account des Admins (erhält Gebühr). |
+| 9 | `amm_admin` |   | S | Pool-Admin (Unterzeichner). |
+
+**Logikänderung**: wenn die verfügbaren Mittel des Pools nicht ausreichen, um das aufgelaufene PnL abzubuchen, wird der Pool **nicht mehr** in `CancelAllOrdersState` / `Disabled` versetzt; die Anweisung gibt stattdessen direkt `TakePnlError` zurück. Der optionale `referrer_pc_wallet` wurde ebenfalls entfernt.
+
+**Vorbedingungen**
+
+- `amm_admin` muss autorisiert sein.
+
+**Nachbedingungen**
+
+- `need_take_pnl_coin` und `need_take_pnl_pc` werden auf die Admin-Accounts übertragen.
+- Zähler werden auf Null gesetzt.
+
+## Entfernte Anweisungen
+
+Die folgenden Anweisungen wurden beim Upgrade vom 2026-06-22 entfernt und **können nicht mehr aufgerufen werden**. Sie werden hier nur dokumentiert, damit Integratoren sie in historischen Transaktionen und SDKs erkennen können.
+
+- **`Initialize`** — bootstrappte früher einen neuen Stable AMM Pool. Entfernt.
+- **`PreInitialize`** — Legacy-Vorab-Zuordnungs-Helfer. Entfernt.
+- **`InitModelData`** — erstellte und initialisierte früher die `ModelDataInfo` Lookup-Tabelle. Entfernt.
+- **`UpdateModelData`** — füllte früher bis zu 5 Lookup-Tabellen-Elemente pro Aufruf. Entfernt.
+- **`MonitorStep`** — der OpenBook-Crank, der Fills abwickelte und das Auftrags-Grid neu postete. Bereits lange inaktiv, nachdem der Pool aufgehört hatte, auf OpenBook zu posten; jetzt entfernt.
+- **`SetParams`** — Admin-Parameteränderungen (Status, Gebühren, Besitzer, Modell-Datenschlüssel, etc.). Entfernt.
+- **`WithdrawSrm`** — zog SRM-Gebührenrabatt-Rückerstattungen aus frühen Serum-Ära-Pools ein. Entfernt.
+- **`SimulateInfo`** — Read-Only-Quote-Helfer. Entfernt; verwenden Sie stattdessen die Off-Chain-Stable-Curve-Helfer des SDK zum Quoting (siehe [Code-Demos](/docs/i18n/de/products/stable/code-demos)).
+
+## Nächste Schritte
+
+- [Accounts](/docs/i18n/de/products/stable/accounts) — für Account-Feldlayouts und Größen.
+- [Mathematik](/docs/i18n/de/products/stable/math) — für die Lookup-Tabellen-Interpolationslogik.
+- [Code-Demos](/docs/i18n/de/products/stable/code-demos) — um zu sehen, wie diese vom SDK aufgerufen werden.
+
+Quellen:
+
+- `raydium-stable/program/src/instruction.rs` (enum und pack/unpack)
+- `raydium-stable/program/src/processor.rs` (Ausführungslogik)

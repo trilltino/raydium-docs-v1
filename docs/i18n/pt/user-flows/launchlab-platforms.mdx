@@ -1,0 +1,60 @@
+---
+title: "Plataformas LaunchLab"
+description: "Como as configurações de plataforma de terceiros moldam os lançamentos, taxas, marca e configurações pós-migração do LaunchLab."
+---
+
+<Info>
+  **Esta página foi traduzida automaticamente por IA. A versão em inglês é a fonte oficial.**
+
+  [Ver versão em inglês →](/docs/en/user-flows/launchlab-platforms)
+</Info>
+
+<Info>
+  Uma plataforma LaunchLab é uma configuração on-chain usada por uma superfície de lançamento ou comunidade. As configurações da plataforma podem afetar taxas, marca, suporte a taxas de criador e comportamento do pool pós-migração.
+</Info>
+
+O LaunchLab oferece suporte a ambientes de lançamento de terceiros através de PDAs de Plataforma. Uma plataforma pode oferecer sua própria experiência de lançamento de token com marca enquanto usa a infraestrutura do programa LaunchLab e a migração de pool do Raydium.
+
+## O que uma plataforma pode controlar
+
+| Configuração | Por que importa |
+|---|---|
+| Taxas de criador | Define a taxa de criador da curva de ligação e pode selecionar o criador de registro do CPMM. |
+| Taxas de plataforma | Define para onde a receita de taxa em nível de plataforma é enviada. |
+| Metadados de marca | Dá à plataforma um nome, descrição e logo que podem ser exibidos nas superfícies do aplicativo. |
+| Agrupamento de lançamento | Permite que a interface mostre tokens lançados sob a mesma plataforma. |
+| Configurações de pool pós-migração | Pode definir a configuração de taxa do CPMM quando a plataforma migra lançamentos para CPMM. |
+| Distribuição de LP | Define a participação queimada e a participação de LP bloqueada de propriedade da plataforma. A escala de criador retida é combinada na participação da plataforma. |
+| Lista de permissões de configuração global | Pode restringir lançamentos a contas `GlobalConfig` explicitamente permitidas pelo administrador da plataforma. |
+
+## O que os criadores devem verificar
+
+Antes de lançar em qualquer plataforma, confirme:
+
+- Qual carteira recebe as taxas da plataforma.
+- Se as taxas de criador estão habilitadas.
+- Qual configuração de taxa do CPMM e criador de registro a plataforma usa após a graduação.
+- Como os tokens LP são divididos após a graduação.
+- Se um NFT de Chave de Taxa da plataforma será cunhado.
+- Se a plataforma tem seus próprios termos, políticas ou regras de elegibilidade.
+
+<Warning>
+  As configurações da plataforma podem alterar materialmente a economia do criador e as expectativas do usuário. Revise-as antes de assinar a transação de lançamento. Esta página explica apenas a mecânica e não é aconselhamento legal, financeiro ou de investimento.
+</Warning>
+
+## O que os traders devem verificar
+
+Ao comprar um token LaunchLab, a plataforma pode afetar o caminho de taxa e o tratamento de liquidez pós-migração. Antes de negociar:
+
+- Verifique a plataforma do token e as configurações de lançamento.
+- Confirme o nível de taxa do CPMM se a interface o exibir.
+- Verifique se o LP é queimado, bloqueado ou atribuído.
+- Verifique o mint do token na página do token, não apenas em texto de mídia social.
+
+## Referências
+
+- [Visão geral do LaunchLab](/docs/i18n/pt/user-flows/launchlab-overview) — ciclo de vida de lançamento voltado para o usuário.
+- [Criando um token LaunchLab](/docs/i18n/pt/user-flows/creating-a-launchlab-token) — fluxo de configuração do criador.
+- [Como funcionam as taxas de criador](/docs/i18n/pt/user-flows/how-creator-fees-work) — caminhos de taxa de criador versus direitos de Chave de Taxa da plataforma.
+- [Configuração de plataforma LaunchLab](/docs/i18n/pt/products/launchlab/platform-config) — referência técnica de configuração.
+- [Referência de plataformas LaunchLab](/docs/i18n/pt/products/launchlab/platforms) — detalhes de plataforma em nível de protocolo.

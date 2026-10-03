@@ -1,0 +1,72 @@
+---
+title: "LaunchLab 创建者费用"
+description: "创建者费用如何在毕业前在联合曲线中累积，以及毕业后通过 CPMM 池创建者累积，与平台拥有的锁定 LP 分开。"
+---
+
+<Info>
+  **本页内容由 AI 自动翻译，所有内容以英文版本为准。**
+
+  [查看英文版 →](/docs/en/products/launchlab/creator-fees)
+</Info>
+
+<Info>
+  LaunchLab 创建者收入可来自两个费用计数器：毕业前的联合曲线创建者费用金库和毕业后的 CPMM 创建者费用。在 2026-08-17 升级之前，`creator_scale` 还会生成创建者拥有的 LP 费用密钥。升级后执行的迁移会将该锁定 LP 份额分配给平台。
+</Info>
+
+## 迁移前：直接费用累积
+
+当代币在联合曲线上交易时，每次买入和卖出都可以收取创建者费用部分。它在每个创建者、每个报价代币的金库中累积。
+
+- 费用以报价代币计价。
+- `PlatformConfig.creator_fee_rate` 设置费率。
+- 创建者可以在毕业前或毕业后通过 `ClaimCreatorFee` 领取。
+- 毕业停止新的联合曲线累积，但不会清除未领取的余额。
+
+## 迁移后：CPMM 创建者费用
+
+每次新启动都会毕业到 CPMM。选定的 CPMM `AmmConfig.creator_fee_rate` 和 `PoolState.creator_fee_on` 决定创建者费用是否在 CPMM 交换中累积。
+
+CPMM 池创建者是：
+
+- 当 `PlatformConfig.platform_cp_creator` 为默认公钥时的原始启动创建者；或
+- 否则为配置的 `platform_cp_creator`。
+
+该记录的 CPMM 创建者拥有创建者费用计数器。他们可以使用创建者签名的收集指令，任何支付者都可以触发目标受限的无权限路径，该路径向创建者的规范 ATA 支付。参见 [`products/cpmm/fees`](/docs/i18n/zh/products/cpmm/fees)。
+
+## 锁定 LP 是单独的平台权利
+
+在 CPMM 迁移时，LaunchLab 仍然验证：
+
+```text
+platform_scale + creator_scale + burn_scale = 1_000_000
+```
+
+在 2026-08-17 升级之前，LaunchLab 单独锁定 `creator_scale` 并将相应的费用密钥铸造给代币创建者。对于升级后执行的迁移，它合并 `platform_scale + creator_scale`。如果合并份额非零，LP-Lock 程序为 `platform_nft_wallet` 创建一个费用密钥 NFT。`burn_scale` 余额被销毁。
+
+因此，对于在更新程序下执行的迁移，保留的 `creator_scale` 字段不是创建者收入流。它有助于平台的锁定 LP 数量。对于历史池，请读取实际的费用密钥和锁定流动性记录，而不是从当前规则推断所有权。
+
+在升级前完成的迁移创建的费用密钥不会被重新分配或修改。在升级前创建但之后迁移的启动使用新的平台拥有的分配。
+
+## 领取路径
+
+| 收入 | 受益人 | 领取路径 |
+|---|---|---|
+| 联合曲线创建者费用 | 原始启动创建者 | LaunchLab `ClaimCreatorFee` |
+| CPMM 创建者费用 | CPMM `pool_creator` | CPMM 创建者签名或无权限收集 |
+| 锁定 LP 交易费用，升级前迁移 | 该迁移时创建的创建者或平台费用密钥的当前持有者 | LP-Lock / Burn & Earn 收获流 |
+| 锁定 LP 交易费用，更新迁移 | 平台费用密钥的当前持有者 | LP-Lock / Burn & Earn 收获流 |
+
+## 集成商检查清单
+
+- 读取 `platform_cp_creator` 以识别毕业后 CPMM 创建者费用受益人。
+- 对于更新的迁移，不要将 `creator_scale` 显示为创建者费用密钥百分比。对于历史迁移，读取实际的费用密钥记录。
+- 分别跟踪联合曲线金库和 CPMM 创建者费用计数器。
+- 将平台费用密钥视为 LP 费用权利，而不是 CPMM 创建者费用凭证。
+- 在启用更新的迁移构建器之前刷新已部署的 IDL。
+
+## 相关链接
+
+- [`products/launchlab/platform-config`](/docs/i18n/zh/products/launchlab/platform-config) — 规模和创建者记录字段。
+- [`products/launchlab/tips-and-gotchas/lp-fee-distribution`](/docs/i18n/zh/products/launchlab/tips-and-gotchas/lp-fee-distribution) — 确切的 LP 分割。
+- [`products/cpmm/fees`](/docs/i18n/zh/products/cpmm/fees) — CPMM 创建者费用累积和收集。
+- [`user-flows/burn-and-earn`](/docs/i18n/zh/user-flows/burn-and-earn) — 费用密钥机制。

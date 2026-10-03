@@ -1,0 +1,264 @@
+---
+title: "LaunchLab PlatformConfig"
+description: "تكوين لكل منصة يخصص العلامة التجارية وتقسيمات الرسوم ومشاركات هجرة NFT وتخصيص الاستحقاق وقواعد معاملات الإطلاق لأي إطلاق يتم توجيهه عبر تلك المنصة."
+---
+
+<Info>
+  **هذه الصفحة مُترجَمة آليًا بواسطة الذكاء الاصطناعي. النسخة الإنجليزية هي المرجع المعتمد.**
+
+  [عرض النسخة الإنجليزية →](/docs/en/products/launchlab/platform-config)
+</Info>
+
+<Info>
+  `PlatformConfig` هو **طبقة التراكب على مستوى المنصة** التي تقع فوق [`GlobalConfig`](/docs/i18n/ar/products/launchlab/global-config). بينما يحدد `GlobalConfig` القواعس على مستوى البروتوكول ("رسم التداول 1%، يجب أن يكون الإمداد 10 ملايين على الأقل، فقط هذا المحفظة يمكنها التخرج")، `PlatformConfig` هو ما تستخدمه كل منصة إطلاق — pump.fun، واجهة Raydium الخاصة، منصات الإطلاق من جهات خارجية — لإضافة رسمها، والمطالبة بحصتها من LP بعد التخرج، وتقييد معاملات الإطلاق التي يمكن لعمليات الإطلاق الخاصة بها اختيارها، وعرض علامتها التجارية (الاسم، الموقع الإلكتروني، الصورة) على السلسلة.
+</Info>
+
+## ما هو
+
+حساب `PlatformConfig` يمتلك خمس مخاوف متقاطعة لمنصة:
+
+1. **العلامة التجارية** — الاسم، الموقع الإلكتروني، رابط الصورة، كل شيء مخزن بشكل مضمن بحيث يمكن لأي مستكشف أو معالج بيانات عرض المنصة التي أطلقت الرمز.
+2. **رسم المنصة** — رسم تداول إضافي (`fee_rate`) بالإضافة إلى `trade_fee_rate` الخاص بالبروتوكول. يتراكم في `platform_fee_wallet` الخاص بالمنصة. محدود بـ 500 bps (`50000`) على كل من مسار الإنشاء والتحديث، تم رفعه من 100 bps (`10000`) في 2026-08-26 — انظر [حدود الأسعار](#rate-caps).
+3. **تقسيم هجرة LP** — ثلاثة أعداد صحيحة مخزنة (`platform_scale`, `creator_scale`, `burn_scale`) تجمع إلى `1_000_000`. قبل ترقية 2026-08-17، أنتج مقياس المنشئ مفتاح رسم منفصل للمنشئ. الهجرات المنفذة بعد الترقية تجمع الاثنين الأولين في حصة LP مقفلة واحدة مملوكة للمنصة؛ الباقي يتم حرقه.
+4. **قواعد معاملات الإطلاق** — تقييد اختياري (`restrict_curve_param`) يتطلب من الإطلاق تلبية حساب [`PlatformCurveRule`](/docs/i18n/ar/products/launchlab/curve-rules) الخاص بـ `GlobalConfig` الذي اختاره. تدعم القواعد نطاقات القيم والمستويات البديلة والبوابات من نوع الرمز؛ تعيش في حساباتها الخاصة، وليس على `PlatformConfig`.
+5. **قائمة المسموح بها للتكوين العام** — تقييد اختياري يتطلب من المنصة إنشاء `PlatformAllowConfig` لـ `GlobalConfig` المختار.
+
+اشتقاق PDA:
+
+```ts
+const [platformConfigPda] = PublicKey.findProgramAddressSync(
+  [
+    Buffer.from("platform_config"),
+    platformAdmin.toBuffer(),       // platform's owning pubkey
+  ],
+  LAUNCHLAB_PROGRAM_ID,
+);
+```
+
+(انظر `create_platform_config` في المصدر للحصول على قائمة البذور الموثوقة.)
+
+## التخطيط
+
+```rust
+// states/platform_config.rs
+pub const PLATFORM_CONFIG_SEED: &str = "platform_config";
+pub const NAME_SIZE: usize = 64;
+pub const WEB_SIZE:  usize = 256;
+pub const IMG_SIZE:  usize = 256;
+pub const MAX_CREATOR_FEE_RATE: u64 = 5000;       // 50 bps (denominator 1_000_000)
+pub const MAX_TRANSFER_FEE_RATE: u16 = 500;       // 5%   (denominator 10_000)
+
+#[account]
+pub struct PlatformConfig {
+    pub epoch:                       u64,
+    pub platform_fee_wallet:         Pubkey,            // signs ClaimPlatformFee
+    pub platform_nft_wallet:         Pubkey,            // receives the platform NFT slice at CPMM graduation
+    pub platform_scale:              u64,               // share of LP minted to platform NFT
+    pub creator_scale:               u64,               // creator share before upgrade; added to platform share afterward
+    pub burn_scale:                  u64,               // share of LP burned permanently
+    pub fee_rate:                    u64,               // platform's trade fee (1/1_000_000)
+    pub name:                        [u8; 64],          // utf-8 padded with zeros
+    pub web:                         [u8; 256],
+    pub img:                         [u8; 256],
+    pub cpswap_config:               Pubkey,            // CPMM AmmConfig that the post-grad pool will bind to
+    pub creator_fee_rate:            u64,               // creator-side fee taken pre-graduation
+    pub transfer_fee_extension_auth: Pubkey,            // for Token-2022 launches: withdraw-withheld authority from mint creation, fee-config authority from graduation
+    pub platform_vesting_wallet:     Pubkey,
+    pub platform_vesting_scale:      u64,               // platform's slice of total_locked_amount
+    pub platform_cp_creator:         Pubkey,            // optional creator-of-record on the post-graduation CPMM pool
+    pub restrict_global_config:      u8,                // 0 = unrestricted, 1 = require allow PDA
+    pub restrict_curve_param:        u8,                // 0 = unrestricted, 1 = enforce the PlatformCurveRule
+    pub curve_rule_manager:          Pubkey,            // hot wallet allowed to manage rule accounts
+    pub padding:                     [u8; 78],
+}
+```
+
+الحساب بحجم ثابت 944 بايت. احتفظ بـ `Vec<PlatformCurveParam>` نهائي حتى إصدار 2026-08-31 الذي نقل معاملات الإطلاق إلى حسابات [`PlatformCurveRule`](/docs/i18n/ar/products/launchlab/curve-rules)؛ `restrict_curve_param` و `curve_rule_manager` و 4 بايتات التي احتلتها بادئة طول vec كلها تخرج من الحشو، لذا فإن عدد البايتات وكل إزاحة حقل سابقة لم تتغير. انظر [إدخال السجل](/docs/en/reference/changelog/2026-08-31-launchlab-platform-curve-rules) لما يجب أن يتغير في أجهزة فك التشفير.
+
+يجب أن يساوي `platform_scale + creator_scale + burn_scale` القيمة `1_000_000`، **ويجب أن يكون `creator_scale` مساويًا لـ `0` بالضبط** — إذ يؤكّد البرنامج `require_eq!(creator_scale, 0)` في كل من `CreatePlatformConfig` ومسار تحديث `MigrateNftInfo`، لذا فإن التقسيم القابل للضبط فعليًا هو `platform_scale + burn_scale = 1_000_000` فقط. ولا يبقى الحقل إلا لكي تظل تكوينات ما قبل 2026-08-17 قابلة لفك التشفير؛ وفي تلك التكوينات، أي `creator_scale` مخزَّن يُدمج في LP المقفلة للمنصة عند الهجرة بدلاً من أن يذهب إلى منشئ الرمز.
+
+أمثلة قابلة للضبط:
+
+- `(100_000, 0, 900_000)` — 90% LP محروق، 10% مقفول للمنصة.
+- `(150_000, 0, 850_000)` — 85% محروق، 15% مقفول للمنصة.
+- `(0, 0, 1_000_000)` — حرق كامل، لا توجد عملات NFT. عمليات إطلاق صارمة "بدون مطلعين".
+
+## حقول العلامة التجارية
+
+`name` و `web` و `img` عبارة عن مصفوفات بايت مضمنة مملوءة بأصفار حتى ثوابتها. لقراءتها كسلاسل، قم بالتقطيع حتى أول `\0`:
+
+```ts
+function readString(bytes: Uint8Array): string {
+  const end = bytes.indexOf(0);
+  return Buffer.from(end === -1 ? bytes : bytes.subarray(0, end)).toString("utf-8");
+}
+```
+
+الثوابت متحفظة بشكل متعمد (`name: 64`, `web: 256`, `img: 256`) بحيث يمكن للمنصات تضمين بيانات وصفية كافية للمستكشفات ومعالجات البيانات دون لمس التخزين خارج السلسلة. أي شيء يتجاوز هذه الأحجام يعود عند `CreatePlatformConfig` مع `InvalidInput`.
+
+## ميكانيكا الرسوم
+
+يفرض التبديل على منحنى مرتبط بـ `PlatformConfig` ثلاث رسوم متعددة الطبقات:
+
+```
+trade_fee     = amount_in × global_config.trade_fee_rate    / 1_000_000
+platform_fee  = amount_in × platform_config.fee_rate        / 1_000_000
+creator_fee   = amount_in × platform_config.creator_fee_rate / 1_000_000
+
+amount_after_fee = amount_in − trade_fee − platform_fee − creator_fee
+```
+
+- `trade_fee` يتراكم في `protocol_fee_owner` الخاص بالبروتوكول (يتم المطالبة به عبر `CollectFee`).
+- `platform_fee` يتراكم في خزينة لكل منصة (يتم المطالبة به عبر `ClaimPlatformFee` أو `ClaimPlatformFeeFromVault`؛ انظر [`instructions`](/docs/i18n/ar/products/launchlab/instructions)).
+- `creator_fee` يتراكم في خزينة لكل منشئ مفتاحة بواسطة مفتاح المنشئ العام + رمز الاقتباس (يتم المطالبة به عبر `ClaimCreatorFee`).
+
+### حدود الأسعار
+
+كلا المعدلين مقومان بـ `1/1_000_000`، لذا `5000` هو 50 bps و `50000` هو 500 bps.
+
+| المعدل | الحد | مفروض في |
+|---|---|---|
+| `fee_rate` | `50000` (500 bps) | `PlatformParams::check()` عند الإنشاء — يعود مع `InvalidInput`. `update_platform_fee_rate` عند كل متغير تحديث يلمسه (`FeeRate` و `AllInfo`) — يعود مع `InvalidPlatformInfo`. |
+| `creator_fee_rate` | `MAX_CREATOR_FEE_RATE = 5000` (50 bps) | `create_platform_config` عند الإنشاء و `update_creator_fee_rate` عند التحديث — كلاهما يعود مع `InvalidPlatformInfo`. |
+
+نقطتا الفرض لـ `fee_rate` عبارة عن استدعاءات `require!` منفصلة في ملفات مختلفة، لذا فإنها تحمل رموز خطأ مختلفة، لكنها تطبق نفس السقف. يمكن تحرير منصة تم إنشاؤها بأي معدل مسموح به لاحقاً، بما في ذلك من خلال متغير `AllInfo` الشامل الذي يعيد كتابة كل حقل في وقت واحد.
+
+كان حد `fee_rate` الأصلي 100 bps (`10000`). تم نقل حد التحديث إلى `25000` (250 bps) في 2026-01-27؛ في 2026-08-26 انتقل كلاهما إلى `50000` (500 bps) — انظر [إدخال السجل](/docs/en/reference/changelog/2026-08-26-launchlab-platform-fee-rate-cap).
+
+`GlobalConfig.max_share_fee_rate` **لا** يحد أي من المعدلين. يحد معامل `share_fee_rate` لكل معاملة الذي تأخذه تعليمات المبادلة الأربع — رسم الإحالة — وليس شيء آخر. انظر [`global-config`](/docs/i18n/ar/products/launchlab/global-config#fees).
+
+## سلطات رسم نقل Token-2022
+
+`transfer_fee_extension_auth` يسمي مفتاح المنصة الذي ينتهي به الحال في الاحتفاظ بسلطات `TransferFeeConfig` الخاصة بـ mint الأساسي عند إنشاء إطلاق من خلال `InitializeWithToken2022` مع رسم نقل مرفق. يحمل الامتداد سلطتين، ويتم تسليمهما في **نقاط مختلفة في دورة حياة الإطلاق**:
+
+| السلطة | المالك عند إنشاء mint | المالك بعد `MigrateToCpswap` |
+|---|---|---|
+| `withdraw_withheld_authority` — تسحب الرسوم التي يحتفظ بها Token-2022 على حسابات الرموز | `transfer_fee_extension_auth`، مكتوب مباشرة في mint. يعود إلى PDA `authority` الإطلاق عندما يكون الحقل `Pubkey::default()`. | بالفعل مفتاح المنصة، لذا لا شيء يتحرك. الهجرة تعيد تعيينها فقط عندما يحتفظ بها PDA `authority` لا تزال. |
+| `transfer_fee_config_authority` — يغير معدل الرسم والحد الأقصى للرسم | دائماً PDA `authority` الإطلاق. | `transfer_fee_extension_auth`، بشرط أن يكون هذا الحقل غير افتراضي. |
+
+قبل 2026-08-27 تم إنشاء mint مع PDA `authority` على كلا السلطتين، وانتقل كلاهما إلى المنصة عند التخرج. البرنامج لا يعرض أي تعليمات سحب محتفظ بها أو حصاد، لذا كانت الرسوم المحتفظ بها أثناء مرحلة منحنى الترابط غير قابلة للوصول حتى تخرج الإطلاق. كتابة جانب السحب عند إنشاء mint يجعلها قابلة للمطالبة من أول تداول — انظر [إدخال السجل](/docs/en/reference/changelog/2026-08-27-launchlab-token2022-withheld-authority).
+
+هناك عاقبتان تستحقان التخطيط:
+
+- **اضبط الحقل قبل الإطلاق، وليس بعده.** إطلاق تم إنشاؤه بينما `transfer_fee_extension_auth` هو `Pubkey::default()` يضع PDA `authority` على جانب السحب. تعيين الحقل لاحقاً لا يزال يعمل — التخرج يجد PDA في مكانه ويسلم السلطة — لكن لا شيء يمكنه سحب الرصيد المحتفظ به في الوقت الفاصل.
+- **تدوير الحقل في منتصف الإطلاق يقسم السلطتين.** غير `transfer_fee_extension_auth` بين إنشاء الإطلاق وتخرجه وسلطة السحب المحتفظ بها في mint تبقى مع المفتاح المكون عند الإنشاء (PDA لم تعد تحتفظ به، لذا تخطي الهجرة هذا التسليم) بينما تذهب سلطة تكوين الرسم إلى المفتاح الجديد. قم بالتدوير بين عمليات الإطلاق، أو خطط للتوفيق بين المفتاحين بنفسك من خلال Token-2022 مباشرة.
+
+منصة تترك الحقل في `Pubkey::default()` لحياة الإطلاق كاملة تحتفظ بكلا السلطتين على PDA `authority` بشكل دائم: لا يمكن تغيير معدل الرسم ولا يمكن سحب الرصيد المحتفظ به. قم فقط بإرفاق رسم نقل بإطلاق إذا كانت المنصة تنوي الاحتفاظ بهذه المفاتيح.
+
+## تقسيم هجرة NFT (CPMM فقط)
+
+عندما يتخرج الإطلاق إلى CPMM، تقسم تعليمات الهجرة رموز LP التي تم سكها بواسطة `CPMM::InitializeWithPermission` بطريقتين:
+
+```
+lp_to_platform = floor(lp_total × (platform_scale + creator_scale) / 1_000_000)
+lp_to_burn     = lp_total − lp_to_platform
+```
+
+إذا كان `lp_to_platform` غير صفري، يقوم برنامج LP-Lock بلفه إلى NFT مفتاح رسم واحد مملوك لـ `platform_nft_wallet`. هذا يحل محل السلوك السابق للترقية الذي أنشأ مفاتيح رسم منفصلة للمنصة والمنشئ. تبقى مفاتيح الرسم التي تم إنشاؤها بواسطة الهجرات المكتملة قبل الترقية دون تغيير. هذا الحق في رسم LP منفصل عن رسوم منشئ CPMM التي يتحكم فيها `platform_cp_creator`.
+
+يتم حرق شريحة الحرق مباشرة، لذا لا يمكن لأي حساب سحبها أو المطالبة برسوم LP التي تمثلها تلك الحصة.
+
+الإطلاقات الموجودة مع `migrate_type = 0` المخزنة لا تزال يمكنها استخدام مسار AMM v4 القديم. يرفض الإنشاء الجديد نوع الهجرة هذا.
+
+## قواعد معاملات الإطلاق
+
+`restrict_curve_param` هو المفتاح. عند `0` البرنامج لا يقرأ القواعد على الإطلاق. عند `1`، يجب أن يفي كل إطلاق يتم توجيهه عبر هذه المنصة بحساب [`PlatformCurveRule`](/docs/i18n/ar/products/launchlab/curve-rules) الخاص بـ `GlobalConfig` الذي اختاره، ويجب على منشئ الإطلاق إلحاق هذا الحساب بـ `remaining_accounts`.
+
+```rust
+pub restrict_curve_param: u8,   // 0 = unrestricted, 1 = enforce the rule of the used config
+pub curve_rule_manager:   Pubkey, // may manage rule accounts; the platform admin always may too
+```
+
+القاعدة عبارة عن قائمة بأشكال الإطلاق المسموح بها: القيود داخل مجموعة فحص واحدة يتم دمجها بـ AND، والمجموعات يتم دمجها بـ OR، وكل قيد عبارة عن ثلاثية `(field, op, value)` تدعم `Eq` و `Gte` و `Lte` و `Neq`. يغطي هذا نطاقات القيم والمستويات البديلة وحدود تقييم التخرج وحدود الهجرة والبوابات من نوع الرمز والمجموعات المحدودة بالوقت — النموذج الكامل وجدول الحقول وتسعة كتيبات عملية موجودة في [`products/launchlab/curve-rules`](/docs/i18n/ar/products/launchlab/curve-rules).
+
+شيئان ينتميان هنا بدلاً من تلك الصفحة:
+
+- **`curve_rule_manager` هو تفويض، وليس نقل.** اضبطه من خلال `UpdatePlatformConfig::CurveRuleManager` وهذا المحفظة يمكنها إنشاء وتحديث وإزالة وإغلاق حسابات القواعد الخاصة بهذه المنصة دون مفتاح المسؤول. يحتفظ مسؤول المنصة بنفس القوة بالتوازي، لذا فإن تدوير أو مسح الحقل يستعيد التحكم. `Pubkey::default()` يعني أن المسؤول فقط يمكنه إدارة القواعد. لا يمكنه تبديل `restrict_curve_param`، الذي يبقى استدعاء مسؤول فقط.
+- **يتم فرض القواعد على `GlobalConfig`، وليس بدلاً منها.** يتم تشغيل فحص القاعدة قبل حدود التكوين الخاصة به ويمكنه فقط تضييقها.
+
+هذا يحل محل قائمة `curve_params: Vec<PlatformCurveParam>` السابقة، التي يمكنها فقط اختبار المساواة الدقيقة، وتحتفظ بـ 10 إدخالات على الأكثر عبر جميع التكوينات، وتنمو حساب `PlatformConfig` نفسه. تم ترحيل المنصات التي استخدمتها بواسطة البروتوكول في تمرير لمرة واحدة؛ الحقل القديم وتعليماته الاثنتان و `MAX_CURVE_PARAMS` اختفت.
+
+## `PlatformAllowConfig` — تقييد منصة
+
+تقرر كل منصة ما إذا كانت تريد تقييد حسابات `GlobalConfig` التي قد تستخدمها عمليات الإطلاق الخاصة بها. اضبط `restrict_global_config` مع `UpdatePlatformConfig::RestrictGlobalConfig(0 | 1)`.
+
+```rust
+pub const PLATFORM_ALLOW_CONFIG_SEED: &str = "platform_allow_config";
+
+#[account]
+pub struct PlatformAllowConfig {
+    pub bump:            u8,
+    pub platform_config: Pubkey,
+    pub global_config:   Pubkey,
+    pub padding:         [u64; 8],
+}
+```
+
+بذور PDA: `[b"platform_allow_config", platform_config, global_config]`.
+
+ينشئ مسؤول المنصة أو يغلق حساباً واحداً لكل زوج مسموح به عبر `CreatePlatformAllowConfig` و `ClosePlatformAllowConfig`. عندما يكون التقييد `1`، يبحث الإنشاء في `remaining_accounts` عن PDA المتوقع ويرفض حساباً مفقوداً مع `NotEnoughRemainingAccounts`. عندما يكون التقييد `0`، لا يلزم حساب السماح.
+
+حساب `PlatformGlobalAccess` الذي تديره مسؤول البروتوكول السابق وتعليمات الإنشاء/الإغلاق الخاصة به متقاعد. أحجام `PlatformConfig` و `GlobalConfig` الموجودة لا تتغير، لكن أجهزة فك التشفير يجب أن تستبدل العلم العام القديم بالعلم الجديد للمنصة. لا يتم استهلاك PDAs الوصول القديمة بواسطة الفحص الجديد.
+
+## مسار القراءة
+
+```ts
+// The SDK exports the layout, not a getter — decode the account yourself.
+import { PlatformConfig } from "@raydium-io/raydium-sdk-v2";
+
+const info = await connection.getAccountInfo(platformConfigPda);
+const platformConfig = PlatformConfig.decode(info!.data);
+
+console.log("Platform:", readString(platformConfig.name));
+console.log("Fee rate:", platformConfig.feeRate, "(/1M)");
+console.log("NFT split:",
+  platformConfig.platformScale,
+  platformConfig.creatorScale,
+  platformConfig.burnScale,
+);
+console.log("Restrict launch params:", platformConfig.restrictCurveParam);
+console.log("Rule manager:", platformConfig.curveRuleManager.toBase58());
+```
+
+بالنسبة لواجهة مستخدم تعرض "من أطلق هذا الرمز"، `PoolState.platform_config` يشير إلى `PlatformConfig` الأصلي مباشرة — اجلبه مرة واحدة وخزن العلامة التجارية.
+
+## مسار التحديث
+
+| التعليمة | من يوقع | ما يتغير |
+|-------------|-----------|--------------|
+| `CreatePlatformConfig` | مسؤول المنصة (مرة واحدة) | يهيئ الحساب مع `PlatformParams`. |
+| `UpdatePlatformConfig` | مسؤول المنصة | إرسال عام مفتاح بـ `param: u8`؛ يطفر حقل واحد لكل استدعاء، أو كل حقل في وقت واحد عبر `AllInfo`. حقول العلامة التجارية ومعدلات الرسوم ومحفظة الاستحقاق والمحافظ المختلفة كلها قابلة للتعيين من خلال هذا. يتم إعادة التحقق من كلا معدلات الرسوم مقابل الحدود في [حدود الأسعار](#rate-caps) على كل متغير يلمسهما. |
+| `CreatePlatformAllowConfig` / `ClosePlatformAllowConfig` | مسؤول المنصة | إضافة أو إزالة `GlobalConfig` مسموح به واحد لهذه المنصة. |
+| `CreatePlatformCurveRule` / `ClosePlatformCurveRule` | `curve_rule_manager` أو مسؤول المنصة | إنشاء أو إغلاق حساب القاعدة الخاص بـ `GlobalConfig` واحد. |
+| `UpdatePlatformCurveRule` / `RemovePlatformCurveRule` | `curve_rule_manager` أو مسؤول المنصة | إضافة أو استبدال أو إزالة مجموعة فحص واحدة. يتم تغيير حجم الحساب، لذا يتبع الإيجار المحتوى. |
+| `ClaimPlatformFee` | `platform_fee_wallet` | مسح رسم المنصة لكل مجموعة من `PoolState.quote_vault`. |
+| `ClaimPlatformFeeFromVault` | `platform_fee_wallet` | مسح خزينة رسم المنصة لكل منصة (PDA في `[platform_config, quote_mint]`). |
+
+تدويرات المحفظة (`platform_fee_wallet`, `platform_nft_wallet`, `platform_vesting_wallet`, `platform_cp_creator`, `transfer_fee_extension_auth`, `cpswap_config`) كلها تمر عبر `UpdatePlatformConfig`. اقرأ جدول إرسال `update_platform_config` في المصدر للحصول على رموز `param` الدقيقة.
+
+## الأخطاء الشائعة
+
+- **`restrict_curve_param` مفعل قبل تحديث المنشئ.** بينما هو `1` يجب أن يكون PDA القاعدة في `remaining_accounts` على كل إطلاق، حتى بالنسبة لتكوين بدون حساب قاعدة — حساب غائب هو `NotEnoughRemainingAccounts`، وليس تمرير. شحن تغيير المنشئ أولاً، ثم اقلب العلم.
+- **`restrict_curve_param` مفعل مع قاعدة فارغة.** قاعدة تحتفظ بمجموعات صفرية، أو مجموعة تحتفظ بقيود صفرية، تسمح بكل شيء. تفعيل العلم ليس بحد ذاته تقييداً؛ اكتب المجموعات أولاً، تحقق منها مع [فحص SDK](/docs/i18n/ar/products/launchlab/curve-rules#check-before-you-send)، وتدرب على التسلسل كله على devnet.
+- **تقريب تقسيم NFT.** يجب أن تجمع المقاييس الثلاثة إلى `1_000_000` بالضبط. أخطاء قبالة واحد في `CreatePlatformConfig` تعود؛ قبالة واحد في وقت التشغيل ستسك أو تحرق وحدة LP إضافية واحدة، وهذا ما يوجد فحص المساواة الصارمة لمنعه.
+- **تخصيص استحقاق منصة مزدوج.** إذا كان `platform_vesting_scale > 0`، يجب على المنصة استدعاء `CreatePlatformVestingAccount` مرة واحدة بعد انتهاء جمع أموال الإطلاق؛ إذا نسيت، تبقى تلك الحصة غير مخصصة وخاملة إلى الأبد (ميزانية `total_locked_amount` الخاصة بالإطلاق يتم استهلاكها لكن المنصة لا تطالب أبداً).
+- **غموض `platform_cp_creator`.** عند التعيين إلى `Pubkey::default()`، يتم تسجيل منشئ الإطلاق كـ `pool_creator` لمجموعة CPMM بعد التخرج؛ عند التعيين إلى مفتاح حقيقي، يتم تسجيل هذا المفتاح بدلاً من ذلك. هذا يحدد المستفيد من رسوم منشئ CPMM بعد التخرج ومن يمكنه توقيع مسار `CPMM::CollectCreatorFee` الأصلي. مسار الجمع بدون إذن لا يزال يدفع ATAs الموثوقة للمفتاح المسجل. قرر في وقت إنشاء تكوين المنصة أي نموذج تريد.
+- **`transfer_fee_extension_auth` تعيين متأخر أو تدوير.** يتم قراءة الحقل مرتين لكل إطلاق Token-2022 — مرة عند إنشاء mint لـ `withdraw_withheld_authority`، مرة عند التخرج لـ `transfer_fee_config_authority` — لذا فإن قيمة تتغير بين هاتين اللحظتين تترك السلطتين على مفاتيح مختلفة. انظر [سلطات رسم نقل Token-2022](#token-2022-transfer-fee-authorities).
+- **تقييد بدون حساب سماح.** تفعيل `restrict_global_config` قبل إنشاء `PlatformAllowConfig` المطلوب يحجب عمليات الإطلاق الجديدة التي تختار هذا التكوين.
+
+## مؤشرات
+
+- [`products/launchlab/global-config`](/docs/i18n/ar/products/launchlab/global-config) — قواعس جانب البروتوكول يجب أن يفي بها الإطلاق.
+- [`products/launchlab/vesting`](/docs/i18n/ar/products/launchlab/vesting) — ميكانيكا `platform_vesting_scale`.
+- [`products/launchlab/creator-fees`](/docs/i18n/ar/products/launchlab/creator-fees) — رسوم المنشئ مقابل حقوق مفتاح الرسم للمنصة.
+- [`products/launchlab/platforms`](/docs/i18n/ar/products/launchlab/platforms) — دليل متكامل منصة.
+
+المصادر:
+
+- `raydium-launch/programs/launchpad/src/states/platform_config.rs` — `PlatformConfig`, `PlatformParams`, `MigrateNftInfo`, `is_curve_rule_manager`, `is_platform_admin`.
+- `raydium-launch/programs/launchpad/src/states/platform_curve_rule.rs` — `PlatformCurveRule`, `CurveRuleGroup`, `ParamConstraint`.
+- `raydium-launch/programs/launchpad/src/states/platform_allow_config.rs` — `PlatformAllowConfig`.
+- `raydium-launch/programs/launchpad/src/instructions/platform/update_platform_config.rs` — إرسال `PlatformConfigParam` والمعينات لكل حقل التي تفرض حدود معدل وقت التحديث.
+- `raydium-launch/programs/launchpad/src/lib.rs` — نقاط دخول تكوين المنصة والسماح بالتكوين.
+- `raydium-launch/programs/launchpad/src/instructions/initialize_with_token_2022.rs` — حيث يتم كتابة `transfer_fee_extension_auth` في `TransferFeeConfig` الخاص بـ mint الجديد.
+- `raydium-launch/programs/launchpad/src/instructions/admin/migrate_to_cpswap.rs` — تسليم السلطة في وقت التخرج وحارسها `get_withdraw_withheld_authority`.

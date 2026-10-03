@@ -1,0 +1,75 @@
+---
+title: "创建者费用如何运作"
+description: "LaunchLab 创建者费用在联合曲线和 CPMM 毕业后如何累积，与平台拥有的费用密钥分开。"
+---
+
+<Info>
+  **本页内容由 AI 自动翻译，所有内容以英文版本为准。**
+
+  [查看英文版 →](/docs/en/user-flows/how-creator-fees-work)
+</Info>
+
+<Info>
+  创建者费用有两个独立阶段。锁定 LP 费用密钥是第三种机制。在 2026-08-17 升级之前，创建者规模产生了创建者费用密钥。升级后执行的迁移将该份额分配给平台。
+</Info>
+
+<Warning>
+  费用设置取决于平台和 CPMM 配置。签署前验证链上值。本页仅说明机制，不构成财务、法律、税务或投资建议。
+</Warning>
+
+## 第一阶段：联合曲线创建者费用
+
+当你的代币在联合曲线上交易时，平台可以在买卖时收取创建者费用部分。
+
+- 以报价代币（通常是 SOL）累积。
+- 平台设置费率。
+- 你可以通过 LaunchLab 创建者费用领取流程领取。
+- 毕业停止新的联合曲线累积。任何现有余额仍可领取。
+
+## 第二阶段：CPMM 创建者费用
+
+每个新初始化的启动都会毕业到 CPMM。CPMM 创建者费用仅在选定的 `AmmConfig` 具有非零创建者费率时累积。
+
+默认情况下，启动创建者成为 CPMM 池创建者。平台可以改为设置 `platform_cp_creator`，在这种情况下该地址接收 CPMM 创建者费用权利。
+
+记录的 CPMM 创建者可以直接领取。另一个支付者也可以触发无权限收集，但 CPMM 将目的地固定为创建者的规范代币账户。
+
+## LP 代币发生了什么
+
+平台配置存储 `platformScale`、`creatorScale` 和 `burnScale`。在 2026-08-17 升级之前，`creatorScale` 创建了创建者拥有的费用密钥。对于升级后执行的迁移，LaunchLab 将其与 `platformScale` 合并：
+
+```text
+platform locked LP = platformScale + creatorScale
+burned LP          = burnScale
+```
+
+如果锁定份额非零，一个费用密钥 NFT 进入平台配置的 NFT 钱包。此 NFT 控制 LP 费用收获。它不控制 CPMM 创建者费用收集。升级前完成的迁移中的创建者费用密钥保留在其现有持有者手中。
+
+## 费用流摘要
+
+```text
+联合曲线
+  创建者费用 → 启动创建者金库
+
+毕业到 CPMM
+  升级前 → 平台费用密钥 + 创建者费用密钥 + 销毁份额
+  升级后 → 合并平台费用密钥份额 + 销毁份额
+
+CPMM 交易
+  创建者费用 → 记录的 CPMM 池创建者
+  LP 费用   → 锁定份额的平台费用密钥持有者
+```
+
+## 启动前
+
+- 检查联合曲线 `creator_fee_rate`。
+- 检查 `platform_cp_creator` 是否将你替换为 CPMM 创建者记录。
+- 对于升级后执行的迁移，不要将 `creatorScale` 视为承诺的创建者费用密钥分配。对于较早的迁移，验证现有费用密钥记录。
+- 检查 CPMM 配置的创建者费率和费用设置。
+
+## 指针
+
+- [LaunchLab 创建者费用](/docs/i18n/zh/products/launchlab/creator-fees) — 技术参考。
+- [LP 费用分配](/docs/i18n/zh/products/launchlab/tips-and-gotchas/lp-fee-distribution) — 有效规模计算。
+- [CPMM 费用](/docs/i18n/zh/products/cpmm/fees) — 毕业后费用计数器和收集。
+- [LaunchLab 平台](/docs/i18n/zh/user-flows/launchlab-platforms) — 要审查的平台设置。

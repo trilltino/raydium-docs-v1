@@ -1,0 +1,206 @@
+---
+title: "TypeScript SDK"
+description: "@raydium-io/raydium-sdk-v2 من البداية إلى النهاية — التثبيت، وواجهات الوحدات الأربع، وبناء المعاملات، والمشاكل الشائعة التي تواجه كل مدمج جديد."
+---
+
+<Info>
+  **هذه الصفحة مُترجَمة آليًا بواسطة الذكاء الاصطناعي. النسخة الإنجليزية هي المرجع المعتمد.**
+
+  [عرض النسخة الإنجليزية →](/docs/en/sdk-api/typescript-sdk)
+</Info>
+
+<Info>
+  **لافتة الإصدار.** توثق هذه الصفحة `@raydium-io/raydium-sdk-v2@0.2.64-alpha`، الإصدار المثبت في كل عينة كود على هذا الموقع. SDK في مرحلة ما قبل 1.0 وسطح النوع تطور عبر الإصدارات — ثبّت إصدارك.
+
+  تم تحديث الإصدار من `0.2.42-alpha` في 2026-09-09 جنباً إلى جنب مع ترقيات البرنامج: `0.2.64-alpha` هو الإصدار الحالي للـ SDK. مستودع [`raydium-sdk-V2-demo`](https://github.com/raydium-io/raydium-sdk-V2-demo) الذي تشير إليه صفحات عينات الكود يثبت `0.2.62-alpha`، لذا ثبّت أحدهما إذا كنت تتابع عينة حرفياً. تم **تنفيذ** العينات على هذه الصفحات آخر مرة مقابل `0.2.42-alpha` (2026-04)؛ تم إعادة فحص توقيعات استدعاءاتها مقابل مصدر `0.2.64-alpha` في 2026-09-09، لكن تعامل مع أي عدم تطابق كخطأ توثيق و[افتح مشكلة](https://github.com/raydium-io/raydium-docs-v1/issues/new).
+</Info>
+
+## التثبيت
+
+```bash
+npm install @raydium-io/raydium-sdk-v2 @solana/web3.js @solana/spl-token
+# أو
+pnpm add @raydium-io/raydium-sdk-v2 @solana/web3.js @solana/spl-token
+```
+
+SDK مكتوب بـ TypeScript ويشحن `.d.ts` جنباً إلى جنب مع أداة JS الخاصة به. الحد الأدنى لسلسلة الأدوات: Node 18+، TypeScript 5.0+، `moduleResolution: "bundler"` أو `"node16"`.
+
+## التهيئة
+
+نقطة الدخول هي `Raydium.load`:
+
+```ts
+import { Raydium } from "@raydium-io/raydium-sdk-v2";
+import { Connection, Keypair, clusterApiUrl } from "@solana/web3.js";
+
+const connection = new Connection(process.env.RPC_URL ?? clusterApiUrl("mainnet-beta"));
+const owner      = Keypair.fromSecretKey(/* ... */);
+
+const raydium = await Raydium.load({
+  owner,
+  connection,
+  cluster: "mainnet",           // "mainnet" | "devnet"
+  disableFeatureCheck: true,    // skip the SDK's startup feature-detect API call
+  blockhashCommitment: "confirmed",
+});
+```
+
+`Raydium.load` غير متزامن لأنه، افتراضيًا، يحمّل قائمة الرموز (`raydium.token.load()`) من `api-v3.raydium.io`. مرّر `disableLoadToken: true` لتخطي ذلك الجلب. أما فحص ميزة التوفر فهو استدعاء منفصل إلى `/v3/main/AvailabilityCheckAPI` وهو **متخطّى بالفعل** إلا إذا مرّرت صريحًا `disableFeatureCheck: false`. وتكوينات الرسوم لا تُجلب عند وقت التحميل على الإطلاق — بل تأتي بتأجيل من `raydium.api.getCpmmConfigs()` / `getClmmConfigs()` عند أول استخدام.
+
+## واجهات الوحدات
+
+بمجرد التحميل، يكشف كائن `raydium` عن عشر واجهات وحدات بالإضافة إلى عميل واجهة برمجية:
+
+```ts
+raydium.cpmm       // CPMM pools: createPool, addLiquidity, withdrawLiquidity, swap, ...
+raydium.clmm       // CLMM pools: createPool, openPositionFromBase, increasePositionFromBase,
+                   //             decreaseLiquidity, harvestAllRewards, swap, limit orders, ...
+raydium.liquidity  // AMM v4 pools: computeAmountOut, swap, addLiquidity, removeLiquidity, ...
+raydium.farm       // Farm v3/v5/v6: deposit, withdraw, harvestAllRewards, create,
+                   //                restartReward(s), addNewRewardToken(s)
+raydium.launchpad  // LaunchLab: createLaunchpad, buyToken, buyTokenExactOut, sellToken,
+                   //            claimCreatorFee, curve-rule and platform-config builders, ...
+raydium.tradeV2    // Multi-pool routing: route discovery, compute, route-execution
+raydium.marketV2   // OpenBook market creation (legacy)
+raydium.utils1216  // One-off historical-claim helpers
+raydium.token      // Token list + metadata: load(), getTokenInfo()
+raydium.account    // Wallet token accounts, ATA lookup and creation
+raydium.api        // The REST client (fetchPoolById, getCpmmConfigs, fetchLaunchConfigs, ...)
+```
+
+(نعم، خمس واجهات في المجموع — "أربع" هي الطريقة التي تجمع بها Raydium بينها علناً، مع `trade` و`token` كمرافق داعمة.)
+
+## منشئو المعاملات
+
+تعيد كل دالة طفرة منشئ بدلاً من التنفيذ الفوري:
+
+```ts
+import { Percent } from "@raydium-io/raydium-sdk-v2";
+
+const { execute, builder, transaction, instructionTypes, signers, extInfo } =
+  await raydium.cpmm.addLiquidity({
+    poolInfo,
+    inputAmount,              // BN — one side, not a pair
+    baseIn: true,
+    slippage: new Percent(1, 100),   // a Percent, not a number
+    txVersion: TxVersion.V0,
+  });
+```
+
+الحقول المُرجعة:
+
+- **`execute`** — دالة راحة توقّع + ترسل. معادل لـ `builder.execute`.
+- **`builder`** — مثيل `TxBuilder` مع جميع التعليمات والموقّعين المتراكمين. تُعيد `builder.build()` كائن `TxBuildData` تكون `transaction` فيه معاملة `Transaction` قديمة واحدة؛ وتُعيد `builder.buildV0()` كائن `TxV0BuildData` بمعاملة `VersionedTransaction` واحدة. ولا تنتج مصفوفة إلا `buildMultiTx` / `buildMultiTxV0`.
+- **`transaction`** — المعاملة المبنية `Transaction` / `VersionedTransaction`.
+- **`instructionTypes`** / **`signers`** — تسميات التعليمات المتراكمة ومجموعة الموقّعين.
+- **`extInfo`** — إضافات خاصة بالمنتج. على سبيل المثال، يعيد `cpmm.createPool` القيمة `extInfo.address.{poolId, lpMint, vaultA, vaultB}`؛ ويعيد `launchpad.createLaunchpad` القيمة `extInfo.address` (كائن `LaunchpadPoolInfo` بالإضافة إلى `poolId`).
+
+<Note>
+  لا يوجد حقل `innerTransactions` في نوع القيمة المعادة — وتفكيكه يُنتج خطأ TypeScript.
+  أما المنشئات التي نوع قيمتها المعادة هو `MakeMultiTxData` (مثل
+  `clmm.harvestAllRewards` و `farm.harvestAllRewards` و `tradeV2.swap` و
+  `launchpad.createLaunchpad`) فتكشف عن `transactions` بدلاً منه، و `execute` فيها **يتطلب**
+  `{ sequentially: boolean }` ويُحل إلى `{ txIds }` وليس `{ txId }`.
+</Note>
+
+`txVersion` يتحكم في تنسيق المعاملة القديم مقابل V0. V0 (جداول البحث عن العناوين) هو التوصية الافتراضية — يسمح بمبادلات أكبر بأن تناسب معاملة واحدة.
+
+### لماذا منشئو غير متزامنين؟
+
+يجلب كل منشئ تقريباً حالة على السلسلة: معلومات المجموعة (للاقتباسات)، ملكية برنامج الرمز (لـ Token-2022 مقابل توجيه SPL)، إعفاء الحساب من الإيجار (لإنشاء ATA)، إلخ. يخزن SDK بقوة لكن الاستدعاء الأول لمجموعة جديدة ينطوي على رحلات RPC. احتفظ بمثيل `raydium` طويل الأجل لتجنب إعادة الجلب.
+
+## إضافات وحدة CLMM (الإصدار الأخير)
+
+اكتسبت واجهة CLMM أسطح للميزات الجديدة للرسوم الديناميكية والرسوم أحادية الجانب وأوامر الحد:
+
+- **`raydium.clmm.createCustomizablePool`** — مجموعة شاملة من `createPool` تقبل `collectFeeOn` و `dynamicFeeConfig` (وهو `PublicKey` حساب التكوين). وتمرير `dynamicFeeConfig` هو ما يُمكّن الرسوم الديناميكية؛ فلا يوجد علم منفصل `enableDynamicFee` ولا `dynamicFeeConfigId`. ويستمر `createPool` الكلاسيكي في العمل لمجمعات الرسوم الافتراضية.
+- **`raydium.clmm.openLimitOrder`** — فتح أمر حد أحادي التكة. يأخذ `poolInfo` و `baseIn` (الاتجاه) و `orderTick` و `amount`، واختياريًا `tickArrayBitmap` و `noneIndex` و `ownerInfo`. استخدم المساعد المُصدَّر `getOrderTick({ baseIn, mintADecimal, mintBDecimal, tickSpacing, price })` لتكميم التكة.
+- **`raydium.clmm.increaseLimitOrder` / `decreaseLimitOrder`** — اضبط الجزء غير المملوء من أمر موجود. وكلاهما يأخذ `{ poolInfo, limitOrder, amount }`؛ ويضيف `decreaseLimitOrder` معامل `slippage` اختياريًا. والتقليل يعود بخطأ `InvalidOrderPhase` على أمر مملوء بالكامل.
+- **`raydium.clmm.settleLimitOrder` / `settleAllLimitOrder`** — كسح المخرج المملوء إلى ATA المالك. و `settleLimitOrder` تأخذ `{ limitOrder }` فقط — بلا `poolInfo`. ويمكن أن يستدعيها إما مالك الأمر أو حافظ البرنامج `limit_order_admin`.
+- **`raydium.clmm.closeLimitOrder` / `closeAllLimitOrder`** — أغلق الأوامر المسوّاة بالكامل لاسترجاع الإيجار.
+- **`raydium.api.getClmmDynamicConfigs()`** — مساعد REST يضرب نقطة النهاية الجديدة `/main/clmm-dynamic-config`. (ولا يوجد مساعد أو نقطة نهاية لتكوين أوامر الحد: فأوامر الحد مفتاحها التكة، لا حساب تكوين لكل مجمع.)
+
+ولا تعلن الحزمة أي صادرات مسار فرعي، لذا فإن `@raydium-io/raydium-sdk-v2/<anything>` لا يُحل بأي هجاء — استورد كل شيء من المدخل العلوي للحزمة. (وداخليًا، أُعيدت تسمية `src/raydium/clmm/utils/` إلى `src/raydium/clmm/libraries/`، لكنها لم تكن قط نقطة دخول عامة.)
+
+تعيش الإرشادات الشاملة لـ TypeScript في [`products/clmm/code-demos`](/docs/i18n/ar/products/clmm/code-demos).
+
+## المشاكل الشائعة
+
+### 1. عدم تطابق الكتلة
+
+تكوين بدء SDK خاص بالكتلة. خلط `cluster: "mainnet"` مع اتصال devnet يسبب توجيهاً خاطئاً صامتاً: يقتبس SDK مقابل mainnet `AmmConfig` لكن يرسل إلى devnet. مرر دائماً كليهما.
+
+### 2. نسيان إنشاء ATAs مسبقاً
+
+عند التفاعل الأول مع رمز، قد لا يكون حساب الرمز المرتبط للمستخدم موجوداً. يضيف SDK تعليمة `AssociatedTokenAccount::create` تلقائياً عندما يكتشف ATA مفقود، مما يكلف مبلغاً صغيراً من الإيجار. إذا كانت محفظتك منخفضة على SOL فسيفشل بصمت. تحقق وموّل قبل إعادة المحاولة.
+
+### 3. `poolInfo` قديم
+
+`poolInfo` لقطة مخزنة مؤقتاً. إذا تغيرت حالة المجموعة منذ جلبتها (تحرك تجارة كبيرة السعر، مثلاً)، قد يتم حساب `minAmountOut` للمبادلة مقابل الحالة القديمة وتهبط أقل من مبلغ الإخراج على السلسلة، مما يؤدي إلى الانعكاس. أعد جلب `poolInfo` مباشرة قبل بناء معاملات عالية القيمة، أو استخدم `computeAmountOut` للـ SDK الذي يعيد الاستعلام عن الاحتياطيات.
+
+### 4. رسوم الأولوية
+
+لا يضيف SDK أسعار وحدات الحساب بشكل افتراضي. في نوافذ الحجم العالي (إطلاقات المجموعات الجديدة، أحداث العملات الفكاهية) هذا يعني أن معاملتك تتنافس مع العديد من الآخرين وقد لا تهبط. وفّر `computeBudgetConfig` صريح:
+
+```ts
+const { execute } = await raydium.cpmm.swap({
+  poolInfo,
+  baseIn,                    // required: which side inputAmount is denominated in
+  inputAmount: new BN(...),
+  swapResult: ...,           // required: from CurveCalculator.swapBaseInput/Output
+  slippage: 0.005,
+  txVersion: TxVersion.V0,
+  computeBudgetConfig: {
+    units: 250_000,          // CU limit
+    microLamports: 50_000,   // priority fee per CU
+  },
+});
+```
+
+انظر [`integration-guides/priority-fee-tuning`](/docs/i18n/ar/integration-guides/priority-fee-tuning) لإرشادات التحجيم.
+
+### 5. تحمل الانزلاق يجب أن يطابق نوع المجموعة
+
+CPMM و AMM v4 هما رياضيات CPMM (تأثير منخفض على التجارات العادية). CLMM متقطع (التأثير يقفز عند عبور التجزئات). إذا نسخت تحمل انزلاق 0.5٪ من مثال CPMM إلى مبادلة CLMM التي تعبر عدة تجزئات، فمن المحتمل أن تنعكس المعاملة. يعيد `computeAmountOut` للـ SDK `priceImpact`؛ حجّم تحملك فوقه.
+
+### 6. `BN` مقابل `number`
+
+جميع حقول المبلغ في SDK هي مثيلات `bn.js` `BN` — لا تكن أبداً JavaScript `number`. تحويل قيم المبلغ عبر `.toNumber()` يقطع بصمت في `2^53`؛ لأي قيمة فوق ~9 كوادريليون (ليس نادراً على رموز 9-عشرية)، هذا ينتج النتيجة الخاطئة. احتفظ بكل شيء في `BN` حتى عرض واجهة المستخدم النهائي.
+
+## سياسة الإصدار
+
+- `@raydium-io/raydium-sdk-v2` هو SDK الوحيد الذي تحتفظ به Raydium. جميع الوثائق والعينات والإرشادات التكاملية تستهدفه.
+- توجد حزمة v1 أقدم (`@raydium-io/raydium-sdk`) على npm لأسباب تاريخية. انتهت الصيانة بعد شحن CPMM و LaunchLab (لم تكتسب v1 أبداً دعماً لأي منهما)، ولم تكن هناك إصدارات v1 منذ 2024. تعامل مع v1 كنهاية الحياة: لا تستخدمه لكود جديد، وهاجر أي تكاملات v1 متبقية إلى v2.
+- SDK v2 في مرحلة ما قبل 1.0. التغييرات الكسرية بين إصدارات 0.x الثانوية ممكنة؛ ثبّت الإصدار الذي تحققت منه وتحقق من ملاحظات إصدار GitHub عند الترقية.
+
+## الترقية
+
+عند الترقية بين إصدارات SDK الثانوية:
+
+1. أعد فحص نوع الإرجاع لكل استدعاء طفرة — تغييرات الشكل (مثل `extInfo`) تهبط بشكل متكرر.
+2. أعد إنشاء توقيعات جلب `poolInfo` — قد يكون حقل قد أعيدت تسميته.
+3. أعد التحقق من معالجة الانزلاق الخاصة بك؛ تحول SDK بين السلوكيات المرتبطة تلقائياً والمرتبطة بالاختيار عبر الإصدارات.
+4. إذا كنت تستخدم `raydium.tradeV2` (التوجيه)، أعد التحقق من شكل المسار — إنه الجزء الأكثر عدم استقراراً من السطح. ولاحظ أن الواجهة أُعيدت تسميتها من `trade` إلى `tradeV2`؛ والاسم القديم لم يعد موجودًا.
+
+## الحصول على المساعدة
+
+لأسئلة SDK و API:
+
+- **مشاكل GitHub** — قدّم في [github.com/raydium-io/raydium-sdk-V2/issues](https://github.com/raydium-io/raydium-sdk-V2/issues) للأخطاء والطلبات الميزة. يراقب فريق Raydium بنشاط.
+- **Discord** — قناة `#dev-support` في [discord.gg/raydium](https://discord.gg/raydium) للمساعدة المتزامنة.
+- **Telegram** — دردشة المطورين المرتبطة من [raydium.io](https://raydium.io) (تجنب مجموعات Telegram غير المتحققة).
+
+لمشاكل الأمان، **لا** تنشر في القنوات العامة — انظر [`security/disclosure`](/docs/i18n/ar/security/disclosure).
+
+## مؤشرات
+
+- [`sdk-api/rest-api`](/docs/i18n/ar/sdk-api/rest-api) — المكمل HTTP للـ SDK.
+- [`sdk-api/trade-api`](/docs/i18n/ar/sdk-api/trade-api) — معاملات المبادلة المدمجة من الخادم.
+- [`sdk-api/anchor-idl`](/docs/i18n/ar/sdk-api/anchor-idl) — إعادة إنشاء العملاء مباشرة من IDLs البرنامج.
+- [`sdk-api/python-integration`](/docs/i18n/ar/sdk-api/python-integration) — المكافئ Python عبر `solana-py`.
+- [`integration-guides/priority-fee-tuning`](/docs/i18n/ar/integration-guides/priority-fee-tuning) — تحجيم `computeBudgetConfig`.
+
+المصادر:
+
+- [مصدر Raydium SDK v2](https://github.com/raydium-io/raydium-sdk-V2)
+- ملاحظات إصدار Raydium SDK.

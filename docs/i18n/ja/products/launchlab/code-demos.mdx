@@ -1,0 +1,375 @@
+---
+title: "LaunchLab コード デモ"
+description: "エンドツーエンドの TypeScript：LaunchLab ローンチを作成し、ボンディング カーブで売買し、CPMM プールに卒業し、クリエイター フィーを回収します。"
+---
+
+<Info>
+  **このページは AI による自動翻訳です。すべての内容は英語版を正とします。**
+
+  [英語版を表示 →](/docs/en/products/launchlab/code-demos)
+</Info>
+
+<Info>
+  **バージョン情報**
+
+  - SDK: `@raydium-io/raydium-sdk-v2@0.2.64-alpha`
+  - クラスタ: Solana `mainnet-beta`
+  - プログラム ID: [`reference/program-addresses`](/docs/i18n/ja/reference/program-addresses) を参照
+  - 最終確認: **2026-09-09** SDK `0.2.64-alpha` ソース、[`raydium-sdk-V2-demo/src/launchpad`](https://github.com/raydium-io/raydium-sdk-V2-demo/tree/master/src/launchpad)、および `raydium-launch` プログラム ソースに対して
+
+  `package.json` で SDK バージョンをピン留めしてください。ボンディング カーブ インターフェースはマイナー リリース間で進化しています。
+</Info>
+
+## セットアップ
+
+ここのデモは [`raydium-sdk-V2-demo/src/launchpad`](https://github.com/raydium-io/raydium-sdk-V2-demo/tree/master/src/launchpad) のファイルを反映しています。ブートストラップはデモ リポジトリの [`config.ts.template`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/config.ts.template) に従います：
+
+```ts
+import { Connection, Keypair, clusterApiUrl, PublicKey } from "@solana/web3.js";
+import { Raydium, TxVersion } from "@raydium-io/raydium-sdk-v2";
+import BN from "bn.js";
+import fs from "node:fs";
+
+const connection = new Connection(process.env.RPC_URL ?? clusterApiUrl("mainnet-beta"));
+const owner = Keypair.fromSecretKey(
+  new Uint8Array(JSON.parse(fs.readFileSync(process.env.KEYPAIR!, "utf8"))),
+);
+const raydium = await Raydium.load({
+  owner,
+  connection,
+  cluster: "mainnet",
+  disableFeatureCheck: true,
+  blockhashCommitment: "finalized",
+});
+export const txVersion = TxVersion.V0;
+```
+
+## ローンチを作成する
+
+ソース: [`src/launchpad/createMint.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/createMint.ts)（および Bonk バリアント用の [`createBonkMintApi.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/createBonkMintApi.ts)）
+
+ローンチの経済学のほとんどは引数ではなく、`configId` を通じてバインドする `GlobalConfig` から取得され、SDK は残りを API のデフォルト パラメータから入力します。ミントの ID、バインドするコンフィグ、および（オプション）最初の購入を渡します：
+
+```ts
+import {
+  LAUNCHPAD_PROGRAM,
+  DEVNET_PROGRAM_ID,
+  LaunchpadConfig,
+  getPdaLaunchpadConfigId,
+} from "@raydium-io/raydium-sdk-v2";
+import { Keypair, PublicKey } from "@solana/web3.js";
+import { NATIVE_MINT } from "@solana/spl-token";
+
+const programId = LAUNCHPAD_PROGRAM;          // devnet: DEVNET_PROGRAM_ID.LAUNCHPAD_PROGRAM
+
+// ベース ミントは生成して署名するキーペアです。
+const pair  = Keypair.generate();
+const mintA = pair.publicKey;
+
+// GlobalConfig をバインドします：(クォート ミント、curve_type、インデックス)。
+const configId = getPdaLaunchpadConfigId(programId, NATIVE_MINT, 0, 0).publicKey;
+const configData = await raydium.connection.getAccountInfo(configId);
+if (!configData) throw new Error("config not found");
+const configInfo = LaunchpadConfig.decode(configData.data);
+const mintBInfo = await raydium.token.getTokenInfo(configInfo.mintB);
+
+const { execute, transactions, extInfo } = await raydium.launchpad.createLaunchpad({
+  programId,
+  mintA,
+  decimals: 6,
+  name:   "Example Token",
+  symbol: "EXMPL",                 // 10 文字以下である必要があります
+  uri:    "https://example.com/metadata.json",   // 空でない必要があります
+  migrateType: "amm",              // "amm" | "cpmm"
+
+  configId,
+  configInfo,                      // オプション；SDK は省略時に configId を再読み込みします
+  mintBDecimals: mintBInfo.decimals,
+  mintBProgram:  new PublicKey(mintBInfo.programId),
+
+  // オプション：同じバンドル内での最初の購入。
+  createOnly: true,                // true = ミントのみを作成
+  buyAmount:  new BN(1000),        // createOnly が true の場合は無視されます
+  slippage:   new BN(100),         // 100 = 1%
+
+  extraSigners: [pair],            // ベース ミント キーペアが署名する必要があります
+  txVersion: TxVersion.V0,
+
+  // デフォルトはバインドされたコンフィグの API デフォルトから取得されます；必要な場合のみオーバーライドしてください：
+  // supply:            new BN(1_000_000_000_000_000),
+  // totalSellA:        new BN(793_100_000_000_000),
+  // totalFundRaisingB: new BN(85_000_000_000),   // mintB が SOL の場合は 85 SOL
+  // totalLockedAmount: new BN(0),
+  // cliffPeriod:       new BN(0),                // 秒
+  // unlockPeriod:      new BN(0),                // 秒
+  // platformId:        new PublicKey("4Bu96XjU84XjPDSpveTVf6LYGCkfW5FK7SNkREWcEfV4"), // Raydium のデフォルト
+});
+
+// createLaunchpad は複数のトランザクションを返します - 順番に実行してください。
+const { txIds } = await execute({ sequentially: true });
+console.log("Pool:", extInfo.address.poolId.toBase58());
+console.log("Base mint:", mintA.toBase58());
+console.log("Create txs:", txIds);
+```
+
+注：
+
+- `curveType`、`graduationFractionBps`、`initialK`、`quoteMint`、`openTime`、`fees`、または `postGraduationLpPolicy` 引数はありません。カーブ形状とクォート ミントはバインドする `GlobalConfig` のプロパティです；フィー レートは `GlobalConfig` と `PlatformConfig` に存在します；卒業時の LP 処分は `PlatformConfig` 設定です。`InitializeV2` が受け入れるものについては、[`products/launchlab/instructions`](/docs/i18n/ja/products/launchlab/instructions#initialize) を参照してください。
+- 10 文字を超える `symbol` と空の `uri` は、RPC の前にクライアント側で拒否されます。
+- `transferFeeExtensionParams` を渡すと、ビルダーが `InitializeWithToken2022` に切り替わり、`migrateType` が `"cpmm"` に強制されます。
+- ビルダーは `transactions` 配列を返します；`createOnly: false` は最初の購入トランザクションを追加します。常に `execute({ sequentially: true })` を実行してください — ミントは購入が実行される前に存在する必要があります。
+
+## ローンチ状態を取得する
+
+ソース: [`src/launchpad/poolInfo.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/poolInfo.ts)
+
+`getLaunchById` はありません。プール ID は `(programId, mintA, mintB)` の PDA であり、`getRpcPoolInfo` はバインドされた `configInfo` が付加された デコード済みの `PoolState` を返します：
+
+```ts
+import { getPdaLaunchpadPoolId, Curve } from "@raydium-io/raydium-sdk-v2";
+
+const poolId = getPdaLaunchpadPoolId(programId, mintA, NATIVE_MINT).publicKey;
+const poolInfo = await raydium.launchpad.getRpcPoolInfo({ poolId });
+
+console.log("status:", poolInfo.status);
+console.log("base sold:", poolInfo.realA.toString(), "/", poolInfo.totalSellA.toString());
+console.log("quote raised:", poolInfo.realB.toString(), "/", poolInfo.totalFundRaisingB.toString());
+
+// カーブ上の現在のスポット価格。
+const price = Curve.getPrice({
+  poolInfo,
+  curveType: poolInfo.configInfo.curveType,
+  decimalA: poolInfo.mintDecimalsA,
+  decimalB: poolInfo.mintDecimalsB,
+});
+console.log("price:", price.toString());
+```
+
+`getRpcPoolsInfo({ poolIdList })` はバッチ形式で、プール ID でキーされた `poolInfoMap` を返します — ループの代わりにポートフォリオ ビューに使用してください。生のアカウントを自分でデコードしたい場合、`LaunchpadPool.decode` と `LaunchpadConfig.decode` がエクスポートされています。
+
+## 購入 — 正確なクォート入力
+
+ソース: [`src/launchpad/buy.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/buy.ts)
+
+オフチェーン クォート ヘルパーは **`Curve.buyExactIn`** です。これはエクスポートされた `Curve` クラスの静的メソッドであり、`raydium.launchpad` のメソッドではありません。トランザクション ビルダーは **`buyToken`** です。どちらもプラットフォームのフィー レートが必要です。これは別の `PlatformConfig` アカウントに存在します：
+
+```ts
+import { Curve, PlatformConfig, toTransferFeeConfig } from "@raydium-io/raydium-sdk-v2";
+
+const inAmount = new BN(1).mul(new BN(10).pow(new BN(9)));   // 1 SOL
+const slippage = new BN(100);                                 // 100 = 1%
+
+const poolInfo = await raydium.launchpad.getRpcPoolInfo({ poolId });
+const platformData = await raydium.connection.getAccountInfo(poolInfo.platformId);
+const platformInfo = PlatformConfig.decode(platformData!.data);
+
+const mintInfo  = await raydium.token.getTokenInfo(mintA);
+const mintBInfo = await raydium.token.getTokenInfo(poolInfo.mintB);
+const epochInfo = await raydium.connection.getEpochInfo();
+
+// オフチェーン プレビュー — オンチェーン カーブ数学を反映します。
+const res = Curve.buyExactIn({
+  poolInfo,
+  amountB: inAmount,
+  protocolFeeRate: poolInfo.configInfo.tradeFeeRate,
+  platformFeeRate: platformInfo.feeRate,
+  creatorFeeRate:  platformInfo.creatorFeeRate,
+  curveType:       poolInfo.configInfo.curveType,
+  shareFeeRate:    new BN(0),
+  transferFeeConfigA: mintInfo.extensions.feeConfig  ? toTransferFeeConfig(mintInfo,  epochInfo.epoch) : undefined,
+  transferFeeConfigB: mintBInfo.extensions.feeConfig ? toTransferFeeConfig(mintBInfo, epochInfo.epoch) : undefined,
+  slot: await raydium.connection.getSlot(),
+});
+console.log("expected out:", res.amountA.amount.sub(res.amountA.fee ?? new BN(0)).toString());
+
+const { execute, extInfo } = await raydium.launchpad.buyToken({
+  programId,
+  mintA,
+  mintAProgram: new PublicKey(mintInfo.programId),
+  mintB:        poolInfo.mintB,
+  mintBProgram: new PublicKey(mintBInfo.programId),
+  transferFeeConfigB: toTransferFeeConfig(mintBInfo, epochInfo.epoch),
+  poolInfo,
+  configInfo:      poolInfo.configInfo,
+  platformFeeRate: platformInfo.feeRate,
+  buyAmount:       inAmount,
+  slippage,                       // BN in bps; SDK はこれから minMintAAmount を導出します
+  txVersion: TxVersion.V0,
+});
+
+console.log("expected receive amount:", extInfo.decimalOutAmount.toString());
+const { txId } = await execute({ sendAndConfirm: true });
+console.log("Buy tx:", txId);
+```
+
+`minMintAAmount` を明示的に渡すか、`slippage` の代わりに渡すことができます；両方を省略すると、SDK はライブ RPC データから境界を計算します。`shareFeeRate` は `poolInfo.configInfo.maxShareFeeRate` を超えてはいけません。また、`shareFeeReceiver` も渡す場合にのみ適用されます。
+
+## 購入 — 正確なベース出力
+
+ビルダーは **`buyTokenExactOut`** で、金額引数は `outAmount`（希望するベース）と `maxBuyAmount`（最大で使用するクォート）です。`Curve.buyExactOut({ poolInfo, amountA, ... })` は対応するオフチェーン プレビューです。
+
+```ts
+const { execute, extInfo } = await raydium.launchpad.buyTokenExactOut({
+  programId,
+  mintA,
+  mintAProgram: new PublicKey(mintInfo.programId),
+  mintB:        poolInfo.mintB,
+  mintBProgram: new PublicKey(mintBInfo.programId),
+  poolInfo,
+  configInfo:      poolInfo.configInfo,
+  platformFeeRate: platformInfo.feeRate,
+
+  outAmount:    new BN(1_000_000).mul(new BN(10).pow(new BN(6))),  // 1M ベース
+  maxBuyAmount: new BN(2).mul(new BN(10).pow(new BN(9))),          // 2 SOL でキャップ
+  slippage:     new BN(100),
+
+  txVersion: TxVersion.V0,
+});
+
+console.log("out:", extInfo.outAmount.toString(), "max spent:", extInfo.maxSpentAmount.toString());
+await execute({ sendAndConfirm: true });
+```
+
+「正確に X トークンを購入」UI に便利です。ビルダーはゼロの `outAmount` をクライアント側で拒否し、カーブが十分に移動してクォート要件が `maxBuyAmount` を超える場合、プログラムは戻ります。
+
+## 売却
+
+ソース: [`src/launchpad/sell.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/sell.ts)
+
+ビルダーは **`sellToken`**（正確なクォート出力バリアント用の `sellTokenExactOut`）で、`sellAmount` とオプションの `minAmountB` があります。`Curve.sellExactIn({ poolInfo, amountA, ... })` はそれをプレビューします。
+
+```ts
+const inAmount = new BN(500_000).mul(new BN(10).pow(new BN(6)));  // 0.5M ベース
+
+const res = Curve.sellExactIn({
+  poolInfo,
+  amountA: inAmount,
+  protocolFeeRate: poolInfo.configInfo.tradeFeeRate,
+  platformFeeRate: platformInfo.feeRate,
+  creatorFeeRate:  platformInfo.creatorFeeRate,
+  curveType:       poolInfo.configInfo.curveType,
+  shareFeeRate:    new BN(0),
+  transferFeeConfigA: mintInfo.extensions.feeConfig  ? toTransferFeeConfig(mintInfo,  epochInfo.epoch) : undefined,
+  transferFeeConfigB: mintBInfo.extensions.feeConfig ? toTransferFeeConfig(mintBInfo, epochInfo.epoch) : undefined,
+  slot: await raydium.connection.getSlot(),
+});
+console.log("expected quote out:", res.amountB.toString());
+
+const { execute } = await raydium.launchpad.sellToken({
+  programId,
+  mintA,
+  mintAProgram: new PublicKey(mintInfo.programId),
+  mintB:        poolInfo.mintB,
+  mintBProgram: new PublicKey(mintBInfo.programId),
+  poolInfo,
+  configInfo:      poolInfo.configInfo,
+  platformFeeRate: platformInfo.feeRate,
+  sellAmount:      inAmount,
+  slippage:        new BN(100),
+  txVersion: TxVersion.V0,
+});
+
+await execute({ sendAndConfirm: true });
+```
+
+カーブの売却パスは購入パスに対称です：`real_a` を `sellAmount` だけ減らすと、`real_a − sellAmount` と `real_a` の間のカーブの下の統合領域に等しい `quote_out` が返されます。売却フィーを差し引きます。`sellAmount` はゼロより大きい必要があります — ビルダーはゼロを RPC の前に拒否します。
+
+## 卒業
+
+<Warning>
+  **卒業は統合者がトリガーできるものではありません。** `raydium.launchpad.graduate` はなく、購入ビルダーに `autoGraduate` フラグはなく、戻り値に `willGraduate` フィールドもありません。オンチェーンでは、卒業は `MigrateToCpswap`（またはレガシー `MigrateToAmm`）であり、両方の命令は署名者をバインディング `GlobalConfig` に記録されたウォレットに制限します — `migrate_to_cpswap_wallet` と `migrate_to_amm_wallet` それぞれ。他の署名者からの呼び出しは `InvalidOwner` で失敗します。これはパーミッションレスではなく、MEV ボットがそれをレースすることはできません。
+</Warning>
+
+これらのウォレットは Raydium の卒業クランクによって操作されるため、実際には移行は最終購入がしきい値を超えた後、誰がそれを行ったかに関わらず数秒以内に実行されます。統合者の側からできることは唯一、ステータス遷移を高速イベントとして扱うことです：`getRpcPoolInfo` をポーリング（または以下の gRPC でサブスクライブ）し、`status` が変わったときに UI をカーブから結果の CPMM プールに切り替えます。
+
+アカウント リスト、移行フィー、および卒業時の LP 分割については、[`products/launchlab/instructions`](/docs/i18n/ja/products/launchlab/instructions#migratetoamm-/-migratetocpswap) を参照してください。
+
+## クリエイター フィーを回収する
+
+ソース: [`src/launchpad/claimCreatorFee.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/claimCreatorFee.ts)（単一ミント）および [`collectAllCreatorFees.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/collectAllCreatorFees.ts)（バッチ）
+
+メソッドは **`claimCreatorFee`**（バッチ形式用の `claimMultipleCreatorFee`）です。これはローンチではなく **クォート ミント** でキーされます — 1 回の呼び出しで、署名者が蓄積したクリエイター フィーをそのミント全体でスイープします：
+
+```ts
+import { NATIVE_MINT } from "@solana/spl-token";
+
+const { execute } = await raydium.launchpad.claimCreatorFee({
+  programId,
+  mintB: NATIVE_MINT,          // クレームするクォート ミント
+  // mintBProgram: TOKEN_PROGRAM_ID,   // または TOKEN_2022_PROGRAM_ID
+  txVersion: TxVersion.V0,
+});
+
+await execute({ sendAndConfirm: true });
+```
+
+蓄積されたクリエイター フィー カウンターをクリエイターの ATA にクォート ミント上に転送します。卒業前後で呼び出し可能です；巨大な残高が蓄積されるのを待つのではなく、定期的に使用してください。プラットフォーム オペレーターは並列の `claimPlatformFee` / `claimAllPlatformFee` / `claimVaultPlatformFee` ビルダーを持っています。
+
+## ローンチをそのライフサイクルを通じて追跡する
+
+まとめると、監視スクリプトは次のようになります：
+
+```ts
+async function watch(poolId: PublicKey) {
+  const startStatus = (await raydium.launchpad.getRpcPoolInfo({ poolId })).status;
+
+  while (true) {
+    const p = await raydium.launchpad.getRpcPoolInfo({ poolId });
+    const progress = Number(p.realB.toString()) / Number(p.totalFundRaisingB.toString());
+
+    console.log(`status=${p.status}`, `progress=${(progress * 100).toFixed(2)}%`);
+
+    if (p.status !== startStatus) {
+      console.log("status changed - the launch has migrated; switch to the pool page");
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 10_000));
+  }
+}
+```
+
+10 秒のタイマーで `getRpcPoolInfo` をポーリングすることは単一のローンチに対して問題ありません。インデクサーの場合、代わりに以下の gRPC サブスクリプションを使用してください — `getRpcPoolsInfo({ poolIdList })` はバッチ処理されますが、数百のプールをポーリングすることは利益なしで RPC クレジットを消費します。
+
+## gRPC 経由でコンフィグとプールを監視する
+
+ソース: [`src/grpc/launchpadPoolInfo.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/grpc/launchpadPoolInfo.ts)
+
+Yellowstone gRPC 経由で LaunchLab プログラムにサブスクライブし、各ミントのトークン プログラムを使用して、すべての `GlobalConfig` と `PoolState` 更新をログします。1 つの `accounts` サブスクリプション上の 2 つの `datasize` フィルターが 2 つのアカウント タイプを分離するため、単一のストリームが両方をカバーします。
+
+デモは、[Token-2022 クォート ミント リリース](/docs/i18n/ja/reference/changelog/2026-08-24-launchlab-token2022-quote-mint)が必要にする、ローンチのミントを分類するための最短の正しいリファレンスです：
+
+- **プール** は `PoolState.token_program_flag` から直接分類され、ミント フェッチなしで bit0 をベース ミント用に、bit1 をクォート ミント用にデコードします。バイト全体を `0` に対してテストすることは、クォート ミントが Token-2022 である場合、レガシー ベース ミントを Token-2022 として誤読します。
+- **コンフィグ** はそのようにして分類することはできません：`GlobalConfig` はそのクォート ミントのアドレスを格納し、プログラム フラグはないため、デモはミント アカウントの所有者を一度読み込み、ミントごとにキャッシュします。
+
+また、2 つを相互にクロスチェックします。これは独自のインデクサーに保つのに便利なアサーションです。`create` 対 `update` はデモ独自のキャッシュから推測されます。スタートアップ時に `getProgramAccounts` から シードされます；そのシードが無効化されている場合、「作成」を「このストリームで最初に見られた」と読んでください。
+
+gRPC アクセスはパブリック RPC サーフェスの一部ではありません — デモ リポジトリの [`src/grpc/README.md`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/grpc/README.md) を参照してください。
+
+## Rust CPI
+
+独自の Anchor プログラムから LaunchLab を呼び出すことはまれです（ほとんどのローンチ統合は TS 側のみです）。実行する場合：
+
+- クレートは **`raydium-launchpad`**（lib 名 `raydium_launchpad`）、バージョン `0.2.0` で、`cpi` フィーチャーを公開しています。**`raydium_launchlab` はありません。**
+- **crates.io に公開されていません** — 他の Raydium プログラム クレートと同じ方法で git リビジョンで依存してください。
+- CPI エントリ ポイントは SDK の TypeScript メソッドではなく、オンチェーン命令にちなんで名付けられています：`buy_exact_in`、`buy_exact_out`、`sell_exact_in`、`sell_exact_out`、`claim_creator_fee`、`create_vesting_account`、`claim_vested_token`。`migrate_to_amm` / `migrate_to_cpswap` は署名者ゲートされて `GlobalConfig` 移行ウォレットに対して行われ、統合者プログラムから呼び出し可能ではありません。
+
+クレート ピン留めルールについては [`sdk-api/rust-cpi`](/docs/i18n/ja/sdk-api/rust-cpi) を参照してください — 特に Anchor バージョン分割。これは 1 つのクレートが LaunchLab と CLMM の両方に CPI できるかどうかを決定します。
+
+## 落とし穴
+
+- **オンチェーン命令名と SDK メソッド名を混同する。** プログラムは `buy_exact_in` / `sell_exact_in` を持っています；SDK は `buyToken` / `sellToken` を持っています。`buyExactIn` と `sellExactIn` は **`Curve` 上の静的メソッド** としてのみ存在し、クォートを計算します — トランザクションをビルドしません。
+- **`extraSigners` を忘れる。** `createLaunchpad` は生成するキーペアからベース ミントを作成するため、そのキーペアが署名する必要があります。`extraSigners: [pair]` を省略するとトランザクションは署名検証に失敗します。
+- **クォート ミントを選択しない。** 1 つを渡しません。クォート ミントは `configId` を通じてバインドする `GlobalConfig` のプロパティです — `getPdaLaunchpadConfigId(programId, quoteMint, curveType, index)`。異なるクォート ミントに対してローンチするには、異なるコンフィグをバインドしてください；`raydium.api.fetchLaunchConfigs()` はデフォルト パラメータを使用して利用可能なものをリストします。
+- **メタデータ サイズ。** 長い `uri` 文字列は Metaplex CPI を予算を超えてプッシュします。`uri` を約 200 文字未満に保ってください — ほとんどの CDN ホスト JSON メタデータは簡単に適合します。`symbol` は 10 文字にハード キャップされています。
+- **卒業をあなたが入ることができるレースとして扱う。** そうではありません — 上記の警告を参照してください。UI はまだ `status` 遷移を高速イベントとして扱うべきです。Raydium のクランクはしきい値が超えられた後数秒以内に移行を実行するためです。
+
+## 次に進む場所
+
+- [`products/launchlab/bonding-curve`](/docs/i18n/ja/products/launchlab/bonding-curve) — カーブ数学。
+- [`products/cpmm/code-demos`](/docs/i18n/ja/products/cpmm/code-demos) — 結果のプールで何をするか。
+- [`user-flows/launch-token-launchlab`](/docs/i18n/ja/user-flows/launch-token-launchlab) — オフチェーン ステップを含む、エンドツーエンドのトークン ローンチ ガイド。
+
+ソース：
+
+- [Raydium SDK v2](https://github.com/raydium-io/raydium-sdk-V2)
+- Raydium LaunchLab プログラム ソース

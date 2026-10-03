@@ -1,0 +1,290 @@
+---
+title: "程序和 Anchor"
+description: "Solana 程序如何部署和升级、Anchor 框架在原生 Solana 基础上增加了什么功能，以及如何读取 Raydium 的 IDL 来生成你自己的客户端。"
+---
+
+<Info>
+  **本页内容由 AI 自动翻译，所有内容以英文版本为准。**
+
+  [查看英文版 →](/docs/en/solana-fundamentals/programs-and-anchor)
+</Info>
+
+<Info>
+  Raydium 的较新程序（CPMM、CLMM、Farm v6、LaunchLab）使用 **Anchor** 编写——一个基于 Solana 原生程序模型的 Rust 框架，提供账户验证、错误处理和 IDL（接口描述）。AMM v4 和更早的 Farm 程序出现在 Anchor 之前。理解这两种范式有助于你阅读代码、从 IDL 生成客户端，以及调试意外错误。
+</Info>
+
+## 程序部署模型
+
+每个 Solana 程序都位于一个 `Pubkey`。程序的字节码存储在由 **BPF 可升级加载器**（`BPFLoaderUpgradeab1e11111111111111111111111`）拥有的**可执行**账户中。
+
+一个程序部署包含三个账户：
+
+1. **程序账户**：位于程序 ID 的小型元数据账户。所有者：BPF 可升级加载器。
+2. **ProgramData 账户**：保存实际的字节码。派生为 `[program_id, "programdata"]`。
+3. **Buffer 账户**（临时）：在升级期间保存新字节码。升级后被丢弃。
+
+ProgramData 账户有一个**升级权限**——一个可以用新版本替换字节码的密钥。Raydium 的升级权限是一个 24 小时时间锁后面的多签；见 [`security/admin-and-multisig`](/docs/i18n/zh/security/admin-and-multisig)。
+
+### 验证已部署的程序
+
+要确认链上的内容与审计批准的源代码匹配：
+
+```bash
+# 从主网转储程序
+solana program dump CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C cpmm-onchain.so
+
+# 从已知源代码构建
+cargo build-sbf --manifest-path raydium-cp-swap/programs/cp-swap/Cargo.toml
+cp target/deploy/raydium_cp_swap.so cpmm-source.so
+
+# 比较
+sha256sum cpmm-onchain.so cpmm-source.so
+```
+
+匹配的哈希值证明你正在与你认为的源代码交互。Raydium 在发布说明中发布了经过验证的构建说明。
+
+## Anchor：Solana 之上的框架
+
+原生 Solana 程序是具有以下签名的 Rust 函数：
+
+```rust
+pub fn process_instruction(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    // 手动解析 instruction_data
+    // 手动验证账户
+    // 手动反序列化账户数据
+    // 手动检查签名者/可写标志
+    // ... 然后执行实际工作
+    Ok(())
+}
+```
+
+Anchor 包装了所有样板代码，让你可以写成：
+
+```rust
+#[program]
+pub mod cpmm {
+    use super::*;
+
+    pub fn swap_base_input(
+        ctx: Context<Swap>,       // Anchor 1.0: one lifetime.
+                                  // Under 0.3x this was Context<'_, '_, '_, '_, Swap>.
+        amount_in: u64,
+        min_out: u64,
+    ) -> Result<()> {
+        // 只需业务逻辑——ctx 已预先验证
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct Swap<'info> {
+    pub payer: Signer<'info>,
+    pub amm_config: Account<'info, AmmConfig>,
+    #[account(mut, seeds = [b"pool", amm_config.key().as_ref()], bump)]
+    pub pool_state: AccountLoader<'info, PoolState>,
+    #[account(mut)]
+    pub input_vault: Box<Account<'info, TokenAccount>>,
+    // ... 更多账户
+}
+```
+
+Anchor：
+
+- 为每条指令和每个账户类型自动生成一个确定性的 8 字节**判别器**。
+- 在你的代码运行前验证账户约束（所有者、种子、可写、签名者、铸币匹配、代币程序匹配）。
+- 生成一个 **IDL**——客户端用来调用程序的接口描述文件。
+- 附带 Rust、TypeScript 和 Python 客户端库。
+
+### 8 字节判别器
+
+每个 Anchor 账户和每条 Anchor 指令都以 8 字节判别器开头——固定字符串的 SHA-256 的前 8 个字节：
+
+```
+账户判别器：     sha256("account:PoolState")[0..8]
+指令判别器：     sha256("global:swap_base_input")[0..8]
+```
+
+当你调用 Anchor 指令时，指令数据的前 8 个字节是这个判别器；Anchor 通过查找它们来分派到正确的处理程序。
+
+当你读取 Anchor 账户时，前 8 个字节告诉你它的类型——对于像 `getProgramAccounts` 这样枚举某个类型所有账户的工具至关重要。
+
+### 错误
+
+Anchor 程序通过 `#[error_code]` 定义错误：
+
+```rust
+#[error_code]
+pub enum ErrorCode {
+    #[msg("Slippage tolerance exceeded")]
+    SlippageExceeded,
+    #[msg("Pool is disabled")]
+    PoolDisabled,
+    // ...
+}
+```
+
+Anchor 自动从 6000（0x1770）开始分配这些数字代码。Raydium 的完整错误代码表在 [`reference/error-codes`](/docs/i18n/zh/reference/error-codes)。
+
+## IDL
+
+Anchor **IDL**（接口描述语言）文件是程序的 JSON 描述：它的指令、账户、类型、错误和事件。它相当于以太坊的 ABI。
+
+Raydium 为所有 Anchor 程序发布 IDL。从链上实时获取：
+
+```bash
+anchor idl fetch CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C -o cpmm.idl.json
+```
+
+或从 SDK 源代码：`src/raydium/*/idl/*.json`。
+
+### IDL 结构
+
+```json
+{
+  "version":      "0.1.0",
+  "name":         "raydium_cp_swap",
+  "instructions": [ { "name": "swap_base_input", "accounts": [ ... ], "args": [ ... ] }, ... ],
+  "accounts":     [ { "name": "PoolState", "type": { ... } }, ... ],
+  "types":        [ { "name": "AmmConfig", "type": { ... } }, ... ],
+  "errors":       [ { "code": 6000, "name": "SlippageExceeded", "msg": "..." }, ... ],
+  "events":       [ { "name": "SwapEvent", "fields": [ ... ] }, ... ]
+}
+```
+
+### 从 IDL 生成客户端
+
+Anchor 的 `anchor` CLI 生成 TypeScript 和 Rust 类型：
+
+```bash
+anchor idl build -o target/idl/cpmm.json
+# TypeScript 类型由 Anchor 的 ts-client 自动生成
+# Raydium SDK 已包含这些
+```
+
+第三方工具如 [Codama](https://github.com/codama-idl/codama) 可以从 IDL 生成 Rust、Go、Python 或 JavaScript 客户端。（Codama 是 Metaplex 的 Kinobi 的后继者，而 Kinobi 只提供过 JavaScript 渲染器。）
+
+### 当 IDL 是你的朋友时
+
+如果你想构建一个不通过 Raydium SDK 的自定义集成：
+
+1. 获取 IDL（从链上实时获取或从 SDK 源代码获取）。
+2. 查找你想要的指令（例如 `swap_base_input`）。
+3. 构造指令数据：8 字节判别器 + 编码的参数。
+4. 按 IDL 指定的顺序传递账户。
+
+见 [`sdk-api/anchor-idl`](/docs/i18n/zh/sdk-api/anchor-idl) 了解具体示例。
+
+## 前 Anchor 程序：AMM v4 和 Farm v3/v5
+
+这些程序出现在 Anchor 之前。它们使用：
+
+- **手动指令分派**：`instruction_data` 中的 `u8` 标签和 `match` 语句。
+- **手动账户验证**：`if accounts[0].owner != &expected_program { ... }`。
+- **Borsh 序列化的指令参数**：没有判别器，只是 `instruction_data[1..]`。
+- **通过 `#[repr(C, packed)]` 的布局**：C 结构体二进制布局。
+
+Raydium SDK v2 为非 Anchor AMM v4 指令提供了 TypeScript 布局，所以客户端可以在没有 Anchor 的情况下编码/解码：
+
+```ts
+import { liquidityStateV4Layout, struct, u8, u64 }
+  from "@raydium-io/raydium-sdk-v2";
+import BN from "bn.js";
+
+// `liquidityStateV4Layout` is exported for decoding AmmInfo. The instruction-data
+// layout is internal to the SDK, so declare it yourself with the exported
+// marshmallow helpers — note the first field is `instructionId`, not `instruction`.
+const swapLayout = struct([u8("instructionId"), u64("amountIn"), u64("minAmountOut")]);
+
+const data = Buffer.alloc(swapLayout.span);
+swapLayout.encode(
+  { instructionId: 9, amountIn: new BN(1_000_000), minAmountOut: new BN(950_000) },
+  data,
+);
+```
+
+集成模式是相同的——你只是没有得到 Anchor 的 IDL 驱动的自动生成。
+
+## 程序升级机制
+
+只有 ProgramData 的 `upgrade_authority` 可以升级。步骤：
+
+1. 编译新字节码。
+2. 将其写入缓冲区账户（`solana program write-buffer`）。
+3. 提交升级指令：`BpfLoaderUpgradeable::Upgrade { buffer, program, authority }`。
+4. 运行时原子性地用缓冲区的内容替换程序的字节码。
+
+Raydium 通过在 Squads 多签设置中实现的 **24 小时时间锁**来控制这一点。升级交易必须在多签批准后等待 24 小时才能执行。这可以防止仓促/被迫升级。
+
+见 [`security/admin-and-multisig`](/docs/i18n/zh/security/admin-and-multisig)。
+
+### 使程序不可变
+
+升级权限可以设置为 `None`，此时程序变成永久不可变。Raydium 还没有对任何产品这样做——团队保留推送安全修复的能力。权衡：用户必须信任多签 + 时间锁流程。
+
+## 程序和租金
+
+部署程序消耗免租 lamports：
+
+- 一个 50 KB 程序：约 0.35 SOL 的租金。
+- 一个 200 KB 程序：约 1.4 SOL 的租金。
+
+关闭程序（通过 `solana program close`）返回 lamports。Raydium 程序保持活跃，没有计划关闭。
+
+## 调试 Anchor 程序
+
+### 日志输出
+
+Anchor 的 `msg!` 宏写入交易的日志。模拟交易以查看日志：
+
+```ts
+const sim = await connection.simulateTransaction(tx);
+console.log(sim.value.logs);
+```
+
+日志包括：
+
+- 程序调用（`Program CPMMoo8... invoke [1]`）。
+- 程序代码中的 `msg!` 调用。
+- 计算单位消耗（`consumed 137842 of 400000 compute units`）。
+- 程序成功或错误。
+
+### 错误代码
+
+如果 Anchor 程序抛出错误，日志显示：
+
+```
+Program CPMMoo8... failed: custom program error: 0x1770
+```
+
+0x1770 = 6000 十进制 = 第一个 Anchor 错误（例如 `SlippageExceeded`）。与 IDL 的 `errors` 数组交叉引用。
+
+见 [`reference/error-codes`](/docs/i18n/zh/reference/error-codes) 了解 Raydium 的完整错误表。
+
+### 账户布局不匹配
+
+如果你在错误的位置传递了错误的账户，Anchor 的账户验证宏返回错误，如：
+
+```
+AnchorError: AccountNotInitialized. Error Number: 3012
+```
+
+低于 6000 的错误号是 Anchor 的内置错误（见 Anchor 的 `ErrorCode` 枚举）；≥6000 的错误是程序的自定义代码。
+
+## 指针
+
+- [`solana-fundamentals/account-model`](/docs/i18n/zh/solana-fundamentals/account-model) — 程序如何拥有账户。
+- [`solana-fundamentals/pdas-and-cpis`](/docs/i18n/zh/solana-fundamentals/pdas-and-cpis) — Anchor 声明的 PDA。
+- [`sdk-api/anchor-idl`](/docs/i18n/zh/sdk-api/anchor-idl) — 获取和使用 Raydium 的 IDL。
+- [`reference/program-addresses`](/docs/i18n/zh/reference/program-addresses) — 程序 ID。
+- [`reference/error-codes`](/docs/i18n/zh/reference/error-codes) — 错误代码参考。
+- [`security/admin-and-multisig`](/docs/i18n/zh/security/admin-and-multisig) — 升级权限控制。
+
+来源：
+
+- [Anchor 文档](https://www.anchor-lang.com/docs)。
+- [Solana 程序部署](https://solana.com/docs/programs/deploying)。
+- Raydium IDL（在 SDK `src/raydium/*/idl/*.json` 中发布）。

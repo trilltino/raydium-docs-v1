@@ -4,9 +4,9 @@
 
 # Internal architecture document — for contributors only, not user-facing.
 # Root-anchored so the pattern doesn't accidentally match
-# `protocol-overview/architecture.mdx` on case-insensitive filesystems (macOS APFS).
+# `docs/en/protocol-overview/architecture.mdx` on case-insensitive filesystems (macOS APFS).
 /ARCHITECTURE.mdx
-/zh/ARCHITECTURE.mdx
+/docs/i18n/zh/ARCHITECTURE.mdx
 
 # Draft content
 drafts/
@@ -17,8 +17,10 @@ drafts/
 # Published from public/ by .github/workflows/pages.yml.
 public/
 
-# Trash directory for husks left behind by the en/ -> root i18n migration
-# (the bind-mount used during that migration could not unlink directories,
-# so the now-empty en/ skeleton was renamed here. Safe to `rm -rf` from a
-# native shell.)
-.legacy-en-trash/
+# Local research checkouts are not part of the Mintlify site.
+/research/
+/research/**
+research/
+research/**
+**/research/**
+**/tsconfig*.json

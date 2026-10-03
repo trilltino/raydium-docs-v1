@@ -1,0 +1,111 @@
+---
+title: "Burn & Earn (kalıcı likidite kilidi)"
+description: "Bir CPMM veya CLMM LP pozisyonunu kalıcı olarak kilitleyin ve transferable bir Raydium Fee Key NFT aracılığıyla işlem ücretlerini talep etme hakkını koruyun."
+---
+
+<Info>
+  **Bu sayfada yapay zekâ tarafından otomatik olarak çevrilmiştir. İngilizce sürüm esas alınır.**
+
+  [İngilizce sürümü görüntüle →](/docs/en/user-flows/burn-and-earn)
+</Info>
+
+<Info>
+  **Burada "burn" ne anlama geliyor.** Adına rağmen, LP token'ları / pozisyon NFT'si **kilitlenir**, yok edilmez. Likidite asla çekilemez, ancak ücretler tahakkuk etmeye devam eder ve Fee Key NFT'sini elinde tutan herkes tarafından talep edilebilir. NFT transferable'dır; onu elinde tutan kişi ücret akışına sahiptir.
+</Info>
+
+<Warning>
+  Kısıtlı ihraçcı havuzundan donmuş bir CLMM pozisyonu Burn & Earn'e giremez çünkü pozisyon NFT'si kilit escrow'una aktarılamaz. Bu akışı sunmadan önce pozisyon NFT token hesabını kontrol edin. Sıradan CLMM pozisyonları transferable kalır ve desteklenir.
+</Warning>
+
+## Burn & Earn nedir
+
+Burn & Earn, havuz oluşturucunun (veya herhangi bir LP'nin) bir depozitoyu zincir üzerinde **kalıcı** hale getirmesine izin veren bir Raydium özelliğidir ve işlem ücretlerini hasat etme hakkını korur. Bir pozisyon geri alınamaz hale gelir, ancak yeni basılan bir **Raydium Fee Key** NFT, o kilitli pozisyondan `collectFees` yapma hakkını temsil eder.
+
+Yaygın kullanım durumları:
+
+- **Başlangıç güveni.** Projeler, dağıtıcının LP'sini kilitleyerek rug-pull yapmayacaklarını taahhüt eder. Sahipler zincir üzerinde likiditenin kalıcı olduğunu doğrulayabilir.
+- **Ücret getiren koleksiyonluk.** Verim üreten transferable bir NFT. NFT'yi satın; ücret akışını transfer edin.
+- **Hazine seviyesi LP.** Protokoller, marka / keşif amaçları için likiditeyi sonsuza kadar tutmak istediklerinde, ücret tarafını para haline getirirken.
+
+## Desteklenen havuz türleri
+
+| Program | Burn & Earn desteği |
+|---|---|
+| CPMM | Evet |
+| CLMM | **Yalnızca tam aralık** (önerilir) |
+| AMM v4 (Hybrid) | Desteklenmiyor |
+
+CLMM için, yalnızca tam fiyat aralığını kapsayan pozisyonlar kilitlenmelidir. Kilitledikten sonra yeniden dengeleyemezsiniz — fiyat seçtiğiniz aralığın dışına çıkarsa, o pozisyonda ücret kazanmayı kalıcı olarak durdurursunuz. Dar aralıklı bir Burn & Earn pozisyonu neredeyse her zaman bir hatadır.
+
+## Kilit program seviyesinde nasıl çalışır
+
+1. Orijinal LP token'ı (CPMM) veya pozisyon NFT'si (CLMM), Burn & Earn programına ait bir program tarafından sahip olunan PDA'ya aktarılır.
+2. Bir **Fee Key NFT** çağırana basılır. Metaveri, kilitli pozisyonun PDA'sına geri işaret eder.
+3. Burn & Earn, `collectFees` (veya havuz türü başına eşdeğer çağrı) sunar:
+   - İmzalayanın verilen kilitli pozisyon için Fee Key NFT'sine sahip olduğunu doğrular.
+   - CPI aracılığıyla temel havuz programının ücret talep talimatını çağırır.
+   - Toplanan ücretleri Fee Key sahibinin ATA'larına yönlendirir.
+4. Karşılık gelen bir `withdraw` yoktur — temel LP / pozisyon asla escrow'dan çıkmaz.
+
+Fee Key, standart bir SPL NFT'sidir. Herhangi bir Solana NFT pazarında satılabilir, cüzdanlar arasında taşınabilir, NFT'leri kabul eden borç verme protokollerinde teminat olarak kullanılabilir veya başka bir sözleşmeye sarılabilir. Bir `collectFees` çağrısı sırasında onu elinde tutan kişi ücretleri alır.
+
+## Kullanıcı arayüzü yönergeleri
+
+1. Her zamanki gibi bir CPMM havuzu veya tam aralıklı bir CLMM havuzu oluşturun.
+2. **Likidite → Oluştur → Burn & Earn** sayfasına gidin.
+3. Kilitlenecek pozisyonu seçin.
+4. Pozisyon ayrıntılarını (NFT adresi, boyut, havuz) doğrulayın ve kullanıcı arayüzünün gösterdiği onay cümlesini yazın. Bu, işlem geri alınamaz olduğu için kasıtlı olarak ağır bir süreçtir.
+5. **Onayla, likiditeyi kalıcı olarak kilitle** seçeneğine tıklayın.
+6. Bir Fee Key NFT cüzdanınıza gelir. Portfolio sayfasında kilitli pozisyonlar altında görünür.
+
+Ücretleri herhangi bir pozisyondan talep ettiğiniz gibi talep edin — Portfolio sayfası aracılığıyla veya `collectFees` aracılığıyla.
+
+## API yüzeyi
+
+Havuz bilgisi uç noktası, o havuzun Burn & Earn aracılığıyla kilitli likiditenin payını gösteren bir `burnPercent` alanı döndürür:
+
+```http
+GET https://api-v3.raydium.io/pools/info/list
+  ?poolType=standard
+  &poolSortField=default
+  &sortType=desc
+  &pageSize=1
+  &page=1
+```
+
+```json
+{
+  "data": [
+    {
+      "id": "...",
+      "burnPercent": 99.17,
+      ...
+    }
+  ]
+}
+```
+
+`burnPercent`, güven sinyali vermek için kullanışlı bir yüzeydir: LP'si %99+ yakılmış bir token, LP'si %0 yakılmış olandan çok daha az rug-able'dır.
+
+## Tuzaklar
+
+- **Geri alınamaz.** LP tarafı asla geri alınamaz. Tutarın bir daha asla dokunmak istemediğiniz bir şey olduğunu onaylayın.
+- **CLMM dar aralıkları bir tuzaktır.** Yalnızca tam aralıklı CLMM pozisyonlarını kilitleyin, aksi takdirde aralık sınırlı kilitli bir pozisyonun fiyat bandın dışına çıktığında ücret kazanmayı durdurduğunu gerçekten anlamadığınız sürece.
+- **Fee Key NFT'sini kaybetmek ücretleri sonsuza kadar kaybetmektir.** Bunu bir tapu gibi ele alın. Yanlışlıkla yakmayın; düşmanca bir sözleşmeye stake etmeyin.
+- **Transfer ücretleri olan Token-2022 mint'leri**: Burn & Earn bunları destekler ancak transfer ücreti kesintisi her ücret talebinde uygulanır — buna göre bütçe yapın.
+- **Kısmi kilit yoktur.** %50 kilitli ve %50 hareketli istiyorsanız, önce pozisyonu iki pozisyona bölün, sonra yalnızca birini kilitleyin.
+
+## LaunchLab, Burn & Earn'i arka planda kullanır
+
+[LaunchLab](/docs/i18n/tr/products/launchlab)'dan mezun olan token'lar, kilitli LP için LP-Lock kullanır. 2026-08-17 yükseltmesinden önce, `creatorScale` yaratıcıya ait bir Fee Key üretti. Bundan sonra yürütülen göçler, `platformScale + creatorScale`'i bir platform Fee Key pozisyonunda birleştirir ve `burnScale`'i yakar. Önceki tamamlanan göçlerden gelen Fee Key'ler değişmeden kalır. Bkz. [`products/launchlab/platforms`](/docs/i18n/tr/products/launchlab/platforms) ve [`products/launchlab/creator-fees`](/docs/i18n/tr/products/launchlab/creator-fees).
+
+## Sonraki adımlar
+
+- [`products/cpmm/instructions`](/docs/i18n/tr/products/cpmm/instructions) — CPMM ücret talep mekanikleri.
+- [`products/clmm/instructions`](/docs/i18n/tr/products/clmm/instructions) — CLMM ücret talep mekanikleri.
+- [`products/launchlab/creator-fees`](/docs/i18n/tr/products/launchlab/creator-fees) — yaratıcı ücretleri ve platform Fee Key hakları.
+
+Kaynaklar:
+
+- raydium.io/liquidity adresindeki Raydium web kullanıcı arayüzü Burn & Earn akışı.
+- `api-v3.raydium.io/pools/info/list` yanıt şeması.

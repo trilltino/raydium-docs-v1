@@ -1,0 +1,66 @@
+---
+title: "Stable AMM"
+description: "Raydium'un bağımsız programı; arama tablolarından enterpolasyon yapılan fiyat eğrileri. Stablecoin çiftleri ve bilinen fiyat ilişkilerine sahip diğer varlıklar için likidite sağlar."
+---
+
+<Info>
+  **Bu sayfa yapay zekâ tarafından otomatik olarak çevrilmiştir. İngilizce sürüm esas alınır.**
+
+  [İngilizce sürümü görüntüle →](/docs/en/products/stable/index)
+</Info>
+
+## Nedir
+
+Stable AMM, bilinen ve iyi davranışlı fiyat ilişkilerine sahip çiftler için tasarlanmış **bağımsız bir Raydium programıdır** (AMM v4 programının bir modu değil, kendi dağıtımı) — öncelikle stablecoin-stablecoin çiftleri (USDC-USDT, USDH-USDC) ve teminatlı token çiftleri için. Sabit çarpım eğrisi yerine, her havuzun `ModelDataInfo` hesabına gömülü bir **(x, y, fiyat) tuple'larının arama tablosu** kullanır. Fiyat keşfi tablo içinde enterpolasyon yoluyla gerçekleşir ve küçük swaplar için daha düşük slippage üretir.
+
+**Saf bir AMM'dir**: tüm likidite havuzun kendi kasalarında bulunur. Erken dönem OpenBook pazar yapıcılığı yolu yıllardır hareketsiz kalmıştır ve [2026-06-22 yükseltmesi](/docs/i18n/tr/reference/changelog) kalan pazar kodunu kaldırmıştır. AMM v4 ile aynı `Fees` yapısını ve ücret modelini paylaşır; fark tamamen **fiyatlandırma eğrisindedir** — x·y=k yerine, önceden doldurulmuş bir modelde enterpolasyon yaparsınız.
+
+**Program ID:** [reference/program-addresses](/docs/i18n/tr/reference/program-addresses) bölümüne bakınız.
+
+**Token-2022:** desteklenmez. Yalnızca klasik SPL tokenları.
+
+**Likidite:** sınırlı. Çoğu kullanıcı tarafından erişilen entegrasyonlar, tüm Raydium AMM'ler arasında en iyi fiyat yönlendirmesi için Stable havuzlarına [AMM Routing programı](/docs/i18n/tr/products/routing) aracılığıyla ulaşır. SDK ayrıca Stable havuzları doğrudan destekler: havuzlar `ApiV3PoolInfoStandardItem` üzerinde `version: 5` (`pooltype: "StablePool"`) olarak görünür ve standart `LiquidityModule` (`addLiquidity` / `removeLiquidity` / swap) v5'i otomatik olarak algılar ve doğru talimatları yayınlar — [Kod örnekleri](/docs/i18n/tr/products/stable/code-demos) bölümüne bakınız.
+
+## Bölüm içeriği
+
+<CardGroup cols={2}>
+  <Card title="Genel Bakış" icon="circle-info" href="/docs/i18n/tr/products/stable/overview">
+    Neden ayrı bir program, arama tablosu modeli, AMM v4 ve CPMM ile karşılaştırma.
+  </Card>
+  <Card title="Hesaplar" icon="database" href="/docs/i18n/tr/products/stable/accounts">
+    AmmInfo, ModelDataInfo, DataElement alanları, kasa düzeni, ücret yapısı.
+  </Card>
+  <Card title="Matematik" icon="function" href="/docs/i18n/tr/products/stable/math">
+    Enterpolasyonun fiyatları nasıl ürettiği, havuz-varlık muhasebesi, AMM v4 ile aynı ücret uygulaması.
+  </Card>
+  <Card title="Talimatlar" icon="terminal" href="/docs/i18n/tr/products/stable/instructions">
+    Çağrılabilir set — Deposit, Withdraw, SwapBaseIn, SwapBaseOut, WithdrawPnl — ve 2026-06-22 yükseltmesinde kaldırılan talimatlar.
+  </Card>
+  <Card title="Ücretler" icon="percent" href="/docs/i18n/tr/products/stable/fees">
+    %0,02 brüt işlem ücreti, %0,0176 LP / %0,0024 protokol olarak bölünür. Fon ücreti yok, yaratıcı ücreti yok.
+  </Card>
+  <Card title="Kod örnekleri" icon="code" href="/docs/i18n/tr/products/stable/code-demos">
+    Stable havuzu algılayın, SDK'nın `LiquidityModule` aracılığıyla swap / likidite ekleyin / çıkarın (v5'i yerel olarak işler) ve çevrimdışı stable-curve yardımcılarını kullanın.
+  </Card>
+</CardGroup>
+
+## Ne zaman okumalısınız
+
+- Bir stablecoin veya varlık çiftini entegre ediyorsunuz ve en iyi fiyata sahip bir Stable AMM havuzu buluyorsunuz.
+- Bir yönlendirme motoru oluşturuyorsunuz ve Stable havuzlarını likidite kaynağı olarak desteklemeniz gerekiyor.
+- Mevcut bir Stable havuzda likidite yönetiyorsunuz — deposit / withdraw akışını öğreniyorsunuz.
+- AMM fiyatlandırmasının bir arama tablosu aracılığıyla nasıl programlanabilir hale getirilebileceğini merak ediyorsunuz.
+
+## Temel bilgiler
+
+| Yön | Değer |
+|--------|-------|
+| **Mainnet program ID** | `5quBtoiQqxF9Jv6KYKctB59NT3gtJD2Y65kdnB1Uev3h` |
+| **Devnet program ID** | `DRayDdXc1NZQ9C3hRWmoSf8zK4iapgMnjdNZWrfwsP8m` |
+| **Eğri modeli** | Enterpolasyon yapılan arama tablosu (x·y=k değil) |
+| **OpenBook bağımlılığı** | Yok (pazar yolu uzun süredir hareketsiz; ölü kod 2026-06-22'de kaldırıldı) |
+| **İşlem ücreti** | %0,02 (AMM v4'ün %0,25'i değil) |
+| **Ücretin LP payı** | %0,0176 (ücretin %88'i) |
+| **Ücretin protokol payı** | %0,0024 (ücretin %12'si) |
+| **Yaratıcı ücreti** | Yok |
+| **Fon ücreti** | Yok |

@@ -1,0 +1,286 @@
+---
+title: "PDA và CPI"
+description: "Program-derived addresses và cross-program invocation — hai nguyên thủy mà Raydium sử dụng để quản lý trạng thái một cách xác định và kết hợp với các chương trình khác. Seeds, bumps, invoke vs invoke_signed, và các mẫu mã mà Raydium tuân theo."
+---
+
+<Info>
+  **Trang này được dịch tự động bằng AI. Phiên bản tiếng Anh là bản chính thức.**
+
+  [Xem bản tiếng Anh →](/docs/en/solana-fundamentals/pdas-and-cpis)
+</Info>
+
+<Info>
+  **PDA** (program-derived addresses) và **CPI** (cross-program invocation) là hai nguyên thủy tạo nên Raydium. PDA cho phép một chương trình "sở hữu" các địa chỉ xác định mà không cần khóa riêng — đó là cách các pool authority và vault hoạt động. CPI cho phép một chương trình gọi chương trình khác — đó là cách Raydium hoán đổi token thông qua chương trình SPL Token và cách các nhà tích hợp kết hợp Raydium vào luồng của họ. Cả hai đều đáng hiểu trước khi đọc mã nguồn của Raydium.
+</Info>
+
+## PDA: địa chỉ không có khóa
+
+**Program-Derived Address** là một khóa công khai có các đặc điểm:
+
+- Không nằm trên đường cong ed25519 (không có khóa riêng tồn tại cho nó).
+- Được dẫn xuất một cách xác định từ một ID chương trình và một tập hợp các seed.
+- Chỉ có thể được ký bởi *chương trình dẫn xuất*, thông qua `invoke_signed`.
+
+Mọi pool authority của Raydium, mọi tài khoản trạng thái pool, mọi vault, mọi trạng thái farm — tất cả đều là PDA.
+
+### Dẫn xuất
+
+Một PDA được tính bằng cách băm ID chương trình với các seed, sau đó tìm một byte "bump" để buộc kết quả ra khỏi đường cong. Bump đầu tiên (thường bắt đầu từ 255 và giảm dần) tạo ra một địa chỉ ngoài đường cong sẽ thắng; đây là **canonical bump**.
+
+```ts
+import { PublicKey } from "@solana/web3.js";
+
+const [poolAuthority, bump] = PublicKey.findProgramAddressSync(
+  [Buffer.from("authority"), poolId.toBuffer()],
+  CPMM_PROGRAM_ID,
+);
+```
+
+Các seed có thể là bất cứ thứ gì — chuỗi, các pubkey khác, giá trị `u64` dưới dạng byte little-endian. Quy ước của Raydium là một tiền tố dễ đọc theo sau bởi các định danh duy nhất.
+
+### Mẫu PDA của Raydium
+
+Các PDA phổ biến trong các chương trình của Raydium:
+
+| PDA | Seeds | Chương trình |
+|-----|-------|---------|
+| AMM authority (AMM v4) | `[b"amm authority"]` + bump | AMM v4 |
+| Pool state (CPMM) | `[b"pool", amm_config, mint_a, mint_b]` | CPMM |
+| Pool vault (CPMM) | `[b"pool_vault", pool, mint]` | CPMM |
+| Authority (CPMM) | `[b"vault_and_lp_mint_auth_seed"]` | CPMM |
+| Pool state (CLMM) | `[b"pool", amm_config, mint_0, mint_1]` | CLMM |
+| Tick array (CLMM) | `[b"tick_array", pool, start_tick_index]` | CLMM |
+| Observation (CLMM) | `[b"observation", pool]` | CLMM |
+| Personal position (CLMM) | `[b"position", position_nft_mint]` | CLMM |
+| Farm state (Farm v6) | `[b"pool_farm_state", farm_id]` | Farm v6 |
+| User ledger (Farm v6) | `[b"user_ledger", farm, user]` | Farm v6 |
+
+Người dùng và nhà tích hợp có thể tính toán những điều này mà không cần tìm nạp bất cứ thứ gì — với các đầu vào công khai (pool ID, farm ID, khóa người dùng), PDA là xác định.
+
+### Canonical bump
+
+Mặc dù về nguyên tắc có thể có nhiều bump tạo ra các địa chỉ ngoài đường cong, các chương trình của Raydium luôn sử dụng **canonical bump** (được tìm thấy bằng cách giảm dần từ 255). Điều này được lưu trữ trong dữ liệu tài khoản của PDA để các giao dịch tiếp theo có thể chuyển nó vào và bỏ qua vòng lặp dẫn xuất (tốn kém):
+
+```rust
+// Trường thực của CPMM, trên PoolState zero-copy được tải qua AccountLoader:
+#[account(zero_copy(unsafe))]
+#[repr(C, packed)]
+pub struct PoolState {
+    pub auth_bump: u8,
+    // ... phần còn lại của trạng thái pool
+}
+```
+
+(CLMM's `PoolState` lưu trữ `bump: [u8; 1]` thay thế, vì vậy hãy kiểm tra struct của chương trình cụ thể thay vì giả định một hình dạng.)
+
+Trong các giao dịch tiếp theo, bump được đọc từ trạng thái pool thay vì được tính toán lại.
+
+## CPI: gọi các chương trình khác
+
+**Cross-Program Invocation** cho phép một chương trình gọi các hướng dẫn của chương trình khác trong một giao dịch. Raydium sử dụng CPI rộng rãi:
+
+- Các hướng dẫn swap gọi chương trình SPL Token để di chuyển token.
+- CLMM gọi Metaplex để mint position NFT.
+- Tạo pool gọi System Program để cấp phát tài khoản.
+- Farm v6 gọi SPL Token để chuyển phần thưởng.
+
+Các nhà tích hợp cũng sử dụng CPI để gọi *vào* Raydium — đó là cách các chiến lược vault, giao thức LP có đòn bẩy và auto-compounder hoạt động. Xem [`integration-guides/cpi-integration`](/docs/i18n/vi/integration-guides/cpi-integration).
+
+### invoke vs invoke_signed
+
+Runtime Solana cung cấp hai nguyên thủy CPI:
+
+- **`invoke`**: gọi chương trình khác; chương trình được gọi kế thừa các người ký của giao dịch bên ngoài.
+- **`invoke_signed`**: gọi chương trình khác *thay mặt cho một PDA*; runtime xác minh các seed của PDA và ủy quyền chữ ký.
+
+`invoke_signed` là điều kỳ diệu cho phép các chương trình giữ quyền kiểm soát các tài khoản mà không cần quản lý khóa riêng.
+
+### Ví dụ: Raydium chuyển từ pool vault
+
+Một pool vault là một Token Account có quyền kiểm soát là PDA của chương trình pool. Để chuyển token ra ngoài trong quá trình swap, chương trình pool phải ký với tư cách là PDA đó:
+
+```rust
+// Seeds cho pool authority
+let authority_seeds: &[&[u8]] = &[
+    b"vault_and_lp_mint_auth_seed",
+    &[authority_bump],
+];
+let signer_seeds: &[&[&[u8]]] = &[authority_seeds];
+
+// Xây dựng ngữ cảnh CPI
+let cpi_accounts = Transfer {
+    from:      input_vault.to_account_info(),
+    to:        user_ata.to_account_info(),
+    authority: pool_authority.to_account_info(),
+};
+// Anchor 1.0 lấy Pubkey của chương trình ở đây; dạng AccountInfo chỉ dành cho 0.3x.
+let cpi_ctx = CpiContext::new_with_signer(token_program.key(), cpi_accounts, signer_seeds);
+
+// Thực thi
+token::transfer(cpi_ctx, amount)?;
+```
+
+Runtime thấy `invoke_signed` được gọi bởi chương trình CPMM, xác minh rằng `vault_and_lp_mint_auth_seed + bump` dẫn xuất đến địa chỉ của `pool_authority` khi được băm với ID chương trình CPMM, và cho phép chữ ký quyền kiểm soát trên chuyển token. Không có khóa riêng liên quan.
+
+### Ví dụ: nhà tích hợp gọi Raydium CPMM
+
+Một chương trình nhà tích hợp (ví dụ: một escrow) có thể gọi `swap_base_input` của Raydium thông qua CPI:
+
+```rust
+// Crate là `raydium-cp-swap`; tên lib của nó — và do đó đường dẫn `use` — là
+// `raydium_cp_swap`. Không có `raydium_cpmm`.
+use raydium_cp_swap::cpi::{self, accounts::Swap};
+
+let cpi_accounts = Swap {
+    payer:                order.to_account_info(),      // PDA, sẽ ký
+    authority:            pool_authority_info,
+    amm_config:           amm_config_info,
+    pool_state:           pool_info,
+    input_token_account:  order_input_ata,
+    output_token_account: order_output_ata,
+    input_vault:          input_vault_info,
+    output_vault:         output_vault_info,
+    input_token_program:  input_token_program_info,
+    output_token_program: output_token_program_info,
+    input_token_mint:     input_mint_info,
+    output_token_mint:    output_mint_info,
+    observation_state:    observation_info,
+};
+
+let seeds = &[b"order", user.key.as_ref(), &[order.bump]];
+let cpi_ctx = CpiContext::new_with_signer(
+    cpmm_program.key(),     // Anchor 1.0: một Pubkey, không phải AccountInfo
+    cpi_accounts,
+    &[seeds],
+);
+
+cpi::swap_base_input(cpi_ctx, amount_in, min_out)?;
+```
+
+Đây là mẫu tích hợp chính tắc — xem [`integration-guides/cpi-integration`](/docs/i18n/vi/integration-guides/cpi-integration) để có ví dụ escrow đầy đủ.
+
+## Giới hạn độ sâu CPI
+
+Solana giới hạn độ sâu CPI ở **4 cấp độ**. Hướng dẫn cấp cao nhất của giao dịch được tính là độ sâu 0; mỗi lần gọi CPI tăng độ sâu.
+
+Ý nghĩa thực tế: swap của Raydium đã sử dụng 1-2 cấp độ CPI (Raydium → SPL Token). Một nhà tích hợp gọi Raydium sử dụng 2. Nếu nhà tích hợp đó được gọi bởi một nhà tích hợp khác, nó là 3. Cấp độ thứ 4 là giới hạn.
+
+Hầu hết các thành phần vẫn ở dưới giới hạn này một cách dễ dàng, nhưng lồng sâu (aggregator → router → Raydium → hook) có thể chạm vào nó. Thiết kế phẳng thay vì sâu.
+
+## Tài khoản còn lại
+
+Khi một hướng dẫn Raydium cần một số lượng tài khoản thay đổi (ví dụ: CLMM swap vượt qua một số lượng tick array không xác định), các tài khoản bổ sung được chuyển dưới dạng **remaining accounts** — được thêm vào danh sách tài khoản cố định, được diễn giải theo vị trí.
+
+`SwapV2` của CPMM sử dụng remaining accounts cho các tài khoản bắt buộc bổ sung của các chương trình transfer-hook. Các client tìm nạp các tài khoản cần thiết và thêm chúng:
+
+```ts
+const swapIx = await raydium.cpmm.swap({
+  /* ... */
+  // SDK xử lý remaining accounts tự động
+});
+```
+
+Ở cấp độ CPI, các nhà tích hợp phải chuyển tiếp remaining accounts thông qua hướng dẫn của riêng họ:
+
+```rust
+pub struct Swap<'info> {
+    // ... tài khoản cố định
+    // Cộng với Remaining accounts được chuyển tiếp qua ctx.remaining_accounts
+}
+
+// Chuyển tiếp remaining_accounts vào CPI
+cpi::swap_base_input(
+    cpi_ctx.with_remaining_accounts(ctx.remaining_accounts.to_vec()),
+    amount_in,
+    min_out,
+)?;
+```
+
+## Cạm bẫy PDA
+
+### Seed sai → địa chỉ sai
+
+Một lỗi trong đó các seed ở thứ tự sai, mã hóa sai, hoặc bao gồm/loại trừ một byte bổ sung sẽ im lặng tạo ra một PDA khác. Giao dịch không thành công một cách mơ hồ (chương trình cố gắng đọc một tài khoản không tồn tại). Luôn kiểm tra đơn vị dẫn xuất seed so với các giá trị vàng đã biết.
+
+### Không lưu trữ bump
+
+Nếu bạn dẫn xuất lại bump trên mỗi giao dịch, bạn sẽ trả tiền tính toán cho vòng lặp dẫn xuất. Lưu trữ canonical bump trong dữ liệu của PDA và đọc nó từ đó.
+
+### Nhầm lẫn canonical vs non-canonical bump
+
+Non-canonical bumps (nếu ai đó tìm thấy một cái tạo ra ngoài đường cong) được cho phép bởi `invoke_signed` nhưng bị từ chối bởi các chương trình của Raydium thông qua `assert_eq!(bump, canonical_bump)`. Nếu ai đó cố gắng yêu sách một PDA với non-canonical bump, tx sẽ không thành công.
+
+### Chuyển một PDA làm người ký khi bạn không phải là chương trình sở hữu
+
+Chỉ chương trình có ID trong dẫn xuất PDA mới có thể `invoke_signed` với các seed của nó. Nếu bạn cố gắng, runtime sẽ từ chối.
+
+## Cạm bẫy CPI
+
+### Quên chuyển tiếp `remaining_accounts`
+
+Nếu hướng dẫn bên ngoài của bạn chuyển các tài khoản transfer-hook trong `remaining_accounts` nhưng CPI vào Raydium không chuyển tiếp chúng, Raydium sẽ không thành công vì nó không thể tìm thấy các tài khoản hook. Luôn bao gồm `with_remaining_accounts` trong các CPI cần chúng.
+
+### Mismatch cờ writable
+
+Một tài khoản mà hướng dẫn bên ngoài đánh dấu writable cũng phải writable trong lệnh gọi CPI nếu chương trình được gọi dự định ghi vào nó. Mismatch → runtime rejection.
+
+### Không tính đến rent
+
+CPI đến một chương trình tạo một tài khoản (ví dụ: tạo ATA) yêu cầu người trả phí có đủ SOL cho rent. Các kiểm tra rent không thành công xuất hiện dưới dạng các lỗi mơ hồ.
+
+## Ví dụ đã làm: tính toán Raydium CPMM PDA
+
+```ts
+import { PublicKey } from "@solana/web3.js";
+
+const CPMM_PROGRAM_ID = new PublicKey("CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C");
+
+function computeCpmmPdas(ammConfig, mintA, mintB) {
+  const [poolState, poolBump] = PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("pool"),
+      ammConfig.toBuffer(),
+      mintA.toBuffer(),
+      mintB.toBuffer(),
+    ],
+    CPMM_PROGRAM_ID,
+  );
+
+  const [authority] = PublicKey.findProgramAddressSync(
+    [Buffer.from("vault_and_lp_mint_auth_seed")],
+    CPMM_PROGRAM_ID,
+  );
+
+  const [vaultA] = PublicKey.findProgramAddressSync(
+    [Buffer.from("pool_vault"), poolState.toBuffer(), mintA.toBuffer()],
+    CPMM_PROGRAM_ID,
+  );
+
+  const [vaultB] = PublicKey.findProgramAddressSync(
+    [Buffer.from("pool_vault"), poolState.toBuffer(), mintB.toBuffer()],
+    CPMM_PROGRAM_ID,
+  );
+
+  const [observation] = PublicKey.findProgramAddressSync(
+    [Buffer.from("observation"), poolState.toBuffer()],
+    CPMM_PROGRAM_ID,
+  );
+
+  return { poolState, authority, vaultA, vaultB, observation, poolBump };
+}
+```
+
+Đây chính xác là những gì Raydium SDK làm dưới mui xe khi bạn gọi `getPoolInfoFromRpc({ poolId })` — nó dẫn xuất các PDA liên quan mà không cần một chuyến đi.
+
+## Con trỏ
+
+- [`solana-fundamentals/account-model`](/docs/i18n/vi/solana-fundamentals/account-model) — cách PDA phù hợp trong mô hình tài khoản.
+- [`solana-fundamentals/programs-and-anchor`](/docs/i18n/vi/solana-fundamentals/programs-and-anchor) — các trợ giúp của Anchor để khai báo PDA.
+- [`integration-guides/cpi-integration`](/docs/i18n/vi/integration-guides/cpi-integration) — xây dựng các tích hợp CPI vào Raydium.
+- [`sdk-api/rust-cpi`](/docs/i18n/vi/sdk-api/rust-cpi) — các loại Rust CPI của Raydium.
+
+Nguồn:
+
+- [Solana PDA docs](https://solana.com/docs/core/pda).
+- [Solana CPI docs](https://solana.com/docs/core/cpi).
+- [Anchor PDA docs](https://www.anchor-lang.com/docs/basics/pda) và [Anchor CPI docs](https://www.anchor-lang.com/docs/basics/cpi) — Anchor không có trang kết hợp.

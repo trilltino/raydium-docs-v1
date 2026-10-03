@@ -1,0 +1,295 @@
+---
+title: "Примеры кода AMM v4"
+description: "Примеры на TypeScript для свопов и предоставления ликвидности в существующий пул AMM v4. Создание новых пулов выходит за рамки — используйте CPMM."
+---
+
+<Info>
+  **Эта страница переведена с помощью ИИ. За эталон принимается английская версия.**
+
+  [Открыть английскую версию →](/docs/en/products/amm-v4/code-demos)
+</Info>
+
+<Info>
+  **Баннер версии.** Все примеры ориентированы на `@raydium-io/raydium-sdk-v2@0.2.64-alpha` для Solana mainnet-beta, **проверено 2026-09-09** — каждое имя построителя, имя параметра и тип параметра ниже сверены с исходным кодом этого релиза и с [`raydium-sdk-V2-demo/src/amm`](https://github.com/raydium-io/raydium-sdk-V2-demo/tree/master/src/amm). ID программы: `675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8` (см. [`reference/program-addresses`](/docs/i18n/ru/reference/program-addresses)).
+
+  Две ловушки, на которые попадается большинство первых интеграций: `slippage` у `computeAmountOut` — это обычное **число** (`0.005` = 0.5%), а не `Percent`; и `liquidity.swap` **требует** `inputMint` в виде строки base58.
+
+  **Создание новых пулов здесь не показано.** Интерфейс Raydium больше не предлагает создание пулов AMM v4 — новые пары по умолчанию идут в [CPMM](/docs/i18n/ru/products/cpmm/code-demos). Сама программа AMM v4 по-прежнему принимает `Initialize2` в цепи; просто это не рекомендуемый путь. Примеры ниже покрывают операции с живыми пулами, которые по-прежнему нужны каждому интегратору: своп, депозит, вывод.
+</Info>
+
+<Info>
+  **Создание новых пулов здесь не показано.** Интерфейс Raydium больше не предлагает создание пулов AMM v4 — новые пары по умолчанию переходят на [CPMM](/docs/i18n/ru/products/cpmm/code-demos). Сама программа AMM v4 по-прежнему принимает `Initialize2` в цепи; это просто не рекомендуемый путь. Примеры ниже охватывают операции с активными пулами, которые нужны каждому интегратору: swap, deposit, withdraw.
+</Info>
+
+## Настройка
+
+```ts
+import { Connection, Keypair, clusterApiUrl } from "@solana/web3.js";
+import { Raydium, TxVersion } from "@raydium-io/raydium-sdk-v2";
+import fs from "node:fs";
+
+const connection = new Connection(process.env.RPC_URL ?? clusterApiUrl("mainnet-beta"));
+const owner = Keypair.fromSecretKey(
+  new Uint8Array(JSON.parse(fs.readFileSync(process.env.KEYPAIR!, "utf8"))),
+);
+const raydium = await Raydium.load({ owner, connection, cluster: "mainnet" });
+```
+
+## Получение пула по ID
+
+```ts
+import { PublicKey } from "@solana/web3.js";
+
+// `liquidity.getPoolInfoFromRpc` takes the pool id as a base58 STRING, not a PublicKey.
+const poolId = "58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2"; // SOL-USDC, see reference/program-addresses
+
+const data = await raydium.liquidity.getPoolInfoFromRpc({ poolId });
+const { poolInfo, poolKeys, poolRpcData } = data;
+
+console.log("Пара:", poolInfo.mintA.symbol, "/", poolInfo.mintB.symbol);
+console.log("Версия:", poolInfo.version);       // 4 для AMM v4
+console.log("Маркет:", poolKeys.marketId);       // уже строка base58
+```
+
+`poolKeys` — это структура, которую потребляют построители инструкций. Она содержит все учётные записи AMM v4 в порядке, ожидаемом программой, плюс устаревшие поля маркета, которые текущая программа принимает позиционно, но больше не читает.
+
+## Своп (base-in)
+
+```ts
+import BN from "bn.js";
+
+const amountIn = new BN(1_000_000);            // 1 USDC (6-decimal quote)
+const inputMint = new PublicKey(poolInfo.mintB.address);  // USDC
+const slippage  = 0.005;
+
+const computed = raydium.liquidity.computeAmountOut({
+  poolInfo,
+  amountIn,
+  mintIn: inputMint,
+  mintOut: new PublicKey(poolInfo.mintA.address),
+  slippage,
+});
+
+const { execute } = await raydium.liquidity.swap({
+  poolInfo,
+  poolKeys,
+  amountIn,
+  amountOut: computed.minAmountOut,
+  fixedSide: "in",
+  inputMint: poolInfo.mintB.address,   // a base58 STRING, and it is required
+  txVersion: TxVersion.V0,
+});
+
+const { txId } = await execute({ sendAndConfirm: true });
+console.log("Своп tx:", txId);
+```
+
+SDK маршрутизирует свопы AMM v4 через точки входа V2, которые не содержат учетные записи OpenBook. (После обновления в июле 2026 г. учетные записи маркета больше не проверяются даже на устаревшем пути v1.)
+
+## Своп (base-out)
+
+```ts
+const amountOut = new BN(1_000_000_000);       // 1 SOL (9-decimal base)
+const slippage  = 0.005;
+
+const computed = raydium.liquidity.computeAmountIn({
+  poolInfo,
+  amountOut,
+  mintOut: new PublicKey(poolInfo.mintA.address),
+  mintIn: new PublicKey(poolInfo.mintB.address),
+  slippage,
+});
+
+const { execute } = await raydium.liquidity.swap({
+  poolInfo,
+  poolKeys,
+  amountIn: computed.maxAmountIn,
+  amountOut,
+  fixedSide: "out",
+  inputMint: poolInfo.mintB.address,   // base58 string, not a PublicKey
+  txVersion: TxVersion.V0,
+});
+
+await execute({ sendAndConfirm: true });
+```
+
+## Добавление ликвидности
+
+```ts
+import { Percent, TokenAmount, toToken } from "@raydium-io/raydium-sdk-v2";
+
+const amountARaw = new BN(100_000_000);        // 0.1 SOL, in base units
+
+// computePairAmount takes a UI-decimal string (or Decimal) and a Percent —
+// not a BN and not a number — and it is synchronous.
+const { anotherAmount, maxAnotherAmount, minAnotherAmount } =
+  raydium.liquidity.computePairAmount({
+    poolInfo,
+    amount: "0.1",
+    baseIn: true,
+    slippage: new Percent(1, 100),
+  });
+
+// addLiquidity takes THREE TokenAmounts; otherAmountMin is required.
+const { execute } = await raydium.liquidity.addLiquidity({
+  poolInfo,
+  poolKeys,
+  amountInA: new TokenAmount(toToken(poolInfo.mintA), amountARaw),
+  amountInB: maxAnotherAmount,
+  otherAmountMin: minAnotherAmount,
+  fixedSide: "a",
+  txVersion: TxVersion.V0,
+});
+
+await execute({ sendAndConfirm: true });
+```
+
+`fixedSide: "a"` указывает SDK, что вы предоставили точное значение `amountInA`, а `amountInB` должно быть не более `maxAnotherAmount`. Пропорциональная математика считается от балансов хранилищ минус накопленный PnL — никакого on-book компонента, который нужно было бы сначала урегулировать, больше нет.
+
+## Удаление ликвидности
+
+```ts
+const lpAmount = new BN(50_000);               // LP для сжигания
+
+const { execute } = await raydium.liquidity.removeLiquidity({
+  poolInfo,
+  poolKeys,
+  lpAmount,
+  baseAmountMin: new BN(0),
+  quoteAmountMin: new BN(0),
+  txVersion: TxVersion.V0,
+});
+
+await execute({ sendAndConfirm: true });
+```
+
+Минимумы проскальзывания защищают от изменения состояния пула между вашей предварительной котировкой и временем приземления.
+
+## Настройка compute-unit / priority fee
+
+После удаления OpenBook своп AMM v4 больше не проверяет никакое состояние маркета, поэтому V1 `SwapBaseIn` заметно дешевле, чем раньше, — а `SwapBaseInV2` (8 учётных записей, без заглушек маркета) ещё дешевле. Измеряйте свой собственный путь, а не планируйте бюджет по историческим цифрам, и всегда передавайте явный лимит compute-unit:
+
+```ts
+const { execute, transaction } = await raydium.liquidity.swap({
+  /* ...params... */
+  computeBudgetConfig: {
+    units: 400_000,
+    microLamports: 50_000,       // priority fee per CU
+  },
+});
+```
+
+Если вы опустите `computeBudgetConfig`, SDK может всё ещё использовать своё собственное значение по умолчанию; проверьте возвращённую `transaction` для подтверждения. См. [`integration-guides/priority-fee-tuning`](/docs/i18n/ru/integration-guides/priority-fee-tuning).
+
+## Прямой Rust CPI
+
+Если вы должны вызвать CPI в AMM v4 из вашей собственной программы Anchor, вам нужно будет смоделировать список учетных записей `SwapBaseIn` дословно. Минимальный набросок:
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::solana_program::instruction::Instruction;
+
+const AMM_V4_PROGRAM_ID: Pubkey = pubkey!("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8");
+
+#[derive(Accounts)]
+pub struct ProxyAmmV4Swap<'info> {
+    /// CHECK:
+    pub token_program: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub amm:          UncheckedAccount<'info>,
+    /// CHECK:
+    pub amm_authority: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub amm_open_orders: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub amm_target_orders: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub pool_coin_token_account: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub pool_pc_token_account: UncheckedAccount<'info>,
+    /// CHECK:
+    pub market_program: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub market: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub market_bids: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub market_asks: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub market_event_queue: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub market_coin_vault: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub market_pc_vault: UncheckedAccount<'info>,
+    /// CHECK:
+    pub market_vault_signer: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub user_source: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub user_dest: UncheckedAccount<'info>,
+    pub user_owner: Signer<'info>,
+}
+
+pub fn proxy_swap(
+    ctx: Context<ProxyAmmV4Swap>,
+    amount_in: u64,
+    minimum_amount_out: u64,
+) -> Result<()> {
+    // Дискриминатор инструкции для SwapBaseIn — 9 на AMM v4.
+    let mut data = vec![9u8];
+    data.extend_from_slice(&amount_in.to_le_bytes());
+    data.extend_from_slice(&minimum_amount_out.to_le_bytes());
+
+    let ix = Instruction {
+        program_id: AMM_V4_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new_readonly(ctx.accounts.token_program.key(), false),
+            AccountMeta::new(ctx.accounts.amm.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.amm_authority.key(), false),
+            AccountMeta::new(ctx.accounts.amm_open_orders.key(), false),
+            AccountMeta::new(ctx.accounts.amm_target_orders.key(), false),
+            AccountMeta::new(ctx.accounts.pool_coin_token_account.key(), false),
+            AccountMeta::new(ctx.accounts.pool_pc_token_account.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.market_program.key(), false),
+            AccountMeta::new(ctx.accounts.market.key(), false),
+            AccountMeta::new(ctx.accounts.market_bids.key(), false),
+            AccountMeta::new(ctx.accounts.market_asks.key(), false),
+            AccountMeta::new(ctx.accounts.market_event_queue.key(), false),
+            AccountMeta::new(ctx.accounts.market_coin_vault.key(), false),
+            AccountMeta::new(ctx.accounts.market_pc_vault.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.market_vault_signer.key(), false),
+            AccountMeta::new(ctx.accounts.user_source.key(), false),
+            AccountMeta::new(ctx.accounts.user_dest.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.user_owner.key(), true),
+        ],
+        data,
+    };
+    invoke_signed(&ix, &ctx.accounts.to_account_infos(), &[])?;
+    Ok(())
+}
+```
+
+AMM v4 не поставляется с крейтом Anchor для CPI. Набросок выше использует вручную построенную `Instruction`.
+
+<Note>
+  Набросок CPI выше использует **устаревший макет v1 `SwapBaseIn`** (тег 9, 17 учетных записей) для чтения/воспроизведения существующих транзакций. После обновления в июле 2026 г. учетные записи маркета принимаются, но игнорируются. **Для нового кода предпочитайте `SwapBaseInV2` / `SwapBaseOutV2`** (теги 16 / 17), которые полностью исключают учетные записи маркета (и `amm_open_orders`) — передавайте только 8 учетных записей: `token_program`, `amm`, `amm_authority`, два хранилища пула, две учетные записи токенов пользователя и `user_owner`.
+</Note>
+
+## Подводные камни
+
+- **Неправильное количество учетных записей на свопах v1.** Устаревшие `SwapBaseIn` / `SwapBaseOut` по-прежнему требуют полный список из 17 учетных записей (или 18) — несоответствие *количества* приводит к откату с `WrongAccountsNumber`. *Содержимое* учетных записей маркета больше не проверяется, но вы все равно должны занять их слоты. Предпочитайте точки входа V2, чтобы избежать этого.
+- **Чтение сырых балансов хранилища.** Резервы теперь только в хранилище; вычтите накопленный PnL (`need_take_pnl_*`). Котировка SDK или `api-v3.raydium.io/pools/info/ids` справляется с этим за вас.
+- **Вызов удаленных инструкций.** `MonitorStep`, `MigrateToOpenBook`, `WithdrawSrm`, `SimulateInfo`, `AdminCancelOrders` и устаревшие `Initialize` / `PreInitialize` теперь откатываются. Используйте `Initialize2` для создания пула; нет крана для вызова.
+- **Минты Token-2022.** Не поддерживаются. Пул AMM v4 не может быть создан для минта Token-2022; любая пара Token-2022 должна быть на CPMM или CLMM.
+
+## Что дальше
+
+- [`products/amm-v4/instructions`](/docs/i18n/ru/products/amm-v4/instructions) — поверхность уровня инструкций за этими примерами.
+- [`user-flows/migrate-amm-v4-to-cpmm`](/docs/i18n/ru/user-flows/migrate-amm-v4-to-cpmm) — если вы LP, рассматривающий миграцию.
+- [`integration-guides/priority-fee-tuning`](/docs/i18n/ru/integration-guides/priority-fee-tuning) — размер priority-fee для тяжелых свопов AMM v4.
+
+Источники:
+
+- [Raydium SDK v2](https://github.com/raydium-io/raydium-sdk-V2)
+- [Программа Raydium AMM](https://github.com/raydium-io/raydium-amm)

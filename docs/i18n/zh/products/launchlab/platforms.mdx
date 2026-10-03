@@ -1,0 +1,124 @@
+---
+title: "LaunchLab 平台"
+description: "第三方如何在 LaunchLab 上注册平台 PDA，提供自有品牌的代币发行体验、设置平台费用，以及配置迁移后的参数。"
+---
+
+<Info>
+  **本页内容由 AI 自动翻译，所有内容以英文版本为准。**
+
+  [查看英文版 →](/docs/en/products/launchlab/platforms)
+</Info>
+
+<Info>
+  LaunchLab 中的**平台**是建立在 Raydium LaunchLab 程序之上的第三方发行环境。平台可以进行自有品牌化、收取自己的费用，并为在其下发行的每个代币配置迁移后的参数——无需运行单独的链上程序。Raydium 自己的发行 UI 只是众多平台中的一个。
+</Info>
+
+## 平台存在的意义
+
+Raydium 希望 LaunchLab 成为一个**共享原语**，而不是单一品牌产品。平台 PDA 系统让生态、工具提供商、社区和 meme 团队能够提供精选或品牌化的发行体验，所有这些都最终结算到同一个底层 LaunchLab 联合曲线程序和 CPMM 迁移后的流动性池。
+
+你可能在实际应用中看到的平台示例：
+
+- **Raydium 自有的 LaunchLab UI**（raydium.io/launchpad）——参考实现。
+- **合作伙伴发行平台**——已注册自己的平台 PDA 来品牌化发行体验的第三方。
+- **小众平台**——例如，仅发行与特定主题相关的 memecoin 的社区专属平台，通过自定义费用分享为其金库提供资金。
+
+所有这些代币仍然存在于同一个 LaunchLab 程序上，毕业到同一个 CPMM 程序，并且可以由相同的聚合器路由。
+
+## 平台 PDA
+
+每个平台由存储在 LaunchLab 程序中的平台 PDA 表示。字段包括：
+
+| 字段 | 描述 |
+|---|---|
+| `platform_key` | 平台的种子/标识符，用于派生平台 PDA。 |
+| `platform_fee_destination` | 接收平台在迁移前后交易费用分成的账户。 |
+| `platform_fee_bps` | 迁移前交换的平台费用分成（因平台而异）。 |
+| `creator_fee_rate` | 联合曲线交易期间的创建者费率。 |
+| `platform_scale`、`creator_scale`、`burn_scale` | 存储的 LP 规模。升级前，创建者规模流向创建者费用密钥。对于之后执行的迁移，前两者合并为平台的锁定 LP 份额；`burn_scale` 被销毁。 |
+| `cp_config_id` | 如果迁移后目标是 CPMM，使用哪个 `AmmConfig`——选择费用等级。 |
+| `restrict_global_config` | 发行是否必须为选定的 `GlobalConfig` 提供平台创建的允许 PDA。 |
+| `name`、`description`、`image_url` | 钱包和支持平台品牌化的 UI 使用的显示元数据。 |
+| `tokens_launched` | 在此平台下创建的代币计数器或链上索引。 |
+
+确切的字段名称在 LaunchLab IDL（[`sdk-api/anchor-idl`](/docs/i18n/zh/sdk-api/anchor-idl)）中。上表是描述性概览。
+
+## 平台可以控制的内容
+
+**费用捕获：**
+
+- 每次迁移前买卖的**平台费用分成**。
+- **迁移后分成**——在 2026-08-17 升级之前，创建者规模产生单独的创建者费用密钥。对于之后执行的迁移，`platform_scale + creator_scale` 成为一个平台拥有的锁定 LP 头寸，`burn_scale` 被销毁。
+
+**迁移后目标：**
+
+- **CPMM**，通过 `cp_config_id` 选择 `AmmConfig`。所有新初始化的发行都使用 CPMM。
+- **AMM v4** 仅作为使用旧迁移类型创建的现有发行状态的毕业路径。
+
+**用户体验：**
+
+- Raydium 应用和任何钱包/浏览器使用的**品牌元数据**，用于展示 LaunchLab 代币。
+- **发行页面自定义**——托管自己前端的平台可以过滤代币，仅显示自己平台的发行。
+
+## 平台无法控制的内容
+
+- **联合曲线数学。** 曲线形状（逻辑、指数等）是 LaunchLab 程序本身的一部分。平台从支持的曲线中选择；它们无法添加任意自定义曲线。
+- **迁移阈值逻辑。** 触发毕业到 CPMM 的条件由程序强制执行。
+- **核心安全/审计态势。** 每个平台都继承 LaunchLab 的审计历史；恶意平台无法通过修改程序来绕过它。
+
+## 注册平台
+
+LaunchLab 程序公开了 `create_platform` 指令（确切名称来自 IDL）。调用者传递：
+
+- 将派生平台 PDA 的种子。
+- 费用目标账户。
+- 所需的费用 bps（受程序级别上限约束）。
+- 迁移后配置（如适用，CPMM `AmmConfig` ID）。
+- 品牌元数据。
+
+平台 PDA 的租金由创建者支付。创建后，平台权限可以更新品牌和某些费用参数；结构参数（迁移目标程序）通常不能。
+
+有关当前 LaunchLab IDL 中确切的指令签名，请参阅 [`products/launchlab/instructions`](/docs/i18n/zh/products/launchlab/instructions)。
+
+## 经济互动
+
+LaunchLab 联合曲线上的单次交换大致分配价值如下（确切比率由平台设置）：
+
+```
+买方支付：                   100 SOL
+协议费（LaunchLab）：        – 小百分比
+平台费：                     – platform_fee_bps%
+创建者费（迁移前）：         – creator_fee_bps%（如果启用）
+剩余（流向曲线）：           ~ 其余部分
+```
+
+迁移后，LP 代币有两个有效目标：
+
+```
+毕业时铸造的 LP 代币：  100%
+  → 销毁：                 burnScale
+  → 平台费用密钥：         platformScale + creatorScale
+```
+
+平台费用密钥代表可索取的 LP 费用权利，但无法提取锁定的流动性。销毁的 LP 没有费用密钥持有者。
+
+## 限制全局配置
+
+平台管理员可以设置 `restrict_global_config = 1` 并为每个接受的 `GlobalConfig` 创建一个 `PlatformAllowConfig`。新的发行交易必须附加匹配的允许 PDA。禁用限制时，平台接受通过程序其他验证的任何配置。
+
+## 集成商注意事项
+
+- **按平台列出代币。** 使用 API 池信息/mint 端点，带有 `platform` 过滤器（如支持）来仅列出在特定平台 PDA 下发行的代币。
+- **品牌显示。** 如果你构建钱包或浏览器来展示 LaunchLab 代币，从平台 PDA 读取平台的名称/图像 URL 比为每个代币显示"LaunchLab"提供更好的用户体验。
+- **费用计算。** 每个联合曲线报价必须考虑平台费用以及协议和创建者费用。当提供平台 PDA 时，SDK 的报价助手会自动执行此操作。
+
+## 后续步骤
+
+- [`products/launchlab/overview`](/docs/i18n/zh/products/launchlab/overview) —— LaunchLab 程序模型。
+- [`products/launchlab/creator-fees`](/docs/i18n/zh/products/launchlab/creator-fees) —— 创建者和平台费用在迁移后如何交互。
+- [`user-flows/burn-and-earn`](/docs/i18n/zh/user-flows/burn-and-earn) —— 迁移后 LP 使用的锁定机制。
+
+来源：
+
+- Raydium SDK v2 中捆绑的 LaunchLab 程序 IDL：[`raydium-io/raydium-sdk-V2`](https://github.com/raydium-io/raydium-sdk-V2) 下的 `src/raydium/launchpad/`。
+- `api-v3.raydium.io/launchlab/platforms` 端点（如可用）。

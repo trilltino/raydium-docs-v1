@@ -1,0 +1,79 @@
+---
+title: "LP ücret dağıtımı"
+description: "LaunchLab'ın platform ve yaratıcı ölçeklerini platform tarafından sahip olunan kilitli LP'ye nasıl birleştirdiği ve kalan CPMM LP tokenlerini nasıl yaktığı."
+---
+
+<Info>
+  **Bu sayfa yapay zekâ tarafından otomatik olarak çevrilmiştir. İngilizce sürüm esas alınır.**
+
+  [İngilizce sürümü görüntüle →](/docs/en/products/launchlab/tips-and-gotchas/lp-fee-distribution)
+</Info>
+
+Bir LaunchLab tokeni CPMM'ye geçiş yaptığında, pool LP tokenlerini basılır. 2026-08-17 güncellemesinden önce, `creatorScale` token yaratıcısı için ayrı olarak kilitleniyordu. Güncelleme sonrasında yürütülen geçişlerde, `migrateCpLockNftScale` hala `1_000_000`'e toplanan üç alan içerir, ancak çalışma zamanı yalnızca iki hedef üretir.
+
+## Etkili bölünme
+
+| Alan | Güncellenmiş davranış |
+|---|---|
+| `platformScale` | Platform tarafından sahip olunan kilitli LP payına dahil edilir. |
+| `creatorScale` | Güncelleme öncesinde, yaratıcıya ait bir Ücret Anahtarı basılırdı. Güncelleme sonrasında, platform tarafından sahip olunan kilitli LP payına dahil edilir. |
+| `burnScale` | Kalıcı olarak yakılır. Bu payı temsil eden hiçbir Ücret Anahtarı yoktur. |
+
+```text
+effectivePlatformScale = platformScale + creatorScale
+platformLp = floor(totalLp × effectivePlatformScale / 1_000_000)
+burnLp = totalLp − platformLp
+```
+
+`burnScale` sıfır olduğunda, platform tüm LP birimlerini alır. `effectivePlatformScale` sıfır olduğunda, tüm LP yakılır ve hiçbir platform Ücret Anahtarı oluşturulmaz.
+
+## Örnekler
+
+```ts
+// @raydium-io/raydium-sdk-v2@0.2.64-alpha · mainnet-beta · verified 2026-08-13
+// %90 platform tarafından sahip olunan kilitli LP, %10 yakılmış.
+migrateCpLockNftScale: {
+  platformScale: new BN(900_000),
+  creatorScale: new BN(0),
+  burnScale: new BN(100_000),
+}
+
+// %100 platform tarafından sahip olunan kilitli LP.
+migrateCpLockNftScale: {
+  platformScale: new BN(1_000_000),
+  creatorScale: new BN(0),
+  burnScale: new BN(0),
+}
+
+// %100 yakılmış; Ücret Anahtarı yok.
+migrateCpLockNftScale: {
+  platformScale: new BN(0),
+  creatorScale: new BN(0),
+  burnScale: new BN(1_000_000),
+}
+
+// A stored value you may still READ off a pre-2026-08-17 config — not settable now.
+// Its 500_000 creator share is folded into the platform's locked LP at migration:
+// { platformScale: 400_000, creatorScale: 500_000, burnScale: 100_000 }
+```
+
+## CPMM yaratıcı ücretleriyle ilişkisi
+
+Ölçek alanları yalnızca LP sahipliğini kontrol eder. Swap ücret oranlarını ayarlamaz veya CPMM yaratıcı ücretinin alıcısını tanımlamaz. `cpConfigId` CPMM `AmmConfig`'ini seçer; `platformCpCreator` CPMM pool'unun orijinal başlatma yaratıcısını mı yoksa platform tarafından seçilen bir adresi mi kaydettiğini belirler.
+
+## Bölünmeyi güncelleme
+
+Bir platformu güncellemeden önce:
+
+- Üç değerin tam olarak `1_000_000`'e toplandığını doğrulayın.
+- `platformScale + creatorScale`'i etkili platform payı olarak sunun.
+- `creatorScale`'e dayalı bir yaratıcı Ücret Anahtarı vaat etmeyin.
+- Güncelleme öncesinde tamamlanan geçişlerin gösterdiği yaratıcı Ücret Anahtarı sahipliğini koruyun; bu kayıtlar yeniden yazılmaz.
+- Güncellenmiş yapılandırma kullanan gelecekteki başlatmalardan önce değişikliği açıklayın.
+
+## İlgili kaynaklar
+
+- [Platform yapılandırması](/docs/i18n/tr/products/launchlab/platform-config)
+- [Yakma ve Kazanma](/docs/i18n/tr/user-flows/burn-and-earn)
+- [LaunchLab ve CPMM ücret referansı](/docs/i18n/tr/products/launchlab/tips-and-gotchas/launchlab-cpmm-fee-reference)
+- [LaunchLab yaratıcı ücretleri](/docs/i18n/tr/products/launchlab/creator-fees)

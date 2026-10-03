@@ -1,0 +1,60 @@
+---
+title: "LaunchLab-Plattformen"
+description: "Wie Konfigurationen von Drittanbieter-Plattformen LaunchLab-Launches, Gebühren, Branding und Post-Migration-Einstellungen beeinflussen."
+---
+
+<Info>
+  **Diese Seite wurde mit KI automatisch übersetzt. Maßgeblich ist stets die englische Version.**
+
+  [Englische Version ansehen →](/docs/en/user-flows/launchlab-platforms)
+</Info>
+
+<Info>
+  Eine LaunchLab-Plattform ist eine On-Chain-Konfiguration, die von einer Launch-Oberfläche oder Community verwendet wird. Plattformeinstellungen können Gebühren, Branding, Creator-Fee-Unterstützung und das Verhalten des Liquiditätspools nach der Migration beeinflussen.
+</Info>
+
+LaunchLab unterstützt Umgebungen von Drittanbieter-Launches durch Platform PDAs. Eine Plattform kann ihre eigene Branded-Token-Launch-Erfahrung anbieten und dabei die LaunchLab-Programminfrastruktur und die Raydium-Pool-Migration nutzen.
+
+## Was eine Plattform kontrollieren kann
+
+| Einstellung | Warum es wichtig ist |
+|---|---|
+| Creator-Gebühren | Legt die Creator-Gebühr der Bonding-Curve fest und kann den CPMM-Creator-of-Record auswählen. |
+| Plattformgebühren | Bestimmt, wohin die Plattform-Gebühreneinnahmen fließen. |
+| Branding-Metadaten | Gibt der Plattform einen Namen, eine Beschreibung und ein Logo, die in App-Oberflächen angezeigt werden können. |
+| Launch-Gruppierung | Ermöglicht es der UI, Tokens anzuzeigen, die unter derselben Plattform gestartet wurden. |
+| Post-Migration-Pool-Einstellungen | Kann die CPMM-Gebührenkonfiguration definieren, wenn die Plattform Launches zu CPMM migriert. |
+| LP-Verteilung | Legt den verbrannten Anteil und den von der Plattform gehaltenen gesperrten-LP-Anteil fest. Die beibehaltene Creator-Skalierung wird in den Plattformanteil kombiniert. |
+| Global Config Allowlist | Kann Launches auf `GlobalConfig`-Konten beschränken, die explizit vom Plattform-Admin genehmigt wurden. |
+
+## Was Creator überprüfen sollten
+
+Bevor Sie unter einer Plattform starten, bestätigen Sie:
+
+- Welche Wallet Plattformgebühren erhält.
+- Ob Creator-Gebühren aktiviert sind.
+- Welche CPMM-Gebührenkonfiguration und welcher Creator-of-Record die Plattform nach der Graduation verwendet.
+- Wie LP-Tokens nach der Graduation aufgeteilt werden.
+- Ob eine Platform Fee Key NFT geprägt wird.
+- Ob die Plattform ihre eigenen Bedingungen, Richtlinien oder Zulassungsregeln hat.
+
+<Warning>
+  Plattformeinstellungen können die Creator-Ökonomie und Benutzererwartungen erheblich verändern. Überprüfen Sie diese vor dem Signieren der Launch-Transaktion. Diese Seite erklärt nur die Mechanik und ist keine rechtliche, finanzielle oder Anlageberatung.
+</Warning>
+
+## Was Trader überprüfen sollten
+
+Beim Kauf eines LaunchLab-Tokens kann die Plattform den Gebührenpfad und die Liquiditätsbehandlung nach der Migration beeinflussen. Vor dem Trading:
+
+- Überprüfen Sie die Plattform und Launch-Einstellungen des Tokens.
+- Bestätigen Sie die CPMM-Gebührenstufe, falls die UI diese anzeigt.
+- Überprüfen Sie, ob LP verbrannt, gesperrt oder zugewiesen wird.
+- Verifizieren Sie die Token-Mint von der Token-Seite, nicht nur von Social-Media-Text.
+
+## Verweise
+
+- [LaunchLab-Übersicht](/docs/i18n/de/user-flows/launchlab-overview) — Benutzer-seitiger Launch-Lebenszyklus.
+- [Erstellen eines LaunchLab-Tokens](/docs/i18n/de/user-flows/creating-a-launchlab-token) — Creator-Setup-Flow.
+- [Wie Creator-Gebühren funktionieren](/docs/i18n/de/user-flows/how-creator-fees-work) — Creator-Fee-Pfade versus Platform Fee Key-Rechte.
+- [LaunchLab-Plattformkonfiguration](/docs/i18n/de/products/launchlab/platform-config) — Technische Konfigurationsreferenz.
+- [LaunchLab-Plattformen-Referenz](/docs/i18n/de/products/launchlab/platforms) — Protokoll-Level-Plattformdetails.

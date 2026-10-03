@@ -1,0 +1,72 @@
+---
+title: "Comisiones del creador en LaunchLab"
+description: "Cómo se acumulan las comisiones del creador antes de la graduación y a través del creador del pool CPMM después de la graduación, separadas del LP bloqueado propiedad de la plataforma."
+---
+
+<Info>
+  **Esta página fue traducida automáticamente por IA. La versión en inglés es la fuente autorizada.**
+
+  [Ver versión en inglés →](/docs/en/products/launchlab/creator-fees)
+</Info>
+
+<Info>
+  Los ingresos del creador en LaunchLab pueden provenir de dos contadores de comisiones: la bóveda de comisión del creador de la curva de vinculación antes de la graduación y las comisiones del creador de CPMM después de la graduación. Antes de la actualización del 2026-08-17, `creator_scale` también producía una Fee Key de LP propiedad del creador. Las migraciones ejecutadas después de la actualización asignan esa participación de LP bloqueada a la plataforma en su lugar.
+</Info>
+
+## Pre-migración: acumulación directa de comisiones
+
+Mientras un token se negocia en la curva de vinculación, cada compra y venta puede cobrar un componente de comisión del creador. Se acumula en una bóveda por creador y por token de cotización.
+
+- La comisión se denomina en el token de cotización.
+- `PlatformConfig.creator_fee_rate` establece la tasa.
+- El creador puede reclamar a través de `ClaimCreatorFee` antes o después de la graduación.
+- La graduación detiene la acumulación nueva en la curva de vinculación pero no borra un saldo no reclamado.
+
+## Post-migración: comisiones del creador en CPMM
+
+Cada nuevo lanzamiento se gradúa a CPMM. El `AmmConfig.creator_fee_rate` de CPMM seleccionado y `PoolState.creator_fee_on` determinan si las comisiones del creador se acumulan en los swaps de CPMM.
+
+El creador del pool CPMM es:
+
+- el creador del lanzamiento original cuando `PlatformConfig.platform_cp_creator` es la clave pública predeterminada; o
+- el `platform_cp_creator` configurado en caso contrario.
+
+Ese creador de CPMM registrado posee los contadores de comisión del creador. Pueden usar la instrucción de colección firmada por el creador, y cualquier pagador puede activar la ruta sin permisos restringida por destino que paga las ATAs canónicas del creador. Consulta [`products/cpmm/fees`](/docs/i18n/es/products/cpmm/fees).
+
+## El LP bloqueado es un derecho separado de la plataforma
+
+En la migración de CPMM, LaunchLab aún valida:
+
+```text
+platform_scale + creator_scale + burn_scale = 1_000_000
+```
+
+Antes de la actualización del 2026-08-17, LaunchLab bloqueaba `creator_scale` por separado y acuñaba la Fee Key correspondiente al creador del token. Para migraciones ejecutadas después de la actualización, combina `platform_scale + creator_scale`. Si la participación combinada es distinta de cero, el programa LP-Lock crea una Fee Key NFT para `platform_nft_wallet`. El resto de `burn_scale` se quema.
+
+El campo `creator_scale` retenido no es, por lo tanto, una corriente de ingresos del creador para migraciones ejecutadas bajo el programa actualizado. Contribuye a la cantidad de LP bloqueado de la plataforma. Para pools históricos, lee los registros reales de Fee Key y liquidez bloqueada en lugar de inferir la propiedad de la regla actual.
+
+Las Fee Keys creadas por migraciones completadas antes de la actualización no se reasignan ni se modifican. Un lanzamiento creado antes de la actualización pero migrado después utiliza la nueva distribución propiedad de la plataforma.
+
+## Rutas de reclamación
+
+| Ingresos | Beneficiario | Ruta de reclamación |
+|---|---|---|
+| Comisión del creador de la curva de vinculación | Creador del lanzamiento original | LaunchLab `ClaimCreatorFee` |
+| Comisión del creador de CPMM | `pool_creator` de CPMM | Colección firmada por el creador de CPMM o sin permisos |
+| Comisiones de negociación de LP bloqueado, migración pre-actualización | Titular actual de la Fee Key del creador o plataforma creada en esa migración | Flujo de cosecha LP-Lock / Burn & Earn |
+| Comisiones de negociación de LP bloqueado, migración actualizada | Titular actual de la Fee Key de la plataforma | Flujo de cosecha LP-Lock / Burn & Earn |
+
+## Lista de verificación del integrador
+
+- Lee `platform_cp_creator` para identificar el beneficiario de la comisión del creador de CPMM post-graduación.
+- Para migraciones actualizadas, no muestres `creator_scale` como un porcentaje de Fee Key del creador. Para migraciones históricas, lee el registro real de Fee Key.
+- Rastrea la bóveda de la curva de vinculación y los contadores de comisión del creador de CPMM por separado.
+- Trata la Fee Key de la plataforma como un derecho de comisión de LP, no como una credencial de comisión del creador de CPMM.
+- Actualiza el IDL implementado antes de habilitar el constructor de migración actualizado.
+
+## Referencias
+
+- [`products/launchlab/platform-config`](/docs/i18n/es/products/launchlab/platform-config) — campos de escala y creador del registro.
+- [`products/launchlab/tips-and-gotchas/lp-fee-distribution`](/docs/i18n/es/products/launchlab/tips-and-gotchas/lp-fee-distribution) — división exacta de LP.
+- [`products/cpmm/fees`](/docs/i18n/es/products/cpmm/fees) — acumulación y colección de comisiones del creador de CPMM.
+- [`user-flows/burn-and-earn`](/docs/i18n/es/user-flows/burn-and-earn) — mecánica de Fee Key.

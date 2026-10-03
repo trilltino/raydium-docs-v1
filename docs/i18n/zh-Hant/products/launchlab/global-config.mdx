@@ -1,0 +1,231 @@
+---
+title: "LaunchLab GlobalConfig"
+description: "協議層級的設定帳戶，約束每次 LaunchLab 啟動——費率、供應量下限、鎖定率上限、控制畢業的遷移錢包，以及每條曲線的索引方案。"
+---
+
+<Info>
+  **本頁內容由 AI 自動翻譯，所有內容以英文版本為準。**
+
+  [查看英文版 →](/docs/en/products/launchlab/global-config)
+</Info>
+
+<Info>
+  `GlobalConfig` 是**協議層級**的設定帳戶。可以有多個——以 `(curve_type, index)` 為鍵——每次啟動在 `Initialize` 時恰好選擇一個。所選 `GlobalConfig` 上的值隨後成為該啟動參數的硬限制。如需平台層級的自訂（每平台費率、允許的曲線形狀、畢業時的 NFT 分割），請參閱 [`products/launchlab/platform-config`](/docs/i18n/zh-Hant/products/launchlab/platform-config)。
+</Info>
+
+## 概述
+
+`GlobalConfig` 是一個按 `(curve_type, index)` 的單例 PDA，它固定了每次啟動必須遵守的協議端規則：
+
+- 允許的結合曲線類型（`curve_type`）。
+- 曲線在每次買賣時收取的交易費率。
+- 畢業時收取的遷移費。
+- 供應量、鎖定率、賣出率和遷移率的下限。
+- 報價幣種（通常是 wrapped SOL 或 USDC）——用戶購買時使用的資產。
+- 四個協議端錢包：協議費所有者、遷移費所有者，以及為 CPMM 和舊版 AMM v4 畢業保留的兩個遷移控制錢包。
+
+`GlobalConfig` 帳戶可由 LaunchLab 程式管理員或委派的建立設定權限**建立與更新**；任何其他簽署者都會得到 `InvalidOwner`（`6001`）。請參閱 [`reference/program-addresses`](/docs/i18n/zh-Hant/reference/program-addresses) 以了解規範權限。
+
+## 佈局
+
+```rust
+// states/config.rs
+pub const GLOBAL_CONFIG_SEED: &str = "global_config";
+
+#[account]
+pub struct GlobalConfig {
+    pub epoch:                   u64,         // recent_epoch tracker
+    pub curve_type:              u8,          // 0 = ConstantProduct, 1 = FixedPrice, 2 = LinearPrice
+    pub index:                   u16,         // discriminator within a curve_type
+    pub migrate_fee:             u64,         // SOL paid on graduation
+    pub trade_fee_rate:          u64,         // 1/1_000_000 of volume
+    pub max_share_fee_rate:      u64,         // 100 bps cap on the per-trade referral share fee
+    pub min_base_supply:         u64,         // floor on Initialize supply (no decimals)
+    pub max_lock_rate:           u64,         // ceiling on vesting locked / supply
+    pub min_base_sell_rate:      u64,         // floor on base_supply_graduation / supply
+    pub min_base_migrate_rate:   u64,         // floor on tokens that seed the post-graduation pool
+    pub min_quote_fund_raising:  u64,         // floor on quote_reserve_target (with decimals)
+    pub quote_mint:              Pubkey,
+    pub protocol_fee_owner:      Pubkey,      // claims protocol fees via CollectFee
+    pub migrate_fee_owner:       Pubkey,      // claims migration fees via CollectMigrateFee
+    pub migrate_to_amm_wallet:   Pubkey,      // can sign MigrateToAmm
+    pub migrate_to_cpswap_wallet:Pubkey,      // can sign MigrateToCpswap
+    pub padding_alignment:       [u8; 8],
+    pub padding:                 [u64; 15],
+}
+```
+
+PDA 推導：
+
+```ts
+const [globalConfig] = PublicKey.findProgramAddressSync(
+  [
+    Buffer.from("global_config"),
+    Buffer.from(quoteMint.toBytes()),
+    Buffer.from([curveType]),
+    u16ToBytes(index),
+  ],
+  LAUNCHLAB_PROGRAM_ID,
+);
+```
+
+（簽署前請從鏈上帳戶驗證確切的種子順序——程式的 `create_config` 指令是真實來源。）
+
+## 欄位語義
+
+### `curve_type` 和 `index`
+
+這兩個欄位唯一地鍵定一個 `GlobalConfig`。每個 `(curve_type, index)` 對應一個 `GlobalConfig`：
+
+- `curve_type = 0` — 常數乘積虛擬儲備曲線。預設且最常用。
+- `curve_type = 1` — 固定價格曲線。
+- `curve_type = 2` — 線性價格曲線。
+
+`index` 是一個 `u16`，允許管理員為每種曲線類型發佈多個設定（例如，一個費率更緊，一個最小報價籌集更高）。在 `Initialize` 時，啟動提供一個 `(curve_type, index)` 對，程式載入匹配的 `GlobalConfig`。
+
+### 費用
+
+- `trade_fee_rate` — 以交易量的 `1/1_000_000` 計價。應用於曲線上的每次買賣。`protocol_fee_owner` 通過 `CollectFee` 領取其份額。
+- `migrate_fee` — 在畢業時一次性收取的固定費用，以 lamports（或報價單位，取決於設定）計價。由 `migrate_fee_owner` 通過 `CollectMigrateFee` 領取。
+- `max_share_fee_rate` — 初始化為 `10_000`（100 bps）。限制 `BuyExactIn`、`BuyExactOut`、`SellExactIn` 和 `SellExactOut` 接受的 `share_fee_rate` **參數**——在交易期間直接支付給份額接收者的推薦費。它**不**約束 `PlatformConfig.fee_rate`；該費率有自己的上限，詳見 [`platform-config`](/docs/i18n/zh-Hant/products/launchlab/platform-config#rate-caps)。`CreateConfig` 在初始化時強制執行 `trade_fee_rate + max_share_fee_rate < RATE_DENOMINATOR_VALUE`。在更新路徑上，只有 `param = 6`（`max_share_fee_rate`）會重新檢查該總和；`param = 0`（`trade_fee_rate`）只斷言 `trade_fee_rate < RATE_DENOMINATOR_VALUE`，因此單獨提高交易費率可能讓這一對超出合併上限。請按照能維持該不變式的順序設定它們。
+
+### 供應量和費率下限
+
+這些下限約束啟動在 `Initialize` 時可以選擇的曲線形狀參數。如果建立者的 `CurveParams` 違反任何下限，`Initialize` 將以 `InvalidInput` 回退。
+
+- `min_base_supply` — 曲線可以聲明的最小 `supply`（無小數）。預設為 `10_000_000`。
+- `max_lock_rate` — 以 `1/1_000_000` 計價；預設 `300_000`（30%）。通過 `total_locked_amount <= supply * max_lock_rate / 1_000_000` 約束質押。
+- `min_base_sell_rate` — 以 `1/1_000_000` 計價；預設 `200_000`（20%）。從下方約束 `base_supply_graduation / supply`。
+- `min_base_migrate_rate` — 以 `1/1_000_000` 計價；預設 `200_000`（20%）。約束留下來為畢業後池提供種子的代幣數量。
+- `min_quote_fund_raising` — 啟動可以聲明的最小 `quote_reserve_target`（含小數）。預設為報價幣種的 `30_000_000_000` 單位。
+
+### 報價幣種和協議錢包
+
+- `quote_mint` — 用戶購買時使用的資產。大多數啟動使用 wrapped SOL（`So111…112`）或 USDC（`EPjF…Dt1v`）。一個 `GlobalConfig` 綁定到一個報價幣種；需要不同報價的啟動目標是不同的 `(curve_type, index)`。幣種可由 SPL Token 程式或 Token-2022 擁有——見下文。
+- `protocol_fee_owner` — 簽署 `CollectFee` 並領取綁定到此設定的每次啟動上累積的協議費的公鑰。儲存在鏈上；管理員可通過 `UpdateConfig` 輪換它。
+- `migrate_fee_owner` — 簽署 `CollectMigrateFee` 的公鑰。
+
+#### Token-2022 報價幣種
+
+`CreateConfig` 接受 Token-2022 `quote_mint`，綁定到此類設定的池從頭到尾都使用它：報價金庫、兩個費用金庫和份額費接收者的代幣帳戶都在 Token-2022 上建立，交換指令考慮報價端的 `TransferFeeConfig`。`PoolState.token_program_flag` 位 1 按啟動記錄選擇。
+
+在依賴其中一個之前，有兩個值得了解的限制：
+
+- **已棄用的 `Initialize` 無法針對它啟動。** 只有 `InitializeV2` 和 `InitializeWithToken2022` 接受 Token-2022 報價程式。請參閱 [`instructions`](/docs/i18n/zh-Hant/products/launchlab/instructions#instruction-inventory)。
+- **不應用擴展允許清單。** 與 CPMM 和 CLMM 不同，LaunchLab 不篩選報價幣種的擴展——`CreateConfig` 按原樣接受幣種，因此唯一的門檻是管理員對哪些幣種綁定到設定的自由裁量權。程式的 `NoSupportExtension` 檢查僅涵蓋 LaunchLab 自己建立的 Token-2022 基礎幣種。將綁定視為高信任操作；請參閱 [`reference/token-2022-support`](/docs/i18n/zh-Hant/reference/token-2022-support#launchlab-quote-mints)。
+
+### 遷移錢包
+
+兩個儲存的畢業錢包需要不同的簽署者：
+
+- `migrate_to_amm_wallet` — 為現有舊版啟動簽署 `MigrateToAmm`，其儲存的 `migrate_type = 0`。
+- `migrate_to_cpswap_wallet` — 簽署 `MigrateToCpswap`。每個新初始化的啟動都使用此路徑。
+
+這些通常由 Raydium 運營的畢業 crank 持有，因此畢業在曲線達到閾值後不久進行，而不是等待建立者呼叫它。
+
+### 平台端允許清單
+
+`GlobalConfig` 不再有 `requires_platform_auth`。其前一個位元組是填充，因此帳戶大小不變。存取現在由 `PlatformConfig.restrict_global_config` 和該平台管理員建立的 `PlatformAllowConfig` 帳戶控制。請參閱 [`platform-config`](/docs/i18n/zh-Hant/products/launchlab/platform-config)。
+
+## 初始化時的預設值
+
+呼叫 `CreateConfig` 時，程式使用硬編碼預設值為許多欄位提供種子：
+
+```rust
+self.max_share_fee_rate     = 10_000;                  // 100 bps (referral share fee)
+self.min_base_supply        = 10_000_000;              // no decimals
+self.max_lock_rate          = 300_000;                 // 30%
+self.min_base_migrate_rate  = 200_000;                 // 20%
+self.min_base_sell_rate     = 200_000;                 // 20%
+self.min_quote_fund_raising = 30_000_000_000;
+```
+
+管理員在建立時明確設定 `curve_type`、`index`、`migrate_fee`、`trade_fee_rate`、`quote_mint` 和四個錢包公鑰；後續值可通過 `UpdateConfig` 調整。
+
+## 啟動如何選擇 `GlobalConfig`
+
+在 `Initialize` 時，建立者傳遞：
+
+- `(curve_type, index)` 以選擇要載入的 `GlobalConfig` PDA。
+- `CurveParams` 描述曲線形狀（`supply`、`total_base_sell`、`total_quote_fund_raising`、`migrate_type`）。
+- `VestingParams` 描述鎖定供應量。
+- `MintParams` 用於基礎幣種。
+
+程式強制執行：
+
+- `curve_type` 匹配 `global_config.curve_type`。
+- `supply >= global_config.min_base_supply`。
+- `total_locked_amount <= supply * max_lock_rate / 1_000_000`。
+- `total_base_sell >= supply * min_base_sell_rate / 1_000_000`。
+- `(supply − total_base_sell − total_locked_amount) >= supply * min_base_migrate_rate / 1_000_000` — 即，有足夠的代幣留下來為畢業後池提供種子。
+- `total_quote_fund_raising >= min_quote_fund_raising`。
+- `migrate_type == 1`（`CPSWAP`）。
+- 如果選定的平台有 `restrict_global_config == 1`，則包含匹配的 `PlatformAllowConfig`。
+
+`Initialize` 後，啟動的 `PoolState` 直接儲存 `global_config` 公鑰，因此綁定是永久的。
+
+## 更新路徑
+
+`UpdateConfig` 取得一個 `(param: u8, value: u64)` 對，並接受 LaunchLab 程式管理員**或**委派的建立設定權限作為簽署者 — 任何其他簽署者都會得到 `InvalidOwner`（`6001`）。每個 `param` 值選擇要變更的欄位：
+
+| `param` | 變更的欄位 | 新值來自 | 驗證 |
+|---------|---------------|----------------------|------------|
+| 0 | `trade_fee_rate` | `value` | `< 1_000_000`（以斷言檢查 — 違反時會 panic 而不是返回錯誤） |
+| 1 | `protocol_fee_owner` | `remaining_accounts[0].key` | 不得為預設公鑰 |
+| 2 | `migrate_fee_owner` | `remaining_accounts[0].key` | 不得為預設公鑰 |
+| 3 | `migrate_to_amm_wallet` | `remaining_accounts[0].key` | 不得為預設公鑰 |
+| 4 | `migrate_to_cpswap_wallet` | `remaining_accounts[0].key` | 不得為預設公鑰 |
+| 5 | `migrate_fee` | `value` | 無 |
+| 6 | `max_share_fee_rate` | `value` | `< 1_000_000 − trade_fee_rate` |
+| 7 | `min_base_supply` | `value` | `> 0` |
+| 8 | `max_lock_rate` | `value` | `< 1_000_000` |
+| 9 | `min_base_sell_rate` | `value` | `0 < v < 1_000_000` |
+| 10 | `min_base_migrate_rate` | `value` | `0 < v < 1_000_000` |
+| 11 | `min_quote_fund_raising` | `value` | `> 0` |
+
+<Warning>
+  四個錢包輪換是同一個分派中普通的 `param` 值 — 它們**不是**另一種參數形狀。它們完全忽略 `value`，
+  而是從*第一個* `remaining_account` 讀取新金鑰；省略該帳戶會在 `unwrap()` 上 panic。任何大於
+  `11` 的 `param` 都會返回 `InvalidInput`（`6002`）。
+</Warning>
+
+前面的 `UpdateConfig` 選擇器 `12` 用於平台授權已移除。平台管理員現在管理自己的允許清單。
+
+## 從用戶端讀取 `GlobalConfig`
+
+```ts
+import { Raydium } from "@raydium-io/raydium-sdk-v2";
+
+// Fetch by PDA derivation:
+const [configPda] = PublicKey.findProgramAddressSync(
+  [
+    Buffer.from("global_config"),
+    quoteMint.toBytes(),
+    Buffer.from([curveType]),
+    u16ToBytes(index),
+  ],
+  LAUNCHLAB_PROGRAM_ID,
+);
+
+// The SDK exposes the layout, not a getter — decode the account yourself:
+import { LaunchpadConfig } from "@raydium-io/raydium-sdk-v2";
+const info = await connection.getAccountInfo(configPda);
+const config = LaunchpadConfig.decode(info!.data);
+console.log(config.tradeFeeRate.toString(), config.minFundRaisingB.toString());
+```
+
+請注意該版面的欄位名稱與鏈上 Rust 名稱不同：募資下限解碼為 `minFundRaisingB`，供應量下限為 `minSupplyA`，而賣出／遷移率下限為 `minSellRateA` / `minMigrateRateA`。
+
+對於列出所有可用設定的 UI，請查詢鏡像它們的 LaunchLab API 端點（`raydium.api.fetchLaunchConfigs()`）；鏈上帳戶計數很小（實際上是個位數）。
+
+## 指標
+
+- [`products/launchlab/platform-config`](/docs/i18n/zh-Hant/products/launchlab/platform-config) — 進一步約束曲線形狀的每平台覆蓋。
+- [`products/launchlab/accounts`](/docs/i18n/zh-Hant/products/launchlab/accounts) — 啟動的完整帳戶圖。
+- [`products/launchlab/instructions`](/docs/i18n/zh-Hant/products/launchlab/instructions) — `Initialize` 和更新指令。
+- [`reference/program-addresses`](/docs/i18n/zh-Hant/reference/program-addresses) — 管理員公鑰、程式 ID、共享權限。
+
+來源：
+
+- `raydium-launch/programs/launchpad/src/states/config.rs` — `GlobalConfig` 結構和 `initialize`。
+- `raydium-launch/programs/launchpad/src/lib.rs` — `create_config`、`update_config`。

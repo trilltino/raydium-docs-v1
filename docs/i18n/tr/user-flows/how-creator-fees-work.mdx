@@ -1,0 +1,75 @@
+---
+title: "Yaratıcı ücretleri nasıl çalışır"
+description: "LaunchLab yaratıcı ücretlerinin bonding curve üzerinde ve CPMM mezuniyetinden sonra nasıl tahakkuk ettiği, platform tarafından sahip olunan Fee Key'den ayrı olarak."
+---
+
+<Info>
+  **Bu sayfa yapay zekâ tarafından otomatik olarak çevrilmiştir. İngilizce sürüm esas alınır.**
+
+  [İngilizce sürümü görüntüle →](/docs/en/user-flows/how-creator-fees-work)
+</Info>
+
+<Info>
+  Yaratıcı ücretlerinin iki ayrı aşaması vardır. Locked-LP Fee Keys üçüncü bir mekanizmadır. 2026-08-17 yükseltmesinden önce, yaratıcı ölçeği bir yaratıcı Fee Key'i oluşturmuştur. Yükseltmeden sonra gerçekleştirilen göçler bu payı platforma atarlar.
+</Info>
+
+<Warning>
+  Ücret ayarları platforma ve CPMM yapılandırmasına bağlıdır. İmzalamadan önce zincir üstü değerleri doğrulayın. Bu sayfa yalnızca mekanikleri açıklar ve finansal, yasal, vergi veya yatırım tavsiyesi değildir.
+</Warning>
+
+## Aşama 1: bonding curve yaratıcı ücretleri
+
+Jetonunuz bonding curve üzerinde işlem gördüğü sürece, platform alım ve satışlarda bir yaratıcı ücreti bileşeni talep edebilir.
+
+- Quote token'da (genellikle SOL) tahakkuk eder.
+- Platform oranı belirler.
+- LaunchLab yaratıcı ücreti talep akışı aracılığıyla talep edebilirsiniz.
+- Mezuniyet yeni bonding curve tahakkukunu durdurur. Mevcut bakiye talep edilebilir kalır.
+
+## Aşama 2: CPMM yaratıcı ücretleri
+
+Her yeni başlatılan lansman CPMM'ye mezun olur. CPMM yaratıcı ücretleri yalnızca seçilen `AmmConfig` sıfır olmayan bir yaratıcı ücreti oranına sahip olduğunda tahakkuk eder.
+
+Varsayılan olarak, lansman yaratıcısı CPMM pool yaratıcısı olur. Bir platform bunun yerine `platform_cp_creator` ayarlayabilir; bu durumda bu adres CPMM yaratıcı ücreti haklarını alır.
+
+Kaydedilen CPMM yaratıcısı doğrudan talep edebilir. Başka bir ödeyici de izinsiz koleksiyonu tetikleyebilir, ancak CPMM hedefleri yaratıcının kanonik token hesaplarına sabitler.
+
+## LP token'larına ne olur
+
+Platform yapılandırması `platformScale`, `creatorScale` ve `burnScale` depolar. 2026-08-17 yükseltmesinden önce, `creatorScale` yaratıcıya ait bir Fee Key oluşturmuştur. Yükseltmeden sonra gerçekleştirilen göçler için LaunchLab bunu `platformScale` ile birleştirir:
+
+```text
+platform locked LP = platformScale + creatorScale
+burned LP          = burnScale
+```
+
+Kilitli pay sıfır değilse, bir Fee Key NFT'si platformun yapılandırılmış NFT cüzdanına gider. Bu NFT, LP ücreti hasat etmeyi kontrol eder. CPMM yaratıcı ücreti koleksiyonunu kontrol etmez. Yükseltmeden önce tamamlanan göçlerden gelen Yaratıcı Fee Keys'ler mevcut sahipleriyle kalır.
+
+## Ücret akışı özeti
+
+```text
+Bonding curve
+  yaratıcı ücreti → lansman yaratıcısı vault'u
+
+CPMM'ye mezuniyet
+  Yükseltmeden önce → platform Fee Key + yaratıcı Fee Key + yakılan pay
+  Yükseltmeden sonra  → birleştirilmiş platform Fee Key payı + yakılan pay
+
+CPMM işlemi
+  yaratıcı ücreti → kaydedilen CPMM pool yaratıcısı
+  LP ücreti      → kilitli pay için platform Fee Key sahibi
+```
+
+## Lansman yapmadan önce
+
+- Bonding curve `creator_fee_rate` değerini kontrol edin.
+- `platform_cp_creator` değerinin sizi CPMM yaratıcısı olarak değiştirip değiştirmediğini kontrol edin.
+- Yükseltmeden sonra gerçekleştirilen göçler için `creatorScale` değerini vaad edilen bir yaratıcı Fee Key tahsisi olarak değerlendirmeyin. Daha önceki göçler için mevcut Fee Key kaydını doğrulayın.
+- CPMM yapılandırmasının yaratıcı ücreti oranını ve ücret ayarını kontrol edin.
+
+## İşaretçiler
+
+- [LaunchLab yaratıcı ücretleri](/docs/i18n/tr/products/launchlab/creator-fees) — teknik referans.
+- [LP ücreti dağılımı](/docs/i18n/tr/products/launchlab/tips-and-gotchas/lp-fee-distribution) — etkili ölçek hesaplaması.
+- [CPMM ücretleri](/docs/i18n/tr/products/cpmm/fees) — mezuniyet sonrası ücret sayaçları ve koleksiyonu.
+- [LaunchLab platformları](/docs/i18n/tr/user-flows/launchlab-platforms) — gözden geçirilecek platform ayarları.

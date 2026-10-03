@@ -1,0 +1,71 @@
+---
+title: "SDK & API"
+description: "Referência para o SDK TypeScript do Raydium, REST API, IDLs Anchor e padrões de integração para Rust, Python e ferramentas de IA."
+---
+
+<Info>
+  **Esta página foi traduzida automaticamente por IA. A versão em inglês é a fonte oficial.**
+
+  [Ver versão em inglês →](/docs/en/sdk-api/index)
+</Info>
+
+## Para quem é este capítulo
+
+Desenvolvedores integrando com o Raydium fora da cadeia (TS/JS, Python, backends) ou a partir de outro programa Solana (Rust CPI). Também para agentes de IA e integradores de ferramentas de codificação — veja [Integração com IA](/docs/i18n/pt/sdk-api/ai-integration).
+
+<Info>
+  **Quer executar algo primeiro?** Três scripts de ponta a ponta — swap, deploy de pool CPMM, deploy de pool CLMM — estão em [Início rápido](/docs/i18n/pt/quick-start). Os scripts de swap e CPMM são arquivos únicos que você cola e executa; o fluxo CLMM requer alguns passos extras. Execute uma transação real primeiro, depois volte aqui para a referência completa.
+</Info>
+
+## Escolha seu caminho de integração
+
+Cinco caminhos para escolher. O correto depende do que está chamando o Raydium e de quanto controle você precisa.
+
+| Caminho | Melhor para | Latência | Lógica personalizada | Linguagens |
+|---|---|---|---|---|
+| [Trade API](/docs/i18n/pt/sdk-api/trade-api) | Backends, bots, Blinks — qualquer lugar onde você queira uma tx construída pelo servidor | Mais baixa | Limitada (rotas predefinidas) | Qualquer |
+| [TypeScript SDK](/docs/i18n/pt/sdk-api/typescript-sdk) | Apps Node/TS e frontends que precisam de acesso total ao builder | Média | Completa | TS / JS |
+| [Integração Python](/docs/i18n/pt/sdk-api/python-integration) | Backends Python e pipelines de ML | Média | Completa (construção manual de instruções) | Python |
+| [Rust CPI](/docs/i18n/pt/sdk-api/rust-cpi) | Programas de composição que chamam o Raydium da cadeia | N/A (na cadeia) | Completa + componível | Rust |
+| [IDL Anchor](/docs/i18n/pt/sdk-api/anchor-idl) | Codegen para linguagens sem suporte de primeira classe (Go, Kotlin, Swift, ...) | Variável | Completa | Qualquer com ferramenta de codegen Anchor |
+
+Se não tem certeza: backends e bots → **Trade API**; frontends e apps com controle total → **TypeScript SDK**; composição na cadeia → **Rust CPI**.
+
+## Conteúdo do capítulo
+
+<CardGroup cols={2}>
+  <Card title="TypeScript SDK" icon="js" href="/docs/i18n/pt/sdk-api/typescript-sdk">
+    `@raydium-io/raydium-sdk-v2`: instalação, inicialização, módulos principais (pool, farm, launch), construtores de transações, armadilhas comuns.
+  </Card>
+  <Card title="REST API" icon="cloud" href="/docs/i18n/pt/sdk-api/rest-api">
+    Endpoints públicos para informações de pool, informações de mint, preço e transações construídas pelo servidor. Limites de taxa, orientação de cache, versionamento.
+  </Card>
+  <Card title="Trade API" icon="right-left" href="/docs/i18n/pt/sdk-api/trade-api">
+    Transações de swap construídas pelo servidor: cotação, construção, assinatura, envio. O padrão de integração sem SDK para backends, bots e Blinks.
+  </Card>
+  <Card title="IDL Anchor" icon="file-code" href="/docs/i18n/pt/sdk-api/anchor-idl">
+    Onde encontrar o IDL de cada programa, como regenerar clientes a partir dele, o que observar quando o IDL é atualizado.
+  </Card>
+  <Card title="Rust CPI" icon="rust" href="/docs/i18n/pt/sdk-api/rust-cpi">
+    Padrões para invocar programas do Raydium a partir de outro programa Solana — construção de lista de contas, sementes de assinante, tratamento de erros.
+  </Card>
+  <Card title="Integração Python" icon="python" href="/docs/i18n/pt/sdk-api/python-integration">
+    Receitas `solders` + `solana-py` para construir swaps/operações de pool do Raydium a partir de Python. Útil para backends e bots.
+  </Card>
+  <Card title="Integração com IA" icon="robot" href="/docs/i18n/pt/sdk-api/ai-integration">
+    Servidor MCP, índice `llms.txt`, menu de cópia por página, arquivos de contexto pré-construídos para Claude Code / Cursor / Windsurf e outros agentes de codificação.
+  </Card>
+</CardGroup>
+
+## Disciplina de versão
+
+Cada amostra de código em cada página deste capítulo tem um banner no topo:
+
+```
+SDK:       @raydium-io/raydium-sdk-v2 vX.Y.Z
+Program:   see /reference/program-addresses
+Cluster:   mainnet-beta
+Verified:  YYYY-MM-DD
+```
+
+Se você tocar em uma amostra de código, atualize o banner.

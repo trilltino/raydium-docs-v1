@@ -1,0 +1,262 @@
+---
+title: "Glossar"
+description: "Definitionen von Begriffen, die in Raydiums Dokumentation verwendet werden. Jeder Eintrag hat eine einzeilige Definition und einen Verweis auf die Seite, auf der der Begriff ausführlich erläutert wird."
+---
+
+<Info>
+  **Diese Seite wurde mit KI automatisch übersetzt. Maßgeblich ist stets die englische Version.**
+
+  [Englische Version ansehen →](/docs/en/reference/glossary)
+</Info>
+
+<Info>
+  Eine flache Liste von Begriffen. Verwenden Sie Strg+F; jeder Begriff verlinkt auf die Seite mit der vollständigen Erklärung. Begriffe sind innerhalb von Buchstabensektionen alphabetisiert; Solana-native Konzepte (Account, PDA usw.) sind enthalten, da sie überall referenziert werden.
+</Info>
+
+## A
+
+**AcceleRaytor** — Raydiums ursprüngliche Token-Launchpad von 2021–2023. Eingestellt, als LaunchLab es ersetzte. Siehe [`introduction/history-and-milestones`](/docs/i18n/de/introduction/history-and-milestones).
+
+**Account** — Eine Datenzeile auf Solana, identifiziert durch einen öffentlichen Schlüssel, im Besitz eines Programms, mit Datenbytes und Lamports. Siehe [`solana-fundamentals/account-model`](/docs/i18n/de/solana-fundamentals/account-model).
+
+**Address Lookup Table (ALT)** — Ein veröffentlichtes Account, das es Transaktionen ermöglicht, Accounts durch einen 1-Byte-Index zu referenzieren und damit Bytes zu sparen. Das Raydium SDK verwendet ALTs für Multi-Hop-Routen. Siehe [`solana-fundamentals/transactions-and-fees`](/docs/i18n/de/solana-fundamentals/transactions-and-fees).
+
+**AmmConfig** — Konfigurationsaccount für CPMM/CLMM, der die Gebührenebene und den Protokollgebührenanteil definiert. Mehrere Konfigurationen können nebeneinander existieren; Pools referenzieren eine bei der Erstellung. Siehe [`ray/protocol-fees`](/docs/i18n/de/ray/protocol-fees).
+
+**AMM v4** — Raydiums ursprüngliches Constant-Product-AMM (2021). Ursprünglich ein Hybrid-Design, das die Kurve auf OpenBook spiegelte; die OpenBook-Integration wurde deaktiviert und Pools funktionieren nun als reine Constant-Product-AMMs. Noch vollständig funktionsfähig; nicht mehr die empfohlene Standardeinstellung für neue Pools. Siehe [`products/amm-v4/overview`](/docs/i18n/de/products/amm-v4/overview).
+
+**Anchor** — Ein Rust-Framework für Solana-Programme, das Accountvalidierung, Fehlerbehandlung übernimmt und IDLs generiert. Wird von CPMM, CLMM, Farm v6 und LaunchLab verwendet. Siehe [`solana-fundamentals/programs-and-anchor`](/docs/i18n/de/solana-fundamentals/programs-and-anchor).
+
+**Anchor-Diskriminator** — 8-Byte-Präfix auf Anchor-verwalteten Accounts und Instruktionen, abgeleitet vom Account-/Instruktionsnamen. Identifiziert Accounttypen. Siehe [`solana-fundamentals/account-model`](/docs/i18n/de/solana-fundamentals/account-model).
+
+**Arbitrage** — Ausnutzung von Preisunterschieden zwischen Handelsplätzen (Raydium ↔ Orca ↔ CEX), um die Preise in Einklang zu halten. Grundlegend für die Preisfindung von AMMs.
+
+**Associated Token Account (ATA)** — Konventionelles PDA-abgeleitetes Token-Account für ein (Benutzer, Mint)-Paar. Siehe [`solana-fundamentals/spl-token-and-token-2022`](/docs/i18n/de/solana-fundamentals/spl-token-and-token-2022).
+
+## B
+
+**Bonding Curve** — Eine Preisfunktion für einen Token, die den Preis deterministisch als Funktion des Angebots festlegt. Wird in der LaunchLab-Vor-Abschlussphase verwendet. Siehe [`products/launchlab/bonding-curve`](/docs/i18n/de/products/launchlab/bonding-curve).
+
+**BPF Loader (Upgradable)** — Das Solana-Loader-Programm, das Programme bereitstellt und aktualisiert. Siehe [`solana-fundamentals/programs-and-anchor`](/docs/i18n/de/solana-fundamentals/programs-and-anchor).
+
+**Bump** — Ein einzelnes Byte, das an Seeds angehängt wird, um eine PDA außerhalb der Kurve abzuleiten. Der kanonische Bump ist der höchste Wert, der eine außerhalb der Kurve liegende Adresse erzeugt. Siehe [`solana-fundamentals/pdas-and-cpis`](/docs/i18n/de/solana-fundamentals/pdas-and-cpis).
+
+## C
+
+**Kanonischer Bump** — Der Bump, der durch Dekrementieren von 255 gefunden wird. Raydiums Programme verwenden immer den kanonischen Bump. Siehe [`solana-fundamentals/pdas-and-cpis`](/docs/i18n/de/solana-fundamentals/pdas-and-cpis).
+
+**CLMM** — Concentrated Liquidity Market Maker, Raydiums Uniswap-V3-ähnliches Produkt von 2022. Siehe [`products/clmm/overview`](/docs/i18n/de/products/clmm/overview).
+
+**Compute Budget** — Pro-Transaktion-Limit für Compute Units. Standard 200k, Maximum 1,4M. Wird über `ComputeBudget::SetComputeUnitLimit` gesetzt. Siehe [`solana-fundamentals/transactions-and-fees`](/docs/i18n/de/solana-fundamentals/transactions-and-fees).
+
+**Compute Unit (CU)** — Solanas Einheit der Rechenkosten. Prioritätsgebühren werden pro CU berechnet. Siehe [`integration-guides/priority-fee-tuning`](/docs/i18n/de/integration-guides/priority-fee-tuning).
+
+**Constant Product** — Die AMM-Invariante `x × y = k`. Siehe [`algorithms/constant-product`](/docs/i18n/de/algorithms/constant-product).
+
+**CPI (Cross-Program Invocation)** — Ein Solana-Programm ruft ein anderes innerhalb einer einzelnen Transaktion auf. Siehe [`solana-fundamentals/pdas-and-cpis`](/docs/i18n/de/solana-fundamentals/pdas-and-cpis).
+
+**CPMM** — Raydiums modernes Constant-Product-AMM (2024). Ersetzt AMM v4 für neue Pools. Siehe [`products/cpmm/overview`](/docs/i18n/de/products/cpmm/overview).
+
+**Creator Fee (LaunchLab)** — Optionaler Prozentsatz der Swap-Gebühren, der während der Bonding-Curve-Phase an den Token-Ersteller weitergeleitet wird. Siehe [`products/launchlab/overview`](/docs/i18n/de/products/launchlab/overview).
+
+## D
+
+**DLMM** — Dynamic Liquidity Market Maker. Meteoras CLMM-Variante. Nicht Raydium.
+
+**Diskriminator** — Siehe „Anchor-Diskriminator".
+
+## E
+
+**Emissions (Farm)** — Rate, mit der Farm-Belohnungen verteilt werden, in Token pro Sekunde. Siehe [`products/farm-staking/overview`](/docs/i18n/de/products/farm-staking/overview).
+
+**Escrow** — Ein PDA-gehaltenes Token-Account, das Gelder hält, bis eine Bedingung erfüllt ist. Häufiges Integrationsmuster. Siehe [`integration-guides/cpi-integration`](/docs/i18n/de/integration-guides/cpi-integration).
+
+**Executable Account** — Solana-Account mit `executable = true`, das Programm-Bytecode hält. Siehe [`solana-fundamentals/account-model`](/docs/i18n/de/solana-fundamentals/account-model).
+
+## F
+
+**Farm v3 / v5 / v6** — Aufeinanderfolgende Generationen von Raydiums Reward-Farming-Programm. v6 ist aktuell; v3/v5 sind veraltet. Siehe [`products/farm-staking/overview`](/docs/i18n/de/products/farm-staking/overview).
+
+**Fee Growth (CLMM)** — Globaler Gebühren-pro-Einheit-Liquidität-Zähler, verfolgt in `fee_growth_global_X` und `fee_growth_global_Y`. Siehe [`products/clmm/math`](/docs/i18n/de/products/clmm/math).
+
+**Fee Tier** — Ein spezifischer Swap-Gebührenprozentsatz, den ein Pool anbietet. Z. B. CLMM 0,05%-Ebene. Siehe [`reference/fee-comparison`](/docs/i18n/de/reference/fee-comparison).
+
+**Finalization** — Solanas stärkste Commitment-Ebene, etwa 13 Sekunden nach dem Landen der Transaktion. Siehe [`solana-fundamentals/transactions-and-fees`](/docs/i18n/de/solana-fundamentals/transactions-and-fees).
+
+**Freeze Authority** — Befugnis, Token-Accounts für einen bestimmten Mint einzufrieren (zu sperren). Dies ist ein Risiko für Benutzer, die in Token mit aktiver Freeze Authority Liquidität bereitstellen. CLMM zeichnet auch die Pool-PDA als Freeze Authority auf jedem neuen Position-NFT-Mint auf, lässt das NFT-Account aber standardmäßig entsperrt. Es sperrt das Account nur bei einem V2-Open, wenn die Freeze Authority eines zugrunde liegenden Vault-Mints mit der Liste der eingeschränkten Aussteller übereinstimmt.
+
+## G
+
+**Graduation (LaunchLab)** — Ereignis, bei dem ein Bonding-Curve-Launch einen Schwellenwert erreicht und automatisch zu einem CPMM-Pool migriert. Siehe [`products/launchlab/overview`](/docs/i18n/de/products/launchlab/overview).
+
+## H
+
+**Hybrid AMM** — Ein AMM, das sich mit einem externen Orderbuch integriert, um Trades durch denjenigen zu leiten, der bessere Preise bietet. AMM v4 war ursprünglich hybrid (gegen OpenBook), aber seine Orderbuch-Seite wurde deaktiviert, sodass AMM v4 nun als reines AMM funktioniert. CPMM ist nicht hybrid.
+
+## I
+
+**IDL** — Interface Description Language. Anchors JSON-Beschreibung der Instruktionen, Accounts, Events und Fehler eines Programms. Siehe [`sdk-api/anchor-idl`](/docs/i18n/de/sdk-api/anchor-idl).
+
+**Impermanent Loss (IL)** — Der Unterschied zwischen dem Token-Wert des LP und dem Halten der zugrunde liegenden Token aufgrund von Preisabweichungen. Grundlegend für AMMs. Siehe [`algorithms/constant-product`](/docs/i18n/de/algorithms/constant-product).
+
+**Invoke / invoke_signed** — Solana-Syscalls für CPI. `invoke_signed` wird für PDA-autorisierte CPIs verwendet. Siehe [`solana-fundamentals/pdas-and-cpis`](/docs/i18n/de/solana-fundamentals/pdas-and-cpis).
+
+## J
+
+**Jito** — Solana Block-Engine, die gebündelte Transaktionen für MEV-Schutz unterstützt. Siehe [`integration-guides/routing-and-mev`](/docs/i18n/de/integration-guides/routing-and-mev).
+
+**Jupiter** — Der dominante Solana-DEX-Aggregator. Leitet etwa 60 % seines Volumens durch Raydium. Siehe [`introduction/ecosystem-position`](/docs/i18n/de/introduction/ecosystem-position).
+
+## K
+
+**Kudelski** — Audit-Firma, die Raydium-Programme geprüft hat. Siehe [`security/audits`](/docs/i18n/de/security/audits).
+
+## L
+
+**Lamport** — Kleinste SOL-Einheit. 1 SOL = 1.000.000.000 Lamports.
+
+**LaunchLab** — Raydiums Token-Launch-Plattform (2024). Bonding-Curve-Launches, die zu CPMM abschließen. Siehe [`products/launchlab/overview`](/docs/i18n/de/products/launchlab/overview).
+
+**Liquidity L (CLMM)** — Der Beitrag einer Position zur Pool-Preisgestaltung, in den Einheiten, die durch Uniswap-V3-Mathematik definiert sind. Siehe [`algorithms/clmm-math`](/docs/i18n/de/algorithms/clmm-math).
+
+**LP (Liquidity Provider)** — Ein Benutzer, der Token in einen Pool einzahlt, um LP-Token (oder ein NFT für CLMM) und einen Anspruch auf zukünftige Gebühren zu erhalten.
+
+**LP Token** — SPL-Token, das den Anteil eines LP an einem CPMM- oder AMM-v4-Pool darstellt. CLMM verwendet stattdessen NFTs.
+
+## M
+
+**MadShield** — Audit-Firma, die Raydium-Programme geprüft hat (das Order-Book-AMM-Review in Q2 2023 und das CPMM-Review in Q1 2024). Firmiert jetzt als **OShield**; `madshield.xyz` leitet auf `oshield.io` weiter. Die Berichte bleiben unter dem Namen MadShield abgelegt. Siehe [`security/audits`](/docs/i18n/de/security/audits).
+
+**Master-Chef-Muster** — Reward-Tracking-Design basierend auf SushiSwaps MasterChef-Vertrag. `reward_per_share`-Akkumulator-Stil. Wird von Farm v6 verwendet.
+
+**Memecoin** — Informeller Begriff für einen Community-/Spekulationstoken. Viele werden über LaunchLab gestartet.
+
+**MEV (Maximal Extractable Value)** — Wert, der durch Transaktionsreihenfolge extrahierbar ist (Front-Running, Sandwich, Back-Running). Siehe [`integration-guides/routing-and-mev`](/docs/i18n/de/integration-guides/routing-and-mev).
+
+**Mint** — Ein Token-Mint-Account, der einen Token definiert. Nicht zu verwechseln mit „Minting" als Verb (Ausgabe neuer Versorgung).
+
+**Multisig** — Multi-Signature-Account, das N-von-M-Unterzeichner erfordert. Raydium verwendet Squads-Multisigs für Autoritäten. Siehe [`security/admin-and-multisig`](/docs/i18n/de/security/admin-and-multisig).
+
+## N
+
+**Non-Transferable (Token-2022)** — Erweiterung, die Token-Transfers verhindert. Wird durch die Raydium-Pool-Erstellung blockiert.
+
+**NFT** — Non-Fungible Token. CLMM-Positionen sind NFTs; ebenso einige LaunchLab-Artefakte.
+
+## O
+
+**Observation / ObservationState** — CLMMs On-Chain-Preishistorie-Account. Speichert kumulative Preise gewichtet nach Zeit, ermöglicht TWAP-Orakel. Siehe [`products/clmm/accounts`](/docs/i18n/de/products/clmm/accounts).
+
+**OpenBook** — Ehemals Serum. Solanas zentrales Limit-Orderbuch. AMM v4 war *ursprünglich* mit OpenBook integriert, aber diese Integration wurde deaktiviert; CPMM und CLMM waren nie damit integriert. Siehe [`products/amm-v4/overview`](/docs/i18n/de/products/amm-v4/overview).
+
+**Oracle** — Externer Preis-Feed. Pyth, Jupiter und (für interne Nutzung) CLMMs ObservationState TWAP. Siehe [`security/oracle-and-token-risks`](/docs/i18n/de/security/oracle-and-token-risks).
+
+**Orca** — Konkurrierender Solana-DEX. Whirlpools ist Orcas CLMM-Produkt.
+
+## P
+
+**PDA (Program-Derived Address)** — Eine Adresse, die deterministisch von einem Programm + Seeds abgeleitet wird. Kein privater Schlüssel; das besitzende Programm signiert über `invoke_signed`. Siehe [`solana-fundamentals/pdas-and-cpis`](/docs/i18n/de/solana-fundamentals/pdas-and-cpis).
+
+**Permanent Delegate (Token-2022)** — Erweiterung, die einer bestimmten Wallet bedingungslose Transfer-/Burn-Befugnis gewährt. Wird durch die Raydium-Pool-Erstellung blockiert.
+
+**Phoenix** — Natives Solana-Orderbuch-DEX. Peer, kein direkter Konkurrent.
+
+**PnL (AMM v4)** — Historisch: Gewinn und Verlust aus OpenBook-Fills, aufgelaufen in AMM-v4-Pools und abgewickelt über `MonitorStep`-Cranks. Mit der deaktivierten OpenBook-Integration entstehen keine neuen Orderbuch-PnL — die Zähler `state_data.total_pnl_*` tragen nur historische Werte. Der 0,03%-Protokollgebühren-Pfad, der `need_take_pnl_*` verwendet, ist unberührt und noch aktiv.
+
+**Pool Authority** — PDA, die für Pool-Vault-Transfers signiert. Eine pro Programm (nicht pro Pool). Siehe [`solana-fundamentals/pdas-and-cpis`](/docs/i18n/de/solana-fundamentals/pdas-and-cpis).
+
+**Pool State** — On-Chain-Account, das die Reserven, Gebühren und Konfiguration eines Pools hält. Zentrale Datenstruktur pro Produkt.
+
+**Priority Fee** — Pro-CU-Gebühr, die an Validatoren gezahlt wird, um eine Transaktion innerhalb eines Blocks zu priorisieren. Siehe [`integration-guides/priority-fee-tuning`](/docs/i18n/de/integration-guides/priority-fee-tuning).
+
+**Program Account** — Account, das die Metadaten/den Bytecode eines Programms hält. Siehe [`solana-fundamentals/programs-and-anchor`](/docs/i18n/de/solana-fundamentals/programs-and-anchor).
+
+**Program Derived Address** — Siehe PDA.
+
+**Protocol Fee** — Anteil der Swap-Gebühren, der an RAY-Rückkäufe oder Schatzkammer weitergeleitet wird, anstatt an LPs. Siehe [`ray/protocol-fees`](/docs/i18n/de/ray/protocol-fees).
+
+**Pyth** — Solana-Orakelnetzwerk. Wird von Frontends für USD-Anzeige verwendet; nicht von Raydium-Pool-Mathematik.
+
+## Q
+
+**Q64.64 (sqrt_price_x64)** — Festkomma-Darstellung: 64 Ganzzahl- + 64 Bruchbits. Wird von CLMM für sqrt-Preis verwendet, um Floating-Point-Drift zu vermeiden. Siehe [`algorithms/clmm-math`](/docs/i18n/de/algorithms/clmm-math).
+
+## R
+
+**\$RAY** — Raydiums nativer SPL-Token. Siehe [`ray/index`](/docs/i18n/de/ray).
+
+**Realized Fee (CLMM)** — Gebühren, die einer Position seit dem letzten `collectFee` aufgelaufen sind. Beansprucht über `collectFee`. Siehe [`products/clmm/math`](/docs/i18n/de/products/clmm/math).
+
+**Remaining Accounts** — Zusätzliche Accounts, die an die Kontoliste einer Instruktion angehängt werden, interpretiert nach Position. Wird für Kontolisten variabler Länge verwendet (Tick-Arrays, Transfer-Hook-Extras). Siehe [`solana-fundamentals/pdas-and-cpis`](/docs/i18n/de/solana-fundamentals/pdas-and-cpis).
+
+**Rent** — Solana berechnet Speichermiete, aber alle modernen Accounts müssen mietbefreit sein (genug Lamports halten, um Miete für immer vorzuzahlen). Siehe [`solana-fundamentals/account-model`](/docs/i18n/de/solana-fundamentals/account-model).
+
+## S
+
+**Sandwich Attack** — MEV-Taktik: Front-Run eines Benutzer-Swaps, dann Back-Run, um Preisauswirkungen zu extrahieren. Siehe [`integration-guides/routing-and-mev`](/docs/i18n/de/integration-guides/routing-and-mev).
+
+**Serum** — Der Vorgänger von OpenBook. Derzeit nicht aktiv; siehe „OpenBook".
+
+**Slippage** — Unterschied zwischen notiertem und tatsächlichem Output, von Preisauswirkungen + Preisbewegungen. Wird über den Parameter `min_out` bei Swaps gesteuert.
+
+**SOL** — Solanas nativer Token.
+
+**SPL Token** — Das Legacy-Solana-Token-Programm. Adresse `Tokenkeg...`. Siehe [`solana-fundamentals/spl-token-and-token-2022`](/docs/i18n/de/solana-fundamentals/spl-token-and-token-2022).
+
+**sqrt_price_x64** — Siehe Q64.64.
+
+**Squads** — Multisig-Plattform, die Raydium für operative und Upgrade-Autoritäten verwendet. Siehe [`security/admin-and-multisig`](/docs/i18n/de/security/admin-and-multisig).
+
+**Swap / SwapV2** — Raydium-Instruktionsvarianten. `SwapV2` unterstützt Token-2022; Legacy `Swap` nicht. Siehe [`solana-fundamentals/spl-token-and-token-2022`](/docs/i18n/de/solana-fundamentals/spl-token-and-token-2022).
+
+## T
+
+**Tick (CLMM)** — Diskrete Preisstufe. Positionen erstrecken sich über einen Bereich von Ticks. Siehe [`algorithms/clmm-math`](/docs/i18n/de/algorithms/clmm-math).
+
+**Tick Array** — PDA, das 60 aufeinanderfolgende Ticks' Status hält. Ermöglicht segmentierte Speicherung des Tick-Gitters. Siehe [`products/clmm/ticks-and-positions`](/docs/i18n/de/products/clmm/ticks-and-positions).
+
+**Tick Spacing** — Der ganzzahlige Abstand zwischen verwendbaren Ticks in einem Pool. Gebunden an die Fee Tier (0,01 % → 1, 0,25 % → 60 usw.). Siehe [`algorithms/clmm-math`](/docs/i18n/de/algorithms/clmm-math).
+
+**Timelock** — Verzögerung zwischen Genehmigung und Ausführung einer sensiblen Aktion. Raydium-Upgrades haben einen 24-Stunden-Timelock. Siehe [`security/admin-and-multisig`](/docs/i18n/de/security/admin-and-multisig).
+
+**Token-2022** — Das neuere Token-Programm mit Erweiterungen. Adresse `TokenzQ...`. Siehe [`solana-fundamentals/spl-token-and-token-2022`](/docs/i18n/de/solana-fundamentals/spl-token-and-token-2022).
+
+**Transfer Fee (Token-2022)** — Erweiterung, die einen Prozentsatz bei jedem Token-Transfer berechnet. Wird in Raydium CPMM/CLMM über `SwapV2` berücksichtigt.
+
+**Transfer Hook (Token-2022)** — Erweiterung, die ein Programm bei jedem Transfer aufruft. Wird von Raydium mit Vorbehalten unterstützt.
+
+**TVL (Total Value Locked)** — Summe der Pool-/Farm-Guthaben in USD. Raydiums TVL ab April 2026: etwa \$1,8B.
+
+**TWAP (Time-Weighted Average Price)** — Durchschnittspreis gewichtet nach Zeit, abgeleitet von CLMMs ObservationState. Siehe [`products/clmm/accounts`](/docs/i18n/de/products/clmm/accounts).
+
+## U
+
+**UserLedger (Farm v6)** — PDA, das den Stake-Saldo und die Reward-Schuld eines Benutzers in einer Farm speichert.
+
+## V
+
+**Vault** — Ein Token-Account im Besitz der PDA-Autorität eines Pool-Programms, das Pool-Reserven hält. Jeder Pool hat zwei Vaults (einen pro Seite).
+
+**Versioned Transaction (v0)** — Aktuelles Solana-Transaktionsformat mit ALT-Unterstützung. Legacy-Transaktionen sind Version 0xff. Siehe [`solana-fundamentals/transactions-and-fees`](/docs/i18n/de/solana-fundamentals/transactions-and-fees).
+
+## W
+
+**Whirlpools** — Orcas CLMM-Produkt. Ähnliches Design wie Raydium CLMM; anderer Codebase.
+
+**Wrapped SOL (wSOL)** — SOL, das als SPL-Token für die Verwendung in Token-Account-Only-Kontexten verpackt ist. Wird pro Transaktion erstellt und geschlossen. Siehe [`user-flows/swap`](/docs/i18n/de/user-flows/swap).
+
+## X
+
+**x × y = k** — Die Constant-Product-Invariante. Siehe [`algorithms/constant-product`](/docs/i18n/de/algorithms/constant-product).
+
+## Verweise
+
+- [`introduction/what-is-raydium`](/docs/i18n/de/introduction/what-is-raydium) — hier beginnen.
+- [`solana-fundamentals/account-model`](/docs/i18n/de/solana-fundamentals/account-model) — Solana-Konzepte.
+- [`products/cpmm/overview`](/docs/i18n/de/products/cpmm/overview), [`products/clmm/overview`](/docs/i18n/de/products/clmm/overview) usw. — produktspezifische Details.
+- [`reference/fee-comparison`](/docs/i18n/de/reference/fee-comparison) — Gebühren.
+- [`reference/program-addresses`](/docs/i18n/de/reference/program-addresses) — Programm-IDs.
+
+Quellen:
+
+- Definitionen spiegeln die Verwendung im Raydium-Codebase und in der Ökosystem-Dokumentation ab April 2026 wider.

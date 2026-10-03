@@ -1,0 +1,146 @@
+---
+title: "稳定 AMM 数学"
+description: "通过查找表进行二分查找和线性插值来报价。费用应用与 AMM v4 相同。OpenBook 分离后的纯 AMM 池会计。"
+---
+
+<Info>
+  **本页内容由 AI 自动翻译，所有内容以英文版本为准。**
+
+  [查看英文版 →](/docs/en/products/stable/math)
+</Info>
+
+## 查找表曲线
+
+稳定 AMM 用**稀疏查找表**替代了公式 x·y=k，表中包含 (x, y, price) 元组。在报价交换时，程序会：
+
+1. 从储备金计算池的当前比率。
+2. **二分查找**表中找到两个条目来括住该比率。
+3. **线性插值**它们之间的值以获得中间价格。
+4. 应用费用并返回报价。
+
+这种方法用公式的确定性换取了**管理员灵活性**来塑造价格，且效率足够高以适应 Solana 的计算预算。
+
+## 表布局和二分查找
+
+`ModelDataInfo` 最多可容纳 50,000 个 `DataElement` 条目，由管理员索引。只有前 `valid_data_count` 个是活跃的。每个条目：
+
+```
+DataElement {
+  x: u64,      // X 坐标（币端数量，已缩放）
+  y: u64,      // Y 坐标（PC 端数量，已缩放）
+  price: u64,  // price = x/y，由乘数缩放
+}
+```
+
+要在当前池储备金 (x_real, y_real) 处找到价格：
+
+1. 计算比率：`target_ratio = (x_real * multiplier) / y_real`。
+2. 二分查找条目，其中 `(element.x * multiplier) / element.y` 括住 `target_ratio`。
+3. 找到括号 `[min_idx, max_idx]` 时，进行插值。
+
+程序的二分查找代码在 `state.rs::ModelDataInfo::get_mininum_range_by_xy_real` 中约 150 行。关键不变量：**条目必须排序**（x 升序，y 降序，price 升序）以使查找工作。
+
+## 线性插值
+
+一旦两个表点括住比率，插值计算中间价格和储备对：
+
+```
+target = (x_real * multiplier) / y_real
+
+[x1, y1, p1] = table[min_idx]
+[x2, y2, p2] = table[max_idx]
+
+// 插值价格
+p = p1 + (p2 - p1) * (target - ratio1) / (ratio2 - ratio1)
+
+// 插值储备
+x = x1 + (x2 - x1) * (target - ratio1) / (ratio2 - ratio1)
+y = y1 + (y2 - y1) * (target - ratio1) / (ratio2 - ratio1)
+```
+
+结果是一条分段线性曲线，平滑连接表点。
+
+## 缩放：乘数
+
+池储备金和价格以不同的尺度存储。`ModelDataInfo` 上的 `multiplier` 字段说明了这一点。常见模式：
+
+- 币有 6 位小数，PC 有 18 位小数。
+- 乘数 = 10^6（或类似值）。
+- 表条目以缩小的尺度存储以适应 u64 界限。
+
+程序通过以下方式在读/写时重新缩放：
+
+```
+real_value = table_value * ratio / multiplier
+table_value = real_value * multiplier / ratio
+```
+
+## 交换报价：`SwapBaseIn` 和 `SwapBaseOut`
+
+### SwapBaseIn（精确输入）
+
+给定输入金额 `amount_in`：
+
+1. 从 `(coin_vault, pc_vault)` 获取当前比率。
+2. 找到括住的表条目并插值以获得表空间比率。
+3. 将输入转换为表空间：`dx_table = amount_in * multiplier / ratio`。
+4. 在新 X 坐标处查询表以找到新 Y。
+5. `dy_table = y_old - y_new`。
+6. 转换回：`dy_real = dy_table * ratio / multiplier`。
+7. 应用交易费：`dy_output = dy_real - (dy_real * trade_fee_numerator / trade_fee_denominator)`。
+8. 返回 `dy_output`。
+
+### SwapBaseOut（精确输出）
+
+对称：给定所需的 `amount_out`，求解所需的 `amount_in`。
+
+两条路径都直接从池金库读取有效储备金。该池多年来没有持有任何 OpenBook 未平仓订单，因此没有什么需要先结算的——金库余额就是全部。（[2026-06-22 升级](/docs/i18n/zh/reference/changelog)移除了剩余的市场代码。）
+
+## 费用应用
+
+与 AMM v4 相同的算术 —— 完整推导请参见 [`products/amm-v4/math`](/docs/i18n/zh/products/amm-v4/math) —— 但使用 Stable 池自己的数字。
+
+```
+gross_fee = amount_in * (swap_fee_numerator / swap_fee_denominator)    // 2/10_000 = 0.02%
+lp_portion = gross_fee - (gross_fee * pnl_numerator / pnl_denominator) // 88% of it = 0.0176%
+pnl_portion = gross_fee * (pnl_numerator / pnl_denominator)            // 12% of it = 0.0024%
+```
+
+`pnl_portion` 进入 `need_take_pnl_*` 并由管理员通过 `WithdrawPnl` 扫出。`lp_portion` 留在金库中，增加 `k` 并使 LP 代币持有者受益。
+
+## 池资产会计
+
+该公式历史上添加了池在其 OpenBook OpenOrders 账户中持有的开放订单的资金。自池停止发布订单以来，该项在实践中一直为零，2026-06-22 升级完全从公式中删除了它，只留下仅金库计算：
+
+```
+旧：总资产 = 金库余额 + 开放订单资金（native_coin_total / native_pc_total）− 待处理 PnL（need_take_pnl）
+新：总资产 = 金库余额 − 待处理 PnL（need_take_pnl）
+```
+
+这是曲线数学视为有效储备金的值（累积但未扫出的 `need_take_pnl` 部分物理上位于金库中但被排除在定价之外）。以前读取 OpenOrders 余额的报价代码和索引器必须删除该项。
+
+## MonitorStep（已移除）
+
+`MonitorStep` 是**crank 指令**，用于结算待处理的 OpenBook 成交、重新计算 `AmmInfo.target_orders` 并重新发布从查找表派生的限价订单网格。该池多年前停止向 OpenBook 发布订单，因此 crank 没有什么可做的；它在 **2026-06-22 升级中被移除**。集成商不需要为稳定池进行 crank。
+
+## 总结：为什么这有效
+
+查找表 + 插值设计**既高效又灵活**：
+
+- **效率：** 二分查找是 O(log 50,000) ≈ 16 次迭代，每次约 300–500 CU。插值是几个乘法/除法。总报价成本约 5k–15k CU，比每次交换重新计算公式便宜得多。
+- **灵活性：** 管理员可以编码任何分段线性曲线。稳定币对在 1:1 附近获得高密度；抵押对获得自定义曲线。
+- **自包含流动性：** 所有资金都存在于池金库中，定价直接读取它们——无需 crank、无外部订单簿、每笔交易的账户更少。
+
+有关插值逻辑的深入探讨，请参见 `raydium-stable/program/src/state.rs`，方法 `get_data_by_x`、`get_data_by_y`、`get_dy_by_dx_base_in` 等。
+
+## 接下来去哪里
+
+- [账户](/docs/i18n/zh/products/stable/accounts) — `ModelDataInfo` 和 `DataElement` 字段参考。
+- [指令](/docs/i18n/zh/products/stable/instructions) — 可调用集合（交换、存入、提取、`WithdrawPnl`）和已移除的指令。
+- [费用](/docs/i18n/zh/products/stable/fees) — 费用应用和 `WithdrawPnl`。
+- [`products/amm-v4/math`](/docs/i18n/zh/products/amm-v4/math) — 用于 OpenBook 费用包含的订单定价逻辑。
+
+来源：
+
+- `raydium-stable/program/src/state.rs`（插值和二分查找实现）
+- `raydium-stable/program/src/math.rs`（计算器实用程序）

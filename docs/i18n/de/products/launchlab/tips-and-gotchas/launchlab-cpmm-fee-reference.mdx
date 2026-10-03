@@ -1,0 +1,72 @@
+---
+title: "LaunchLab & CPMM – Gebührenreferenz"
+description: "Vollständiger Gebührenfluss für LaunchLab-Token vom Bonding-Curve-Handel bis zur CPMM-Migration."
+---
+
+<Info>
+  **Diese Seite wurde mit KI automatisch übersetzt. Maßgeblich ist stets die englische Version.**
+
+  [Englische Version ansehen →](/docs/en/products/launchlab/tips-and-gotchas/launchlab-cpmm-fee-reference)
+</Info>
+
+LaunchLab-Token durchlaufen zwei Handelsphasen, jede mit eigenem Gebührenmodell. Fassen Sie diese in der Benutzeroberfläche oder Buchhaltung nicht zu einer einzigen „Creator-Gebühr" zusammen.
+
+## Gebühren-Lebenszyklus
+
+### Phase 1: Bonding Curve
+
+Jeder Bonding-Curve-Trade kann vier additive Gebühren enthalten:
+
+| Gebühr | Festgelegt durch | Empfänger |
+|---|---|---|
+| Protokoll-Gebühr | LaunchLab-Globalkonfiguration, `tradeFeeRate` | Raydium |
+| Plattform-Gebühr | Plattformkonfiguration, `feeRate` | Plattform-Claim-Wallet |
+| Creator-Gebühr | Plattformkonfiguration, `creatorFeeRate` | Token-Creator-Vault |
+| Referral-Gebühr | Pro Transaktion, `shareFeeRate` | Referrer-Wallet |
+
+Gebühren, die in Plattform- und Creator-Vaults anfallen, müssen beansprucht werden. Referral-Gebühren werden direkt während des Trades übertragen.
+
+## Migration
+
+Wenn die Bonding Curve das Abschluss-Ziel erreicht:
+
+1. Liquidität migriert für jeden neuen Launch zu CPMM.
+2. CPMM-LP-Token werden geprägt.
+3. Vor dem Upgrade vom 2026-08-17 erzeugte `creatorScale` einen Creator-eigenen Fee Key. Migrationen danach kombinieren die gespeicherten Plattform- und Creator-Scales zu einem Plattform-eigenen gesperrten LP-Anteil. Der verbleibende Anteil wird verbrannt.
+4. `cpConfigId` bestimmt, welche CPMM-`AmmConfig` der migrierte Pool verwendet.
+
+## Phase 2: CPMM-Pool
+
+Nach der Migration können CPMM-Swaps folgende Gebühren enthalten:
+
+| Gebühr | Funktionsweise |
+|---|---|
+| Trade-Gebühr | Wird vom Swap-Input abgezogen und unter LPs, Protokoll und Treasury aufgeteilt. |
+| CPMM-Creator-Gebühr | Zusätzliche Gebühr, die vom Swap-Input abgezogen und dem Pool-Creator zugeordnet wird. |
+
+Bei aktualisierten Migrationen verdient der Inhaber des Plattform-Fee-Keys durch die gesperrte LP-Anteil-Seite der Trade-Gebühr. Creator-Fee-Keys aus Migrationen vor dem Upgrade verdienen weiterhin gemäß ihren bestehenden Locked-Liquidity-Einträgen. Die CPMM-Creator-Gebühr ist separat und wird durch Creator-Fee-Erfassung beansprucht.
+
+## Creator-Einnahmequellen
+
+Ein Creator kann unter dem aktualisierten Programm zwei Gebühren-Zähler-Streams haben. Ein Creator kann auch einen Fee Key aus einer Pre-Upgrade-Migration halten. Die Plattform hält nach dem Upgrade die neu migrierten LP-Gebührenrechte:
+
+| Quelle | Mechanismus | Typischer Claim-Pfad |
+|---|---|---|
+| Bonding-Curve-Creator-Gebühr | Pre-Migration-Vault | `claimCreatorFee()` |
+| CPMM-Creator-Gebühr | `creator_fee_rate` in der CPMM-Konfiguration | `collectCreatorFee()` |
+| Historischer Creator-LP-Gebührenanteil | Creator-Fee-Key aus einer vor dem Upgrade abgeschlossenen Migration | Burn & Earn Harvest-Flow |
+| Aktualisierter Plattform-LP-Gebührenanteil | Plattform-Fee-Key aus einer nach dem Upgrade ausgeführten Migration | Burn & Earn Harvest-Flow |
+
+Diese ersetzen sich nicht gegenseitig. Bewahren Sie das Eigentum aus historischen Fee-Key-Einträgen, ordnen Sie aber einen Fee Key aus dem aktualisierten Migrations-Flow nicht dem Token-Creator zu.
+
+## Häufige Fallstricke
+
+- CPMM-Creator-Gebühren werden nicht aus der Trade-Gebühr herausgeschnitten. Sie sind zusätzlich.
+- Fee-Key-NFT-Rechte sind LP-Gebührenrechte, keine CPMM-Creator-Gebührenrechte.
+- Standard-CPMM-Pools, die außerhalb des LaunchLab-Migrations-Pfads erstellt werden, haben nicht automatisch CPMM-Creator-Gebühren.
+- Verbrannte LP-Token hinterlassen Liquidität dauerhaft im Pool, aber kein Wallet kann die Gebühren des verbrannten Anteils beanspruchen.
+
+## Weiterführende Ressourcen
+
+- [LP-Gebührenverteilung](/docs/i18n/de/products/launchlab/tips-and-gotchas/lp-fee-distribution)
+- [Wie Creator-Gebühren funktionieren](/docs/i18n/de/user-flows/how-creator-fees-work)

@@ -1,0 +1,482 @@
+---
+title: "Hướng dẫn LaunchLab"
+description: "Initialize, Buy, Sell, Graduate, CollectFees, SetParams — hình dạng đối số, danh sách tài khoản và điều kiện trước/sau cho mọi lệnh LaunchLab."
+---
+
+<Info>
+  **Trang này được dịch tự động bằng AI. Phiên bản tiếng Anh là bản chính thức.**
+
+  [Xem bản tiếng Anh →](/docs/en/products/launchlab/instructions)
+</Info>
+
+<Info>
+  LaunchLab cung cấp một bộ lệnh chặt chẽ: sáu lệnh dành cho người dùng cộng với một số lệnh nguyên thủy dành cho quản trị viên. SDK bao bọc tất cả chúng; trang này ghi lại bề mặt thô cho các tổng hợp, công cụ giám sát và các chương trình cần CPI.
+</Info>
+
+## Danh sách lệnh
+
+| Nhóm | Lệnh | Có thể gọi bởi |
+|-------|-------------|-------------|
+| Cấu hình toàn cục | `CreateConfig` / `UpdateConfig` | Quản trị viên chương trình; quyền tạo cấu hình được ủy quyền cũng có thể gọi `CreateConfig` |
+| Vòng đời khởi chạy | `Initialize` / `InitializeV2` | Bất kỳ ai (người tạo) — mint token SPL cơ sở; V2 ghi lại `amm_creator_fee_on` cho việc tốt nghiệp CPMM sắp tới. Chỉ V2 chấp nhận mint quote Token-2022. |
+| Vòng đời khởi chạy | `InitializeWithToken2022` | Bất kỳ ai (người tạo) — mint token Token-2022 cơ sở, `TransferFeeConfig` tùy chọn; chấp nhận chương trình token quote bất kỳ |
+| Giao dịch | `BuyExactIn` / `BuyExactOut` | Bất kỳ ai — mua đầu vào chính xác / đầu ra chính xác trên đường cong liên kết |
+| Giao dịch | `SellExactIn` / `SellExactOut` | Bất kỳ ai — bán đầu vào chính xác / đầu ra chính xác trên đường cong liên kết |
+| Tốt nghiệp | `MigrateToAmm` | Ví di chuyển — tốt nghiệp AMM v4 kế thừa cho các pool được khởi tạo trước khi thực thi chỉ CPMM. |
+| Tốt nghiệp | `MigrateToCpswap` | Ví di chuyển — tốt nghiệp thành CPMM. Tất cả các khởi chạy mới được khởi tạo sử dụng đường dẫn này. Bao bọc `InitializeWithPermission` trên CPMM. |
+| Phí | `CollectFee` | Quản trị viên — quét phí giao thức từ một khởi chạy |
+| Phí | `CollectMigrateFee` | Quản trị viên — quét phí di chuyển tích lũy |
+| Phí | `ClaimCreatorFee` | Người tạo — yêu cầu phí người tạo tích lũy trong giai đoạn đường cong |
+| Vesting | `CreateVestingAccount` | Người tạo — phân bổ token bị khóa cho người thụ hưởng, mở khóa sau khi tốt nghiệp |
+| Vesting | `CreatePlatformVestingAccount` | Quản trị viên nền tảng — phân bổ token bị khóa cho người thụ hưởng phía nền tảng |
+| Vesting | `ClaimVestedToken` | Người thụ hưởng — yêu cầu token đã mở khóa sau khoảng thời gian chờ |
+| Cấu hình nền tảng | `CreatePlatformConfig` / `UpdatePlatformConfig` | Quản trị viên nền tảng |
+| Cấu hình nền tảng | `CreatePlatformCurveRule` / `UpdatePlatformCurveRule` / `RemovePlatformCurveRule` / `ClosePlatformCurveRule` | `PlatformConfig.curve_rule_manager` hoặc quản trị viên nền tảng — quản lý quy tắc tham số khởi chạy của một `GlobalConfig` |
+| Phí nền tảng | `ClaimPlatformFee` / `ClaimPlatformFeeFromVault` | Quản trị viên nền tảng |
+| Truy cập nền tảng | `CreatePlatformAllowConfig` / `ClosePlatformAllowConfig` | Quản trị viên nền tảng — duy trì danh sách cho phép `GlobalConfig` được sử dụng khi nền tảng đó bật hạn chế |
+
+Phân chia "ExactIn/ExactOut" phản ánh `SwapBaseInput` / `SwapBaseOutput` của CPMM — trên chuỗi chúng là các bộ phân biệt lệnh riêng biệt với làm tròn hơi khác nhau.
+
+**Lựa chọn đường dẫn tốt nghiệp.** Mọi lệnh `Initialize`, `InitializeV2` và `InitializeWithToken2022` mới phải đặt `migrate_type = 1` (`CPSWAP`). Bất kỳ nỗ lực nào để khởi tạo một pool mới được liên kết với AMM v4 sẽ trả về `MigrateTypeNotMatch`. `amm_creator_fee_on` chỉ chọn xem phí người tạo CPMM kết quả có áp dụng cho token quote hay cả hai token; nó không chọn chương trình đích.
+
+`MigrateToAmm` vẫn có thể gọi được cho một `PoolState` hiện có được khởi tạo với `migrate_type = 0` trước hạn chế này. Bản phát hành không viết lại trạng thái pool hiện có hoặc xóa lệnh kế thừa.
+
+**Chương trình token phía quote.** Mint quote có thể được sở hữu bởi chương trình SPL Token hoặc Token-2022. Mọi lệnh chạm vào nó — `CreateConfig`, `InitializeV2`, `InitializeWithToken2022`, cả bốn lệnh giao dịch, `CollectFee`, `CollectMigrateFee`, `ClaimCreatorFee`, `ClaimPlatformFee` và `ClaimPlatformFeeFromVault` — lấy chương trình sở hữu trong vị trí tài khoản chương trình quote của nó. Vị trí tài khoản không thay đổi; chỉ giá trị được chấp nhận thay đổi. Chuyển chương trình thực sự sở hữu `GlobalConfig.quote_mint`, mà bạn có thể đọc từ bit1 `PoolState.token_program_flag` cho một khởi chạy hiện có (xem [`accounts`](/docs/i18n/vi/products/launchlab/accounts#poolstate)) hoặc từ chủ sở hữu tài khoản mint nếu không.
+
+`Initialize` không dùng nữa là ngoại lệ: tài khoản chương trình quote của nó vẫn được gõ thành SPL Token, vì vậy một cấu hình có mint quote là Token-2022 phải được khởi chạy thông qua `InitializeV2` hoặc `InitializeWithToken2022`.
+
+`MigrateToCpswap` là ngoại lệ khác, theo hướng ngược lại — nó lấy **cả hai** chương trình vô điều kiện thay vì một cho mỗi mint. Xem [các tài khoản di chuyển bên dưới](#cpmm-migration-token-programs).
+
+## `Initialize`
+
+<Warning>
+  **Trên thực tế đã bị loại bỏ kể từ nâng cấp 2026-09 — chỉ thị này luôn thất bại.** Trình xử lý của `initialize` giờ chỉ còn là một dòng log `Not supported. Please use initialize_v2 instruction` và `NotApproved` (`6000`). Nó được giữ lại thuần túy để discriminator của nó vẫn bị chiếm và IDL giữ được hình dạng ổn định. (Struct `Accounts` không thay đổi, nên phần xác thực do Anchor sinh ra vẫn chạy trước; giao dịch vẫn revert bất kể thế nào.)
+
+  Trước đây nó bị kiểm soát theo đồng hồ: nó hoạt động cho đến ba ngày sau mốc chuyển đổi `get_upgrade_timestamp` và thất bại sau đó. Trợ giúp timestamp đó đã bị loại bỏ, nên giờ việc thất bại là vô điều kiện. Các lần phát hành hiện có được tạo qua nó không bị ảnh hưởng — chúng giao dịch và tốt nghiệp bình thường qua `MigrateToAmm` hoặc `MigrateToCpswap` tùy theo `migrate_type` được lưu của chúng.
+
+  Các đối số và danh sách tài khoản bên dưới là của `InitializeV2`. `Initialize` đã lỗi thời nhận
+  đúng 18 tài khoản đó theo cùng thứ tự và chỉ ba đối số đầu tiên — nó không có `amm_fee_on` —
+  và vị trí `quote_token_program` của nó được gõ thành SPL Token thay vì `Interface<TokenInterface>`.
+</Warning>
+
+Tạo một lần phát hành mới. `InitializeV2` chỉ thêm đối số `amm_fee_on` so với `Initialize` đã lỗi thời; **số lượng và thứ tự tài khoản là giống hệt nhau**, và khác biệt duy nhất ở cấp tài khoản là `quote_token_program` được gõ `Interface<TokenInterface>` để một mint quote Token-2022 cũng được chấp nhận.
+
+**Đối số**
+
+Bốn đối số theo vị trí, không phải một struct. (`InitializeWithToken2022` thêm đối số thứ năm, `transfer_fee_extension_param: Option<TransferFeeExtensionParams>`; `Initialize` đã lỗi thời bỏ `amm_fee_on`.)
+
+```rust
+base_mint_param: MintParams {
+    decimals: u8,                 // must equal the program's BASE_MINT_DECIMALS
+    name:     String,
+    symbol:   String,
+    uri:      String,
+}
+
+curve_param: CurveParams {        // Borsh enum — one leading variant-tag byte
+    Constant { data: ConstantCurve { supply: u64, total_base_sell: u64,
+                                     total_quote_fund_raising: u64, migrate_type: u8 } },
+    Fixed    { data: FixedCurve    { supply: u64,
+                                     total_quote_fund_raising: u64, migrate_type: u8 } },
+    Linear   { data: LinearCurve   { supply: u64,
+                                     total_quote_fund_raising: u64, migrate_type: u8 } },
+}
+
+vesting_param: VestingParams {
+    total_locked_amount: u64,     // 0 requires cliff_period == unlock_period == 0
+    cliff_period:        u64,     // seconds after fundraising ends
+    unlock_period:       u64,     // seconds
+}
+
+amm_fee_on: AmmCreatorFeeOn       // 0 = QuoteToken, 1 = BothToken (CPMM migrations only)
+```
+
+Biến thể phải khớp với `global_config.curve_type`, nếu không chỉ thị sẽ revert với `InputNotMatchCurveConfig` (`6003`). Không có `open_time`, không có đối số `quote_mint` (nó đến từ `global_config`), không có struct `fees` và không có `post_graduation_lp_policy` — cách xử lý LP được đặt trên `PlatformConfig`, không phải theo từng lần phát hành.
+
+**Tài khoản** — tổng cộng 18 (16 được khai báo cộng với hai tài khoản do `#[event_cpi]` thêm vào)
+
+| # | Tên | W | S | Ghi chú |
+|---|------|---|---|-------|
+| 1 | `payer` | W | S | Trả toàn bộ tiền thuê. Không nhất thiết phải là người tạo. |
+| 2 | `creator` |   |   | Được ghi lại thành `pool_state.creator`; không phải người ký. |
+| 3 | `global_config` |   |   | Cung cấp mint quote, loại đường cong và mọi giới hạn sàn/trần. |
+| 4 | `platform_config` |   |   | Cung cấp tỷ lệ phí nền tảng và chính sách xử lý LP. |
+| 5 | `authority` |   |   | PDA `["vault_auth_seed"]` — một PDA toàn cục duy nhất, dùng chung cho tất cả các lần phát hành. |
+| 6 | `pool_state` | W |   | Tài khoản mới. |
+| 7 | `base_mint` | W | S | Keypair mới — chỉ thị này khởi tạo nó. |
+| 8 | `quote_mint` |   |   | Phải bằng `global_config.quote_mint`. |
+| 9 | `base_vault` | W |   | PDA `["pool_vault", pool_state, base_mint]`. |
+| 10 | `quote_vault` | W |   | PDA `["pool_vault", pool_state, quote_mint]`. |
+| 11 | `metadata_account` | W |   | PDA metadata của Metaplex. |
+| 12 | `base_token_program` |   |   | SPL Token cho `InitializeV2`; Token-2022 cho `InitializeWithToken2022`. |
+| 13 | `quote_token_program` |   |   | Chương trình sở hữu `quote_mint` — SPL Token hoặc Token-2022. |
+| 14 | `metadata_program` |   |   | Metaplex Token Metadata. |
+| 15 | `system_program` |   |   | |
+| 16 | `rent_program` |   |   | Sysvar rent. |
+| 17 | `event_authority` |   |   | PDA `["__event_authority"]`; được `#[event_cpi]` thêm vào. |
+| 18 | `program` |   |   | Id chương trình LaunchLab; được `#[event_cpi]` thêm vào. |
+
+**Điều kiện trước**
+
+- `quote_mint ∈ launch_config.allowed_quote_mints`.
+- `base_supply_graduation ≤ base_supply_max`.
+- Các tham số phí vượt qua kiểm tra `launch_config.max_*_fee_rate`.
+- `open_time ≥ now − slop` (SDK thực thi `≥ now`; chương trình dung thứ cho việc đặt ngày lùi lại nhẹ).
+- `curve_type` được công nhận.
+
+**Điều kiện sau**
+
+- `base_mint` có `supply = curve_param.supply`, tất cả trong `base_vault`.
+- Quyền mint bị **thu hồi** ngay trong chính chỉ thị này (`set_authority(MintTokens, None)`) ngay sau khi cung được mint — không phải tại thời điểm tốt nghiệp. Do đó base mint vĩnh viễn có cung cố định, và không có chỉ thị nào sau đó có thể mint thêm.
+- `PoolState` được khởi tạo với `status = Fund` (`0`), `real_a = 0`, `real_b = 0`.
+- `total_fund_raising_b` đến trực tiếp từ `curve_param.total_quote_fund_raising`.
+- Đối với `InitializeWithToken2022` với `TransferFeeConfig` được đính kèm: `transfer_fee_config_authority = launch_authority` và `withdraw_withheld_authority = PlatformConfig.transfer_fee_extension_auth` khi trường đó được đặt, nếu không thì `launch_authority`. Phía rút được viết tại tạo mint chính xác để nền tảng có thể quét phí bị giữ lại trước khi tốt nghiệp. Xem [`platform-config`](/docs/i18n/vi/products/launchlab/platform-config#token-2022-transfer-fee-authorities).
+
+**Lỗi phổ biến** — `NotApproved` (`6000`, vô điều kiện, đối với `Initialize` đã lỗi thời), `InvalidInput` (`6002`, vi phạm một giới hạn dưới về cung / tỷ lệ / huy động vốn từ `GlobalConfig`), `InputNotMatchCurveConfig` (`6003`, biến thể `curve_param` không khớp `global_config.curve_type`), `MigrateTypeNotMatch` (`6007`, `migrate_type != 1`), `MathOverflow` (`6008`), `VestingRatioTooHigh` (`6010`), `NoSupportExtension` (`6017`), `NotEnoughRemainingAccounts` (`6018`), `InvalidPlatformAllowConfig` (`6022`), `CurveParamNotMatchPlatformRule` (`6025`). Một kiểm tra `address =` / `constraint =` của Anchor thất bại sẽ hiện ra dưới dạng mã 2xxx, không phải một trong các mã trên — không có `InvalidQuoteMint`, `FeeRateTooHigh` hay `InvalidCurveParams` nào tồn tại trong enum lỗi của chương trình.
+
+## `Buy` (biến thể chính tắc: `BuyExactIn`)
+
+Người dùng cung cấp một lượng đầu vào cố định; đường cong tính toán đầu ra.
+
+**Đối số**
+
+```
+amount_in:           u64
+minimum_amount_out:  u64
+share_fee_rate:      u64   // referral fee on a 1_000_000 denominator; must be
+                           // <= global_config.max_share_fee_rate. Pass 0 for no
+                           // referral. Any non-zero value requires the share-fee
+                           // receiver as remaining_accounts[0].
+```
+
+**Tài khoản**
+
+| # | Tên | W | S | Ghi chú |
+|---|------|---|---|-------|
+| 1 | `payer` | W | S | Người giao dịch. |
+| 2 | `authority` |   |   | PDA `["vault_auth_seed"]` — một PDA toàn cục duy nhất, không có seed theo từng lần phát hành. |
+| 3 | `global_config` |   |   | `address = pool_state.global_config`. |
+| 4 | `platform_config` |   |   | `address = pool_state.platform_config`. |
+| 5 | `pool_state` | W |   | |
+| 6 | `user_base_token` | W |   | `token::mint = base_token_mint`. |
+| 7 | `user_quote_token` | W |   | `token::mint = quote_token_mint`. |
+| 8 | `base_vault` | W |   | `address = pool_state.base_vault`. |
+| 9 | `quote_vault` | W |   | `address = pool_state.quote_vault`. |
+| 10 | `base_token_mint` |   |   | |
+| 11 | `quote_token_mint` |   |   | |
+| 12 | `base_token_program` |   |   | Chương trình sở hữu base mint — SPL Token hoặc Token-2022. |
+| 13 | `quote_token_program` |   |   | Chương trình sở hữu quote mint. |
+| 14 | `event_authority` |   |   | PDA `["__event_authority"]`; được `#[event_cpi]` thêm vào. |
+| 15 | `program` |   |   | Id chương trình LaunchLab; được `#[event_cpi]` thêm vào. |
+
+**Các tài khoản còn lại** — phần đường ống phí, được đọc theo đúng thứ tự này:
+
+1. `share_fee_receiver` — **chỉ** khi `share_fee_rate > 0`.
+2. `system_program` — luôn luôn; được kiểm tra `== System::id()`, nếu không thì `InvalidInput`.
+3. `platform_fee_vault` — PDA `[platform_config, quote_token_mint]`; được tạo ở lần dùng đầu tiên.
+4. `creator_fee_vault` — PDA `[creator, quote_token_mint]`; được tạo ở lần dùng đầu tiên.
+
+Truyền thiếu sẽ trả về `NotEnoughRemainingAccounts` (`6018`). Không có vị trí `associated_token_program`
+nào, và `system_program` là một tài khoản *còn lại* chứ không phải một tài khoản được khai báo.
+
+**Điều kiện trước**
+
+- `launch_state.status == Active`.
+- `now ≥ open_time`.
+- `user_quote_ata.balance ≥ quote_in`.
+- `quote_in > 0`.
+
+**Hiệu ứng**
+
+1. Chia `quote_in` thành `quote_in_after_fee` và các phần phí.
+2. Newton-giải đường cong cho `base_out` được cấp post-fee quote.
+3. `require(base_out ≥ minimum_base_out)` nếu không hoàn nguyên `ExceededSlippage`.
+4. Di chuyển `quote_in` người dùng → kho. Di chuyển `base_out` kho → người dùng.
+5. Cập nhật `base_sold += base_out`, `quote_reserve_real += quote_in_after_fee × (lp_share / total_share)`.
+6. Cập nhật bộ đếm phí (`protocol_fees_quote`, `creator_fees_quote`).
+7. `state_data.num_buys += 1`.
+8. Nếu `quote_reserve_real ≥ quote_reserve_target` sau khi cập nhật, SDK thường xuyên chuỗi lệnh `Graduate` trong cùng một giao dịch. Chương trình không tự động tốt nghiệp bên trong `Buy` — một `Graduate` tiếp theo là bắt buộc.
+
+## `BuyExactOut`
+
+Người dùng chỉ định `base_out` chính xác; chương trình tính toán `quote_in`.
+
+**Đối số**
+
+```
+amount_out:         u64
+maximum_amount_in:  u64
+share_fee_rate:     u64   // as for BuyExactIn
+```
+
+Cùng các tài khoản và cùng hợp đồng về remaining-account như `BuyExactIn`. Sử dụng tích phân bậc hai dạng đóng (hoặc CPMM nghịch đảo, cho curve_type 1) thay vì lặp Newton.
+
+## `Sell` / `SellExactIn` / `SellExactOut`
+
+Gương của `Buy`. Người dùng trả lại `base_in` cho đường cong và nhận `quote_out`. Phí được khấu trừ từ `quote_out`, vì vậy người dùng nhận được ít hơn các khoản tiền tích lũy thô.
+
+**Điều kiện trước** —
+
+- `user_base_ata.balance ≥ base_in`.
+- Bán không thể đẩy `base_sold` dưới 0 (dư thừa với điều trên với kế toán nhất quán).
+- Khởi chạy là `Active`.
+
+**Hiệu ứng** — đối xứng với `Buy`. `base_sold` giảm, `quote_reserve_real` giảm. Phí vẫn tích lũy.
+
+### Phí chuyển phía quote
+
+Khi mint quote mang `TransferFeeConfig`, số tiền kho di chuyển và số tiền người trả tiền bị ghi nợ hoặc ghi có khác nhau, và giới hạn trượt được kiểm tra so với phía người trả tiền. Trên mint quote không có phần mở rộng, mọi trường hợp dưới đây giống hệt với mint kế thừa đơn giản.
+
+| Lệnh | Đối số | Kiểm tra so với |
+|---|---|---|
+| `BuyExactIn` | `amount_in` | Đường cong được định giá trên `amount_in − transfer_fee(amount_in)` — những gì đến kho. Một lần điền đầy ghi nợ chính xác `amount_in`; một lần điền một phần ghi nợ số tiền kho tiêu thụ cộng với phí nghịch đảo của nó. |
+| `BuyExactOut` | `maximum_amount_in` | Số tiền kho **cộng** phí chuyển nghịch đảo — ghi nợ thực tế. |
+| `SellExactIn` | `minimum_amount_out` | Những gì người bán giữ lại sau khi mint giữ lại phí của nó, không phải số tiền tổng rời kho. |
+| `SellExactOut` | `amount_out` | Giao hàng chính xác. Đường cong nhắm mục tiêu `amount_out` cộng với phí chuyển nghịch đảo. |
+
+Hai hệ quả cho trích dẫn:
+
+- Một giới hạn được tính toán như thể mint không có phí bị từ chối. Chuyển chi phí không có phí làm `maximum_amount_in` hoặc lợi nhuận không có phí làm `minimum_amount_out` hoàn nguyên với `ExceededSlippage`.
+- `real_quote` chỉ tiến lên bởi những gì đến kho. Một `BuyExactIn` của `amount_in` trên mint quote 5% di chuyển `real_quote` bởi `amount_in × 0.95`.
+
+Mint quote 100%-phí (`10000` điểm cơ sở) không thể được đảo ngược và hoàn nguyên với `CalculateOverflow` trên các đường dẫn chính xác.
+
+Cả hai mint phía giao dịch cũng bị ràng buộc với chương trình được chuyển trong vị trí khớp của chúng, vì vậy `base_token_program` không khớp bây giờ thất bại thay vì bị bỏ qua. Xem [`algorithms/token-2022-transfer-fees`](/docs/i18n/vi/algorithms/token-2022-transfer-fees) để biết toán học phí cơ bản.
+
+## `MigrateToAmm` / `MigrateToCpswap`
+
+Tốt nghiệp một khởi chạy thành một pool có thể giao dịch được khi đường cong đã chạm `total_quote_fund_raising`. Các khởi chạy mới chỉ CPMM. `MigrateToAmm` được giữ lại cho các pool hiện có có `migrate_type` được lưu trữ là `0`.
+
+**Ai ký**
+
+- `MigrateToAmm` — `migrate_to_amm_wallet` được ghi lại trên `GlobalConfig` liên kết.
+- `MigrateToCpswap` — `migrate_to_cpswap_wallet` được ghi lại trên `GlobalConfig` liên kết.
+
+Những ví này thường được giữ bởi crank tốt nghiệp do Raydium vận hành; trong thực tế tốt nghiệp hạ cánh vài giây sau khi ngưỡng bị vượt qua, bất kể ai kích hoạt lần mua cuối cùng.
+
+**Đối số**
+
+`MigrateToAmm` lấy ba (chủ yếu là các tham số thị trường OpenBook mà chương trình chuyển tiếp đến AMM v4):
+
+```
+base_lot_size:               u64
+quote_lot_size:              u64
+market_vault_signer_nonce:   u8
+```
+
+`MigrateToCpswap` không lấy gì.
+
+**Hiệu ứng (chung cho cả hai)**
+
+1. Xác minh `pool_state.status == Migrate` (tức là `quote_reserve_target` đã được đạt). Nếu không hoàn nguyên với `PoolMigrated` (trạng thái đã là `Migrated`) hoặc `PoolFunding` (vẫn đang tài trợ).
+2. Xác minh `pool_state.migrate_type` khớp với lệnh (`0` cho AMM, `1` cho CPMM). Nếu không hoàn nguyên với `MigrateTypeNotMatch`.
+3. Tính toán dự trữ sau tốt nghiệp:
+   - `base_amount_out = base_vault.amount − vesting_schedule.total_locked_amount`
+   - `quote_amount_out = quote_vault.amount − quote_protocol_fee − migrate_fee − platform_fee`
+4. CPI vào chương trình đích (`AMM v4 Initialize2` hoặc `CPMM InitializeWithPermission`) với những dự trữ đó để tạo pool sau tốt nghiệp.
+5. Đối với các di chuyển CPMM được thực thi sau nâng cấp 2026-08-17, kết hợp `platform_scale + creator_scale` thành một chia sẻ LP bị khóa do nền tảng sở hữu và mint tối đa một NFT Fee Key cho `platform_nft_wallet`. Đốt phần còn lại `burn_scale`. Trước nâng cấp, `creator_scale` được khóa riêng biệt và Fee Key của nó đã đi đến người tạo token. Các di chuyển lịch sử hoàn thành không được sửa đổi. Đối với tốt nghiệp AMM v4 kế thừa, việc xử lý LP tuân theo luồng hiện có của lệnh đó.
+6. Thu hồi `base_mint.mint_authority` (đặt thành `None`).
+7. Lật `pool_state.status = Migrated`, đặt `vesting_schedule.start_time = block_time + cliff_period`.
+
+**Chuyển giao quyền hạn Token-2022 transfer-fee** — khi mint cơ sở là mint Token-2022 mang `TransferFeeConfig` **và** `PlatformConfig.transfer_fee_extension_auth` không phải mặc định, di chuyển cũng tái chỉ định các quyền hạn phần mở rộng đó cho khóa nền tảng:
+
+- `transfer_fee_config_authority` luôn được tái chỉ định. PDA `authority` khởi chạy giữ nó cho toàn bộ giai đoạn trước tốt nghiệp, vì vậy luôn có cái gì đó để di chuyển.
+- `WithheldWithdraw` được tái chỉ định **chỉ khi PDA `authority` vẫn giữ nó**. Các khởi chạy được tạo từ 2026-08-27 trở đi đã mang `transfer_fee_extension_auth` trên quyền hạn đó từ tạo mint, vì vậy bước này bị bỏ qua. Bảo vệ là những gì ngăn di chuyển khỏi hoàn nguyên trên những mint đó — PDA không thể ký bỏ quyền hạn nó không còn giữ.
+
+Nếu `transfer_fee_extension_auth` là `Pubkey::default()` tại thời điểm di chuyển, không có quyền hạn nào di chuyển và cả hai vẫn ở với PDA `authority` vĩnh viễn. Xem [`platform-config`](/docs/i18n/vi/products/launchlab/platform-config#token-2022-transfer-fee-authorities).
+
+**Điều kiện sau** — `BuyExactIn`, `BuyExactOut`, `SellExactIn`, `SellExactOut` sẽ từ chối từ điểm này trở đi với `PoolMigrated`. Pool AMM kết quả là chính tắc và giao dịch như bất kỳ pool AMM v4 / CPMM nào khác.
+
+**Lỗi phổ biến** — `PoolFunding`, `PoolMigrated`, `MigrateTypeNotMatch`, `InvalidCpSwapConfig`, `MathOverflow`.
+
+### Các tài khoản còn lại di chuyển CPMM
+
+Các máy khách xây dựng `MigrateToCpswap` phải sử dụng các chỉ số `remaining_accounts` cố định này:
+
+| Chỉ số | Tài khoản |
+|---|---|
+| 0–4 | Chủ sở hữu Fee Key nền tảng, mint, tài khoản token, PDA thanh khoản bị khóa và tài khoản siêu dữ liệu |
+| 5 | Người tạo khởi chạy gốc; được sử dụng khi `platform_cp_creator` không được đặt |
+| 6 | PDA quyền CPMM được lấy từ `[b"permission", launch_authority]` |
+| 7 | `platform_cp_creator` được cấu hình; được sử dụng khi trường không phải mặc định |
+| 8 | PDA support-mint CPMM cho `mint0` được sắp xếp, được lấy từ `[b"support_mint", mint0]` |
+| 9 | PDA support-mint CPMM cho `mint1` được sắp xếp, được lấy từ `[b"support_mint", mint1]` |
+
+Lệnh yêu cầu ít nhất mười tài khoản còn lại trên đường dẫn được nâng cấp. Các tài khoản support-mint là đầu vào CPI chỉ đọc. Lấy cả hai địa chỉ ngay cả khi mint không có bản ghi hỗ trợ được khởi tạo. Các trình xây dựng cũ hơn vẫn nối các tài khoản khóa người tạo hoặc bỏ qua chỉ số 8–9 phải được cập nhật.
+
+### Chương trình token di chuyển CPMM
+
+`MigrateToCpswap` lấy cả hai chương trình token vô điều kiện và tự tìm ra chương trình nào sở hữu mỗi mint. Hai tài khoản chương trình token của nó được đổi tên tương ứng:
+
+| Vị trí | Tài khoản | Giá trị |
+|---|---|---|
+| đầu tiên | `token_program` | Luôn là chương trình SPL Token kế thừa |
+| thứ hai | `token_program_2022` | Luôn là chương trình Token-2022 |
+
+Chúng thay thế `base_token_program` cũ (chương trình nào sở hữu mint cơ sở) và `quote_token_program` (luôn kế thừa). Vị trí không thay đổi, vì vậy đây là thay đổi giá trị chứ không phải thay đổi bố cục — nhưng hai giá trị gần như bị đảo ngược, và một trình xây dựng giữ cặp cũ của nó sẽ cung cấp Token-2022 nơi chương trình kế thừa được yêu cầu ngay khi mint nào đó là mint Token-2022.
+
+Chương trình kế thừa được yêu cầu ngay cả khi không mint nào sử dụng nó, vì mint LP CPMM và NFT Fee Key thanh khoản bị khóa luôn sống trên nó.
+
+## Danh sách cho phép `GlobalConfig` nền tảng
+
+`PlatformConfig.restrict_global_config` kiểm soát kiểm tra:
+
+- `0`: nền tảng chấp nhận bất kỳ `GlobalConfig` nào hợp lệ; không cần tài khoản cho phép.
+- `1`: `Initialize`, `InitializeV2` và `InitializeWithToken2022` phải bao gồm `PlatformAllowConfig` khớp ở bất kỳ đâu trong `remaining_accounts`.
+
+Quản trị viên nền tảng tạo hoặc đóng PDA với `CreatePlatformAllowConfig` và `ClosePlatformAllowConfig`. Hạt giống của nó là `[b"platform_allow_config", platform_config, global_config]`. Các lệnh `PlatformGlobalAccess` do quản trị viên quản lý trước đây và PDA được loại bỏ.
+
+## Quy tắc tham số khởi chạy nền tảng
+
+Bốn lệnh quản lý một tài khoản `PlatformCurveRule`. Cả bốn đều được ký bởi `PlatformConfig.curve_rule_manager` hoặc quản trị viên nền tảng — chương trình chấp nhận quản trị viên bằng cách lấy lại PDA `PlatformConfig` từ người ký, vì vậy không có tài khoản riêng biệt chứng minh nó. Người ký không phải là cả hai trả về `InvalidCurveRuleAuthority`.
+
+| Lệnh | Tài khoản | Đối số |
+|---|---|---|
+| `CreatePlatformCurveRule` | `curve_rule_authority` (ký, mut), `platform_config`, `global_config`, `platform_curve_rule` (mut), `system_program` | không có |
+| `UpdatePlatformCurveRule` | năm cái giống nhau | `group_id: u16`, `constraints: Vec<ParamConstraint>` |
+| `RemovePlatformCurveRule` | năm cái giống nhau | `group_id: u16` |
+| `ClosePlatformCurveRule` | bốn cái đầu tiên | không có |
+
+`platform_curve_rule` là PDA tại `[b"platform_curve_rule", platform_config, global_config]`.
+
+- **`Create`** phân bổ tài khoản không giữ nhóm. Trạng thái đó không hạn chế bất cứ điều gì.
+- **`Update`** upserts nhóm với `group_id` đó, thay thế nó hoàn toàn nếu nó tồn tại. Nó thay đổi kích thước tài khoản để phù hợp, vì vậy người ký bổ sung tiền thuê nó phát triển bởi và nhận lại tiền thuê nó co lại bởi. Một nhóm mới vượt quá thứ mười trả về `CurveRuleGroupsExceeded`; hơn 25 ràng buộc, trường không xác định hoặc toán tử, hoặc cặp `(field, op)` giống nhau hai lần trong một nhóm trả về `InvalidCurveRuleConstraint`; bốn trường dẫn xuất `TotalSellA` trên cấu hình không phải sản phẩm hằng số trả về `CurveRuleFieldNotSupportedByCurve`.
+- **`Remove`** thả một nhóm theo id, co lại tài khoản và hoàn lại sự khác biệt. Một id không xác định trả về `CurveRuleGroupNotExist`.
+- **`Close`** trả lại toàn bộ tiền thuê cho người ký. Cấu hình sau đó không bị hạn chế lại ngay cả khi `restrict_curve_param` vẫn ở `1`.
+
+Không có bốn cái nào thay đổi xem quy tắc có được thực thi hay không. Đó là `UpdatePlatformConfig::RestrictCurveParam(0 | 1)`, chỉ quản trị viên nền tảng mới có thể gọi.
+
+**Trên đường dẫn khởi chạy.** Trong khi `restrict_curve_param` là `1`, `InitializeV2` và `InitializeWithToken2022` yêu cầu PDA quy tắc trong `remaining_accounts` — bao gồm khi nó không tồn tại, vì vậy bỏ qua nó không thể bỏ qua kiểm tra. Tài khoản bị thiếu là `NotEnoughRemainingAccounts`; một khởi chạy không thỏa mãn nhóm nào là `CurveParamNotMatchPlatformRule`. Kiểm tra chạy trước các giới hạn của `GlobalConfig` riêng của nó và chỉ có thể thu hẹp chúng. Mô hình và sách hướng dẫn: [`products/launchlab/curve-rules`](/docs/i18n/vi/products/launchlab/curve-rules). Cả hai lỗi đều có thể tránh được phía máy khách — SDK phản chiếu kiểm tra này như một hàm thuần túy, xem [Kiểm tra trước khi bạn gửi](/docs/i18n/vi/products/launchlab/curve-rules#check-before-you-send).
+
+## `CollectFee`
+
+Quét quản trị viên của phí giao dịch tích lũy của giao thức trên một khởi chạy duy nhất.
+
+**Đối số** — không có.
+
+**Tài khoản**
+
+| # | Tên | W | S | Ghi chú |
+|---|------|---|---|-------|
+| 1 | `protocol_fee_owner` |   | S | Phải bằng `global_config.protocol_fee_owner`. |
+| 2 | `authority` |   |   | PDA `[b"vault_auth_seed"]`; ký chuyển kho. |
+| 3 | `pool_state` | W |   | Được thay đổi để đưa `quote_protocol_fee` về không. |
+| 4 | `global_config` |   |   | Nguồn sự thật cho người ký. |
+| 5 | `quote_vault` | W |   | Bị rút đi lượng `quote_protocol_fee`. |
+| 6 | `quote_mint` |   |   | |
+| 7 | `recipient_token_account` | W |   | ATA của `protocol_fee_owner` trên `quote_mint`. |
+| 8 | `token_program` |   |   | Chương trình sở hữu mint quote — SPL Token hoặc Token-2022. |
+
+<Warning>
+  Ở đây `quote_mint` đứng **trước** `recipient_token_account` — ngược với `ClaimCreatorFee`,
+  `ClaimPlatformFee` và `ClaimPlatformFeeFromVault`, cả ba đều đặt bên nhận lên trước. Hai vị trí
+  này có kiểu Anchor khác nhau (`Mint` so với `TokenAccount`), nên việc đảo chúng sẽ khiến quá trình
+  deserialization thất bại lúc chạy và trông giống như một lỗi sai tài khoản. `CollectMigrateFee` có
+  cùng thứ tự với `CollectFee`.
+</Warning>
+
+**Hiệu ứng** — chuyển `pool_state.quote_protocol_fee` từ `quote_vault` đến `recipient_token_account`, sau đó không bộ đếm. Có thể gọi bất kỳ lúc nào sau lần mua đầu tiên.
+
+## `CollectMigrateFee`
+
+Quét quản trị viên của phí di chuyển tích lũy tại tốt nghiệp. Hình dạng tài khoản giống như `CollectFee` với `migrate_fee_owner` làm người ký (thay vì `protocol_fee_owner`) và `pool_state.migrate_fee` làm bộ đếm drained.
+
+## `ClaimCreatorFee`
+
+Quét mỗi người tạo của phí người tạo tích lũy trên **mọi khởi chạy mà người tạo sở hữu** sử dụng cùng một mint quote. Drained kho phí mỗi người tạo, không phải kho mỗi pool.
+
+**Đối số** — không có.
+
+**Tài khoản**
+
+| # | Tên | W | S | Ghi chú |
+|---|------|---|---|-------|
+| 1 | `creator` | W | S | Người tạo pool. |
+| 2 | `fee_vault_authority` |   |   | PDA `[b"creator_fee_vault_auth_seed"]`. |
+| 3 | `creator_fee_vault` | W |   | PDA tại hạt giống `[creator, quote_mint]`; kho người tạo tổng hợp. |
+| 4 | `recipient_token_account` | W |   | `init_if_needed`; ATA của `creator` trên `quote_mint`. |
+| 5 | `quote_mint` |   |   | |
+| 6 | `token_program` |   |   | |
+| 7 | `system_program` |   |   | Để tạo ATA nếu cần. |
+| 8 | `associated_token_program` |   |   | |
+
+**Hiệu ứng** — chuyển toàn bộ số dư của `creator_fee_vault` đến `recipient_token_account`. Hoàn nguyên với kiểm tra yêu cầu lớn hơn không nếu kho trống.
+
+## `ClaimPlatformFee`
+
+Quét mỗi nền tảng drained kho quote khởi chạy trực tiếp. Sử dụng cái này khi nền tảng muốn yêu cầu lát cắt của nó cho một khởi chạy cụ thể mà không đi qua kho nền tảng tổng hợp.
+
+**Đối số** — không có.
+
+**Tài khoản**
+
+| # | Tên | W | S | Ghi chú |
+|---|------|---|---|-------|
+| 1 | `platform_fee_wallet` | W | S | Phải bằng `platform_config.platform_fee_wallet`. |
+| 2 | `authority` |   |   | PDA `[b"vault_auth_seed"]`. |
+| 3 | `pool_state` | W |   | Drained bởi `pool_state.platform_fee`. |
+| 4 | `platform_config` |   |   | Nguồn sự thật cho người ký. |
+| 5 | `quote_vault` | W |   | Drained. |
+| 6 | `recipient_token_account` | W |   | `init_if_needed`; ATA của `platform_fee_wallet`. |
+| 7 | `quote_mint` |   |   | |
+| 8 | `token_program` |   |   | |
+| 9 | `system_program` |   |   | |
+| 10 | `associated_token_program` |   |   | |
+
+**Hiệu ứng** — chuyển `pool_state.platform_fee` từ `quote_vault` đến `recipient_token_account`, không bộ đếm.
+
+## `ClaimPlatformFeeFromVault`
+
+Quét tổng hợp mỗi nền tảng. Drained kho phí mỗi mint quote nền tảng tích lũy phí từ mọi khởi chạy được định tuyến qua nền tảng.
+
+**Đối số** — không có.
+
+**Tài khoản**
+
+| # | Tên | W | S | Ghi chú |
+|---|------|---|---|-------|
+| 1 | `platform_fee_wallet` | W | S | Phải bằng `platform_config.platform_fee_wallet`. |
+| 2 | `fee_vault_authority` |   |   | PDA `[b"platform_fee_vault_auth_seed"]`. |
+| 3 | `platform_config` |   |   | |
+| 4 | `platform_fee_vault` | W |   | PDA tại hạt giống `[platform_config, quote_mint]`. |
+| 5 | `recipient_token_account` | W |   | `init_if_needed`; ATA của `platform_fee_wallet`. |
+| 6 | `quote_mint` |   |   | |
+| 7 | `token_program` |   |   | |
+| 8 | `system_program` |   |   | |
+| 9 | `associated_token_program` |   |   | |
+
+**Hiệu ứng** — chuyển toàn bộ số dư của `platform_fee_vault` đến `recipient_token_account`. Hoàn nguyên nếu kho trống.
+
+## Vesting và các lệnh cấu hình nền tảng
+
+Những cái này được ghi lại trên các trang chuyên dụng vì mỗi cái có mô hình trạng thái riêng:
+
+- [`CreateVestingAccount`, `CreatePlatformVestingAccount`, `ClaimVestedToken`](/docs/i18n/vi/products/launchlab/vesting)
+- [`CreatePlatformConfig`, `UpdatePlatformConfig`, `CreatePlatformAllowConfig`, `ClosePlatformAllowConfig`](/docs/i18n/vi/products/launchlab/platform-config)
+- [`CreatePlatformCurveRule`, `UpdatePlatformCurveRule`, `RemovePlatformCurveRule`, `ClosePlatformCurveRule`](/docs/i18n/vi/products/launchlab/curve-rules)
+- [`CreateConfig`, `UpdateConfig`](/docs/i18n/vi/products/launchlab/global-config)
+
+## Ma trận thay đổi trạng thái
+
+| Lệnh | `status` | `real_base` | `real_quote` | Bộ đếm phí | Pool trạng thái sau |
+|-------------|----------|-------------|--------------|--------------|------------------|
+| `Initialize{V2,WithToken2022}` | Funding | 0 | 0 | 0 | — |
+| `BuyExactIn(q_in)` | Funding | +∆ | +∆q_after_fee | `quote_protocol_fee += ∆`, `platform_fee += ∆` | — |
+| `SellExactIn(b_in)` | Funding | −∆ | −∆q_before_fee | (giống nhau) | — |
+| Ngưỡng đạt được | → Migrate | — | — | — | — |
+| `MigrateToCpswap` / `MigrateToAmm` kế thừa | → Migrated | (đóng băng) | (đóng băng) | `migrate_fee` đặt | được tạo; chia sẻ LP CPMM thành khóa nền tảng và đốt |
+| `CollectFee` / `CollectMigrateFee` | bất kỳ | — | — | bộ đếm không | — |
+| `ClaimCreatorFee` / `ClaimPlatformFee*` | bất kỳ | — | — | drained kho | — |
+| `CreateVestingAccount` | Funding | — | — | — | bumps `allocated_share_amount` |
+| `ClaimVestedToken` | Migrated | — | — | — | drained `base_vault` |
+
+## Nơi đi tiếp theo
+
+- [`products/launchlab/code-demos`](/docs/i18n/vi/products/launchlab/code-demos) — Ví dụ TypeScript cho mỗi lệnh.
+- [`products/launchlab/accounts`](/docs/i18n/vi/products/launchlab/accounts) — hình dạng trạng thái đầy đủ.
+- [`reference/error-codes`](/docs/i18n/vi/reference/error-codes) — enum lỗi LaunchLab.
+
+Nguồn:
+
+- [Mô-đun Raydium SDK v2 `LaunchLab`](https://github.com/raydium-io/raydium-sdk-V2)
+- Nguồn chương trình Raydium LaunchLab

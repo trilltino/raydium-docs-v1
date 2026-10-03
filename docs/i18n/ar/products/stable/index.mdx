@@ -1,0 +1,66 @@
+---
+title: "Stable AMM"
+description: "برنامج Raydium مستقل يستخدم منحنيات أسعار محقّقة من جداول البحث. يوفر السيولة لأزواج العملات المستقرة والأصول الأخرى ذات العلاقات السعرية المعروفة."
+---
+
+<Info>
+  **هذه الصفحة مُترجَمة آليًا بواسطة الذكاء الاصطناعي. النسخة الإنجليزية هي المرجع المعتمد.**
+
+  [عرض النسخة الإنجليزية →](/docs/en/products/stable/index)
+</Info>
+
+## ما هو Stable AMM
+
+Stable AMM هو **برنامج Raydium مستقل** (نشر خاص به — وليس وضعًا من أوضاع برنامج AMM v4) مصمّم للأزواج ذات العلاقات السعرية المعروفة والمستقرة — بشكل أساسي أزواج العملات المستقرة (USDC-USDT و USDH-USDC) وأزواج الرموز المضمونة. بدلاً من منحنى الناتج الثابت، يستخدم **جدول بحث يحتوي على صفوف (x, y, price)** مدمجة في حساب `ModelDataInfo` الخاص بكل مجموعة سيولة. يحدث اكتشاف السعر من خلال الاستيفاء داخل الجدول، مما ينتج عنه انزلاق أقل للمبادلات الصغيرة.
+
+إنه **AMM نقي**: كل السيولة موجودة في خزائن المجموعة الخاصة بها. مسار صنع السوق في OpenBook في بداية الحياة كان خاملاً لسنوات، و[ترقية 2026-06-22](/docs/i18n/ar/reference/changelog) أزالت الكود السوقي المتبقي. يشارك نفس هيكل `Fees` ونموذج الرسوم مع AMM v4؛ الفرق هو بحتة في **منحنى التسعير** — بدلاً من x·y=k، تقوم بالاستيفاء من نموذج مأهول مسبقًا.
+
+**معرّف البرنامج:** انظر [reference/program-addresses](/docs/i18n/ar/reference/program-addresses).
+
+**Token-2022:** غير مدعوم. رموز SPL الكلاسيكية فقط.
+
+**السيولة:** رقيقة. معظم التكاملات الموجهة للمستخدم تصل إلى مجموعات Stable من خلال [برنامج AMM Routing](/docs/i18n/ar/products/routing) للتوجيه بأفضل سعر عبر جميع AMMs في Raydium. يدعم SDK أيضًا مجموعات Stable مباشرة: تظهر المجموعات كـ `version: 5` (`pooltype: "StablePool"`) على `ApiV3PoolInfoStandardItem`، و`LiquidityModule` القياسي (`addLiquidity` / `removeLiquidity` / swap) يكتشف v5 تلقائيًا ويصدر التعليمات الصحيحة — انظر [Code demos](/docs/i18n/ar/products/stable/code-demos).
+
+## محتويات الفصل
+
+<CardGroup cols={2}>
+  <Card title="نظرة عامة" icon="circle-info" href="/docs/i18n/ar/products/stable/overview">
+    لماذا برنامج منفصل، نموذج جدول البحث، المقارنة مع AMM v4 و CPMM.
+  </Card>
+  <Card title="الحسابات" icon="database" href="/docs/i18n/ar/products/stable/accounts">
+    حقول AmmInfo و ModelDataInfo و DataElement، تخطيط الخزائن، هيكل الرسوم.
+  </Card>
+  <Card title="الرياضيات" icon="function" href="/docs/i18n/ar/products/stable/math">
+    كيف ينتج الاستيفاء الأسعار، محاسبة أصول المجموعة، تطبيق الرسوم مطابق لـ AMM v4.
+  </Card>
+  <Card title="التعليمات" icon="terminal" href="/docs/i18n/ar/products/stable/instructions">
+    المجموعة القابلة للاستدعاء — Deposit و Withdraw و SwapBaseIn و SwapBaseOut و WithdrawPnl — والتعليمات المحذوفة في ترقية 2026-06-22.
+  </Card>
+  <Card title="الرسوم" icon="percent" href="/docs/i18n/ar/products/stable/fees">
+    رسم تداول إجمالي 0.02%، موزّع 0.0176% LP / 0.0024% بروتوكول. لا توجد رسوم صندوق، لا توجد رسوم منشئ.
+  </Card>
+  <Card title="عروض الكود" icon="code" href="/docs/i18n/ar/products/stable/code-demos">
+    اكتشف مجموعة Stable، قم بالمبادلة / الإضافة / إزالة السيولة من خلال `LiquidityModule` الخاص بـ SDK (يتعامل مع v5 بشكل أصلي)، واستخدم مساعدات منحنى stable خارج السلسلة.
+  </Card>
+</CardGroup>
+
+## متى تقرأ هذا
+
+- أنت تدمج زوج عملة مستقرة أو أصل وتجد مجموعة Stable AMM بأفضل سعر.
+- أنت تبني محرك توجيه وتحتاج إلى دعم مجموعات Stable كمصدر سيولة.
+- أنت تحافظ على السيولة في مجموعة Stable موجودة — تتعلم تدفق الإيداع / السحب.
+- أنت فضولي حول كيفية جعل تسعير AMM قابلاً للبرمجة عبر جدول بحث.
+
+## الحقائق الرئيسية
+
+| الجانب | القيمة |
+|--------|-------|
+| **معرّف البرنامج على Mainnet** | `5quBtoiQqxF9Jv6KYKctB59NT3gtJD2Y65kdnB1Uev3h` |
+| **معرّف البرنامج على Devnet** | `DRayDdXc1NZQ9C3hRWmoSf8zK4iapgMnjdNZWrfwsP8m` |
+| **نموذج المنحنى** | جدول بحث محقّق (وليس x·y=k) |
+| **اعتماد OpenBook** | لا شيء (مسار السوق خامل منذ فترة طويلة؛ تم حذف الكود الميت في 2026-06-22) |
+| **رسوم التداول** | 0.02% (وليست 0.25% الخاصة بـ AMM v4) |
+| **حصة LP من الرسوم** | 0.0176% (88% من الرسم) |
+| **حصة البروتوكول من الرسوم** | 0.0024% (12% من الرسم) |
+| **رسوم المنشئ** | لا شيء |
+| **رسوم الصندوق** | لا شيء |

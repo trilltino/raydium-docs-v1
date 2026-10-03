@@ -1,0 +1,327 @@
+---
+title: "Comisiones CPMM"
+description: "Cómo CPMM cobra una comisión de intercambio y una comisión de creador separada, divide la comisión de intercambio entre LPs, la tesorería del protocolo y el multisig del fondo, divide una parte configurable de la comisión del creador hacia el protocolo en el momento de la recopilación, y quién cobra qué, cuándo."
+---
+
+<Info>
+  **Esta página fue traducida automáticamente por IA. La versión en inglés es la fuente autorizada.**
+
+  [Ver versión en inglés →](/docs/en/products/cpmm/fees)
+</Info>
+
+## Dos comisiones independientes, cuatro destinos
+
+CPMM aplica **dos comisiones con tasas separadas** en cada intercambio:
+
+1. **Comisión de intercambio** — cobrada a `AmmConfig.trade_fee_rate` y dividida entre tres destinos:
+   - **Parte de LP** — permanece en la bóveda y aumenta `k`. Se reclama implícitamente quemando tokens LP.
+   - **Parte del protocolo** — acumulada en `PoolState.protocol_fees_token*`; retirada por el `protocol_owner` mediante `CollectProtocolFee`.
+   - **Parte del fondo** — acumulada en `PoolState.fund_fees_token*`; retirada por el `fund_owner` mediante `CollectFundFee`.
+2. **Comisión del creador** (opcional, por pool) — cobrada a `AmmConfig.creator_fee_rate` **independientemente** de la comisión de intercambio y acumulada en `PoolState.creator_fees_token*`. El creador puede retirarla mediante `CollectCreatorFee`, o cualquier pagador puede activar la ruta restringida por destino `CollectCreatorFeePermissionless`. Activa solo cuando el pool se creó con `enable_creator_fee = true`. **Desde la actualización del 2026-09-19, la comisión del creador acumulada se divide una vez más en el momento de la recopilación**: una parte configurable se mueve al depósito del protocolo del pool y solo el resto llega al creador — ver [Parte del protocolo de la comisión del creador](#protocol-share-of-the-creator-fee).
+
+La comisión del creador **no** es una porción de la comisión de intercambio. Las dos tasas se suman cuando se cobra la comisión en la entrada del intercambio, pero cada una permanece en su propio depósito — las partes del protocolo y del fondo tomadas en un intercambio siempre se derivan de `trade_fee` únicamente, nunca de `creator_fee`. Un pool con `creator_fee_rate = 1000` (0.10%) y `trade_fee_rate = 2500` (0.25%) cobra un 0.35% combinado de la entrada en un intercambio con comisión del creador en la entrada, de los cuales el depósito del creador obtiene el 0.10% y el depósito de comisión de intercambio obtiene el 0.25%.
+
+La parte del protocolo de la comisión del creador funciona de la otra manera y es fácil de confundir con lo anterior: se extrae del **depósito del creador**, no de la comisión de intercambio, y no en el intercambio — se aplica cuando `CollectCreatorFee` o `CollectCreatorFeePermissionless` liquida el saldo acumulado. Las matemáticas del intercambio no cambian por esto.
+
+Las tasas de comisión de intercambio (`trade_fee_rate`, `protocol_fee_rate`, `fund_fee_rate`), la `creator_fee_rate` y la `creator_fee_share_rate` predeterminada viven en `AmmConfig`. La bandera `enable_creator_fee` por pool y el modo `creator_fee_on` (de qué lado del intercambio se cobra la comisión del creador) viven en `PoolState`. Una anulación por creador de la tasa de participación vive en su propio PDA `CreatorFeeShare`. Ver [`products/cpmm/accounts`](/docs/i18n/es/products/cpmm/accounts).
+
+## Tasas y unidades
+
+Todas las tasas son `u64` denominadas en unidades de `1 / FEE_RATE_DENOMINATOR` donde `FEE_RATE_DENOMINATOR = 1_000_000`.
+
+- **`trade_fee_rate`** es una fracción del **volumen de intercambio**. `2500` ⇒ 0.25% del lado relevante (entrada o salida, dependiendo de `creator_fee_on` — ver "De qué lado del intercambio se cobran las comisiones" abajo).
+- **`creator_fee_rate`** es una fracción del **volumen de intercambio**, cobrada **separadamente** de la comisión de intercambio. `1000` ⇒ 0.10% del lado relevante.
+- **`protocol_fee_rate`** y **`fund_fee_rate`** son fracciones de la **comisión de intercambio**, no del volumen. `120_000` ⇒ 12% de la comisión de intercambio.
+- **`creator_fee_share_rate`** es una fracción de la **comisión del creador acumulada**, no del volumen ni de la comisión de intercambio. `200_000` ⇒ 20% de lo que esté en `creator_fees_token*` en el momento en que se recopila. `0` (el predeterminado) deja toda la comisión del creador con el creador.
+
+Parámetros predeterminados para `AmmConfig[index=0]` (el pool estándar de 0.25%) en mainnet, como referencia:
+
+| Campo | Valor | Porcentaje efectivo |
+|-------|-------|-------------------|
+| `trade_fee_rate` | `2500` | 0.25% del volumen (depósito de comisión de intercambio) |
+| `protocol_fee_rate` | `120000` | 12% de la comisión de intercambio ≈ **0.030% del volumen** |
+| `fund_fee_rate` | `40000` | 4% de la comisión de intercambio ≈ **0.010% del volumen** |
+| `creator_fee_rate` | `0` (predeterminado) | 0% (depósito separado) |
+| `creator_fee_share_rate` | `0` (predeterminado) | 0% del depósito del creador (el creador mantiene todo) |
+| → Parte efectiva de LP | | **0.210% del volumen** |
+
+Entonces, en un intercambio de \$1,000 contra `AmmConfig[0]` con `enable_creator_fee = false`: \$2.50 de comisión de intercambio total, de los cuales \$2.10 permanecen con los LPs, \$0.30 van al protocolo, \$0.10 al fondo. El depósito del creador es 0 porque la comisión del creador está deshabilitada.
+
+Si el mismo pool tuviera `enable_creator_fee = true` y `creator_fee_rate = 1000` (0.10%), el usuario paga un \$1.00 adicional al depósito del creador — tomado del mismo lado del intercambio configurado por `creator_fee_on` — para un total de \$3.50 de comisiones. El depósito de comisión de intercambio y sus divisiones de protocolo/fondo no cambian.
+
+Confirma los valores actuales de mainnet contra `GET https://api-v3.raydium.io/main/cpmm-config` — las tasas son mutables por administrador y deben leerse nuevas en lugar de codificarse.
+
+## La división, en código
+
+```rust
+// Parafraseado de raydium-cp-swap/programs/cp-swap/src/curve/{calculator,fees}.rs.
+// El código real se ramifica en `is_creator_fee_on_input`; ambas ramas preservan el
+// invariante de que creator_fee es su propia tasa, nunca una porción de trade_fee.
+
+const FEE_RATE_DENOMINATOR_VALUE: u64 = 1_000_000;
+
+pub struct FeeBreakdown {
+    pub amount_in_after_fees: u64,    // entrada menos todas las comisiones cobradas en el lado de entrada
+    pub amount_out_after_fees: u64,   // salida menos cualquier comisión del creador cobrada en el lado de salida
+    pub trade_fee:    u64,            // → dividida en depósitos de LP / protocolo / fondo abajo
+    pub protocol_fee: u64,            // parte de trade_fee
+    pub fund_fee:     u64,            // parte de trade_fee
+    pub creator_fee:  u64,            // depósito independiente (lado de entrada o salida)
+}
+
+fn take_fees_on_input(
+    amount_in: u64,
+    trade_rate: u64,
+    creator_rate: u64,
+    protocol_rate: u64,
+    fund_rate: u64,
+) -> (u64 /* trade_fee */, u64 /* creator_fee */, u64 /* amount_in_after_fees */) {
+    // Las dos tasas se suman para que redondeemos una vez en la comisión combinada, luego dividimos
+    // proporcionalmente — esto es puramente un truco de redondeo/eficiencia. La división
+    // honra las tasas exactamente: creator_fee/trade_fee == creator_rate/trade_rate.
+    let total_fee = ((amount_in as u128) * ((trade_rate + creator_rate) as u128))
+        .div_ceil(FEE_RATE_DENOMINATOR_VALUE as u128) as u64;
+
+    let creator_fee = ((total_fee as u128) * (creator_rate as u128)
+                       / ((trade_rate + creator_rate) as u128)) as u64;
+    let trade_fee   = total_fee - creator_fee;
+
+    (trade_fee, creator_fee, amount_in - total_fee)
+}
+
+fn take_creator_fee_on_output(amount_out_swapped: u64, creator_rate: u64) -> (u64, u64) {
+    // Cuando creator_fee_on enruta la comisión del creador al lado de salida,
+    // trade_fee se toma en la entrada como una tasa única, y creator_fee
+    // se calcula contra la salida de la curva.
+    let creator_fee = ((amount_out_swapped as u128) * (creator_rate as u128))
+        .div_ceil(FEE_RATE_DENOMINATOR_VALUE as u128) as u64;
+    (amount_out_swapped - creator_fee, creator_fee)
+}
+
+fn split_trade_fee(
+    trade_fee: u64,
+    protocol_rate: u64,
+    fund_rate: u64,
+) -> (u64 /* protocol_fee */, u64 /* fund_fee */) {
+    let protocol_fee = (trade_fee as u128 * protocol_rate as u128
+                        / FEE_RATE_DENOMINATOR_VALUE as u128) as u64;
+    let fund_fee     = (trade_fee as u128 * fund_rate as u128
+                        / FEE_RATE_DENOMINATOR_VALUE as u128) as u64;
+    (protocol_fee, fund_fee)
+}
+```
+
+Notas:
+
+- La comisión total en la entrada redondea **hacia arriba** para que el pool nunca subcobre.
+- Las subdivisiones de `trade_fee` (protocolo, fondo) redondean **hacia abajo** para que su suma nunca exceda `trade_fee`; el resto es la parte de LP.
+- `lp_share = trade_fee − protocol_fee − fund_fee` (creator_fee **no** se resta aquí porque es su propio depósito).
+- La comisión del creador se toma de la entrada o salida dependiendo de `PoolState.creator_fee_on` (ver siguiente sección). La tasa es la misma de cualquier manera.
+
+## De qué lado del intercambio se cobran las comisiones
+
+CPMM tiene una configuración `creator_fee_on` por pool (`BothToken` / `OnlyToken0` / `OnlyToken1`) que determina si la comisión del creador se toma del lado de **entrada** o del lado de **salida** de un intercambio dado. El ayudante en tiempo de ejecución `is_creator_fee_on_input(direction)` colapsa eso a un booleano por intercambio:
+
+| `creator_fee_on` | Intercambio `0 → 1` | Intercambio `1 → 0` |
+|------------------|---------------|---------------|
+| `BothToken` (`0`) | lado de entrada | lado de entrada |
+| `OnlyToken0` (`1`) | lado de entrada | lado de salida |
+| `OnlyToken1` (`2`) | lado de salida | lado de entrada |
+
+Cuando la comisión del creador está en el lado de **entrada**, tanto la comisión de intercambio como la comisión del creador se deducen de `amount_in` antes de que se ejecute la curva. Matemáticas de cotización: toma la `trade_rate + creator_rate` combinada de la entrada.
+
+Cuando la comisión del creador está en el lado de **salida**, solo la comisión de intercambio se deduce de `amount_in`; la curva produce una salida sin comisiones, luego la comisión del creador se deduce de esa salida. Matemáticas de cotización: toma `trade_rate` de la entrada; toma `creator_rate` de la salida.
+
+La comisión de intercambio en sí siempre se toma del lado de entrada (el patrón estándar de Uniswap-V2). Solo la comisión del creador puede estar en la salida.
+
+## Cómo las comisiones "acumuladas" interactúan con la curva
+
+Un detalle importante: **las comisiones del protocolo, fondo y creador permanecen físicamente en la bóveda** hasta que se llama a su respectiva instrucción `Collect*`. Pero se excluyen de la vista de la curva del saldo de la bóveda.
+
+Una imagen concreta después de un intercambio:
+
+```
+raw_vault_0_balance = getTokenAccountBalance(vault_0).amount
+                    = lp_entitled + protocol_fees_token0
+                      + fund_fees_token0 + creator_fees_token0
+
+curve_x = raw_vault_0_balance − (protocol_fees_token0
+                                  + fund_fees_token0
+                                  + creator_fees_token0)
+```
+
+El programa usa `curve_x` (y el análogo `curve_y`) cuando se aplica `k' ≥ k`. Así es como las comisiones que no son de LP llegan a sus destinos **sin** inflar la parte de LP del pool.
+
+Consecuencias que debes tener en cuenta:
+
+- **Cotizar fuera de saldos brutos es incorrecto.** Si construyes un cotizador fuera de `getTokenAccountBalance`, consistentemente sobrestimarás el precio que el pool honrará. Siempre resta las comisiones acumuladas, o simula mediante `SwapBaseInput` / la API.
+- **`CollectProtocolFee` no mueve el precio.** Mueve tokens fuera de la bóveda *y* pone a cero los contadores `protocol_fees_token*`, por lo que `curve_x` y `curve_y` no cambian.
+- **Las comisiones de LP no se acumulan en un contador.** Son implícitas en el saldo de la bóveda. El derecho del LP a las comisiones de LP acumuladas se ejerce quemando tokens LP (es decir, mediante `Withdraw`) — no hay `CollectLpFee`.
+
+## Interacción con comisiones de transferencia de Token-2022
+
+Las comisiones de transferencia de Token-2022 se aplican por el **mint**, no por CPMM. Actúan en cada transferencia de token — intercambio, depósito, retiro, y los barridos `Collect*`. Las matemáticas de comisión de intercambio de CPMM se calculan contra la cantidad que **realmente llegó a la bóveda**, es decir, neta de la comisión de transferencia del mint de entrada (si la hay).
+
+Entonces, en el peor caso, un usuario paga tres impuestos distintos en un intercambio de entrada exacta:
+
+1. La comisión de transferencia del mint de entrada en `amount_in` (a la autoridad de comisión del mint).
+2. La `trade_fee` del pool en el resto (dividida como se indicó anteriormente).
+3. La comisión de transferencia del mint de salida en `amount_out` (a la autoridad de comisión del mint).
+
+El cotizador del SDK cuenta los tres, por lo que `minimum_amount_out` se denomina en lo que el usuario realmente recibe. Si estás escribiendo tu propio cotizador, refleja ese comportamiento, o tus verificaciones de slippage serán sistemáticamente demasiado generosas.
+
+Ver [`algorithms/token-2022-transfer-fees`](/docs/i18n/es/algorithms/token-2022-transfer-fees) para la derivación detallada.
+
+## Comisión del creador
+
+La comisión del creador es opcional y por pool. La **tasa** vive en `AmmConfig.creator_fee_rate`; la **bandera de habilitación** y el **lado** (`creator_fee_on`) viven en `PoolState`:
+
+- **Habilitada en la creación del pool.** `Initialize` establece `enable_creator_fee = false` por defecto; los pools creados mediante `InitializeWithPermission` (utilizado por graduaciones de LaunchLab y otras rutas controladas) pueden pasar `enable_creator_fee = true` y elegir `creator_fee_on`.
+- **La tasa se comparte con el nivel de comisión.** La tasa en sí es `AmmConfig.creator_fee_rate`, el mismo valor en todos los pools vinculados a esa configuración. Cada pool luego decide si cobrarla (`enable_creator_fee`) y de qué lado del intercambio cobrarla (`creator_fee_on`). Cuando `enable_creator_fee = false`, la tasa de comisión del creador efectiva del pool es cero independientemente del valor de configuración (ver `PoolState::adjust_creator_fee_rate` en el código fuente).
+- **Independiente de la comisión de intercambio.** La comisión del creador nunca reduce las partes de LP / protocolo / fondo — es su propia tasa, aplicada separadamente, acumulada en sus propios contadores.
+- **Retirada mediante `CollectCreatorFee` o `CollectCreatorFeePermissionless`.** La ruta original requiere que `PoolState.pool_creator` firme. La ruta sin permisos permite que cualquier pagador active la recopilación pero fija ambos destinos a los ATAs canónicos del creador. Ambas rutas liquidan la parte del protocolo primero — ver la siguiente sección.
+- **No se puede volver a habilitar o redirigir después de la creación.** Un pool inicializado con `enable_creator_fee = false` nunca cobrará una comisión del creador; uno inicializado con un `creator_fee_on` particular no puede cambiar de lado.
+
+Las comisiones del creador son el mecanismo detrás del patrón "Burn & Earn" de Raydium: los tokens LP se bloquean bajo el programa [LP Lock](/docs/i18n/es/reference/program-addresses) para que el creador no pueda retirar liquidez, pero las comisiones del creador acumuladas aún se pueden recopilar indefinidamente.
+
+
+## Parte del protocolo de la comisión del creador
+
+Desde la actualización del 2026-09-19, el protocolo puede retener una parte configurable de la comisión del creador. Nada sobre el intercambio cambia: la comisión del creador aún se cobra a `creator_fee_rate` y aún se acumula completamente en `creator_fees_token{0,1}`. La división ocurre **una vez, en el momento de la recopilación**, dentro de `CollectCreatorFee` y `CollectCreatorFeePermissionless`.
+
+### De dónde viene la tasa
+
+Dos fuentes, en orden de prioridad:
+
+1. **PDA `CreatorFeeShare`** — semillas `["creator_fee_share", creator, amm_config]`. Cuando esta cuenta existe y es propiedad de CPMM, su `share_rate` gana. Permite que el protocolo negocie una tasa por creador en un nivel de comisión dado sin tocar el nivel en sí.
+2. **`AmmConfig.creator_fee_share_rate`** — el predeterminado para cada creador en ese nivel de comisión. Se usa siempre que el PDA no exista.
+
+Ambos son `u64` sobre el mismo `FEE_RATE_DENOMINATOR = 1_000_000`, y ambos están limitados al denominador. Las instrucciones de recopilación **siempre toman la cuenta `creator_fee_share`**, incluso cuando nunca ha sido creada — el programa verifica si está vacía y vuelve al predeterminado. Pasar la dirección incorrecta falla la restricción de PDA, no el retroceso.
+
+### Qué hace la división
+
+```rust
+// programs/cp-swap/src/states/creator_fee_share.rs
+shared_amount  = floor(creator_fee * share_rate / 1_000_000);   // al protocolo
+creator_amount = creator_fee - shared_amount;                   // al creador
+```
+
+Aplicado independientemente a `creator_fees_token_0` y `creator_fees_token_1`, luego:
+
+- `creator_amount_{0,1}` se transfiere fuera de las bóvedas a las cuentas de token del creador.
+- `shared_amount_{0,1}` se **agrega a `protocol_fees_token_{0,1}`** y permanece en la bóveda hasta que el propietario del protocolo la barre con `CollectProtocolFee`. No hay instrucción separada ni contador separado para esto.
+- `creator_fees_token_{0,1}` se ponen a cero, exactamente como antes.
+
+Tres propiedades en las que puedes confiar:
+
+- **El redondeo favorece al creador.** La parte del protocolo se redondea hacia abajo, por lo que el polvo permanece con el creador — la misma dirección que `protocol_fee` y `fund_fee`, que también extraen una parte de una comisión ya acumulada.
+- **El valor se conserva.** `creator_amount + shared_amount == creator_fee` para cada tasa y cada comisión, incluyendo `u64::MAX`.
+- **`share_rate = 0` es una no-operación.** Tanto el valor de configuración predeterminado como la ausencia de un PDA `CreatorFeeShare` dejan toda la comisión del creador con el creador, que es el comportamiento anterior a la actualización.
+
+### Qué significa para los integradores
+
+- **Los LPs y la cotización no se ven afectados.** La cantidad compartida se mueve entre dos contadores que *ambos* ya están excluidos de la vista de la curva de la bóveda (`vault_amount_without_fee`), por lo que `curve_x` y `curve_y` no se mueven en una recopilación. `k` no se toca.
+- **Un estimador de comisión del creador que lee `creator_fees_token*` ahora sobrestima el pago.** Multiplica por `(1 − share_rate / 1_000_000)` usando la tasa que realmente se aplica a ese par `(creator, amm_config)`, no el predeterminado de configuración.
+- **`protocol_fees_token*` crece fuera de los intercambios.** Un monitor que reconcilia la acumulación del protocolo contra el volumen de intercambio verá saltos en cada recopilación de comisión del creador. La acumulación del protocolo ya no es solo `trade_fee × protocol_fee_rate`.
+- **La tasa puede cambiar entre acumulación y recopilación.** Se lee en el momento de la recopilación, por lo que las comisiones que se acumularon bajo una tasa se liquidan a cualquier tasa que esté en vigor cuando alguien llama a `Collect*`.
+
+La cuenta `CreatorFeeShare` es creada y cerrada por el administrador o una autoridad dedicada de comisión de participación del creador mediante [`CreateCreatorFeeShare` / `CloseCreatorFeeShare`](/docs/i18n/es/products/cpmm/instructions#createcreatorfeeshare); cerrarla devuelve el par a `AmmConfig.creator_fee_share_rate`. Diseño de cuenta en [`products/cpmm/accounts`](/docs/i18n/es/products/cpmm/accounts#creatorfeeshare), direcciones en [`reference/program-addresses`](/docs/i18n/es/reference/program-addresses#cpmm-creator-fee-share-authority).
+
+## Flujo operativo de recopilación
+
+| Firmante | Instrucción | Contadores de fuente puestos a cero | Cadencia típica |
+|--------|-------------|------------------------|-----------------|
+| `amm_config.protocol_owner` | `CollectProtocolFee` | `protocol_fees_token{0,1}` | Semanal o programático |
+| `amm_config.fund_owner` | `CollectFundFee` | `fund_fees_token{0,1}` | Semanal o programático |
+| `pool_state.pool_creator` | `CollectCreatorFee` | `creator_fees_token{0,1}` — menos la parte del protocolo, que se mueve a `protocol_fees_token{0,1}` | Anytime |
+| Cualquier pagador; el creador no firma | `CollectCreatorFeePermissionless` | `creator_fees_token{0,1}` — la misma división que arriba | Anytime; los ATAs del creador son destinos fijos |
+| `admin` o la autoridad de comisión de participación del creador | `CreateCreatorFeeShare` / `CloseCreatorFeeShare` | — (establece o borra la tasa de participación para un par `(creator, amm_config)`) | Bajo demanda |
+
+Los propietarios del protocolo y del fondo son el multisig de Raydium en mainnet; ver [`security/admin-and-multisig`](/docs/i18n/es/security/admin-and-multisig). En la ruta original solo del creador, el firmante del creador es la cuenta registrada en `PoolState`. En la ruta sin permisos, el llamador paga para crear cualquier ATA del creador faltante. El programa restringe `creator` a `pool_state.pool_creator` y deriva cada destino de ese creador más el mint de bóveda correspondiente y el programa de token, por lo que el llamador no puede redirigir fondos.
+
+## Cambiar un nivel de comisión
+
+Las tasas de comisión se pueden cambiar por el administrador mediante `UpdateAmmConfig` (ver [`products/cpmm/instructions`](/docs/i18n/es/products/cpmm/instructions)). Los cambios entran en vigor en el **siguiente intercambio** para cada pool vinculado a ese `AmmConfig` — no hay migración, porque los pools cargan la configuración en cada intercambio.
+
+Lo que el administrador no puede hacer:
+
+- Mover un pool de un `AmmConfig` a otro.
+- Repreciar retroactivamente las comisiones ya acumuladas.
+- Recopilar comisiones sin el firmante `protocol_owner` / `fund_owner`.
+
+## Lectura de comisiones de un pool en ejecución
+
+```ts
+// Fuera de cadena: comisiones acumuladas actuales en cada depósito.
+// El SDK exporta el diseño, no una clase `PoolState`, y los campos de comisión se
+// nombran ...MintA / ...MintB — no hay campos ...Token0 / ...Token1.
+import { CpmmPoolInfoLayout } from "@raydium-io/raydium-sdk-v2";
+
+const pool = await connection.getAccountInfo(poolStatePda);
+const decoded = CpmmPoolInfoLayout.decode(pool!.data);   // sin .slice(8) — el
+                                                          // diseño incluye el discriminador
+console.log(
+  "Protocolo acumulado:",
+  decoded.protocolFeesMintA.toString(),
+  decoded.protocolFeesMintB.toString(),
+);
+console.log(
+  "Fondo acumulado:",
+  decoded.fundFeesMintA.toString(),
+  decoded.fundFeesMintB.toString(),
+);
+console.log(
+  "Creador acumulado:",
+  decoded.creatorFeesMintA.toString(),
+  decoded.creatorFeesMintB.toString(),
+);
+// Lo que el creador realmente recibe es esto menos la parte del protocolo, resuelto en
+// el momento de la recopilación desde el PDA `CreatorFeeShare` de `(creator, ammConfig)` si existe y
+// desde `AmmConfig.creator_fee_share_rate` de lo contrario. Ver "Parte del protocolo de la comisión del creador"
+// arriba.
+
+// Fuera de cadena: tasas efectivas hoy.
+// trade_fee_rate, creator_fee_rate son fracciones del volumen (denominador 1e6).
+// protocol_fee_rate, fund_fee_rate son fracciones de la *comisión de intercambio* (mismo denominador).
+const config = await fetch("https://api-v3.raydium.io/main/cpmm-config")
+  .then((r) => r.json());
+// `configId` en el pool decodificado es la PublicKey de la cuenta de configuración, no un índice.
+const tier = config.data.find((t) => t.id === decoded.configId.toBase58());
+
+const tradeFeeOfVolume   = tier.tradeFeeRate / 1_000_000;
+const protocolOfTradeFee = tier.protocolFeeRate / 1_000_000;
+const fundOfTradeFee     = tier.fundFeeRate / 1_000_000;
+const lpOfTradeFee       = 1 - protocolOfTradeFee - fundOfTradeFee;
+
+console.log("Comisión de LP efectiva:",       (tradeFeeOfVolume * lpOfTradeFee * 100).toFixed(4), "%");
+console.log("Comisión de protocolo efectiva:", (tradeFeeOfVolume * protocolOfTradeFee * 100).toFixed(4), "%");
+console.log("Comisión de fondo efectiva:",     (tradeFeeOfVolume * fundOfTradeFee * 100).toFixed(4), "%");
+console.log(
+  "Comisión de creador efectiva:",
+  decoded.enableCreatorFee
+    ? ((tier.creatorFeeRate / 1_000_000) * 100).toFixed(4) + " %"
+    : "0 % (deshabilitada en este pool)",
+);
+```
+
+<Note>
+  **Resuelve la tasa de participación en cadena, no desde una configuración en caché.** `creator_fee_share_rate` es un campo `AmmConfig` recién agregado, por lo que léelo de la cuenta en lugar de asumir que la carga útil de configuración REST lo lleva, y verifica si existe un PDA `CreatorFeeShare` en `["creator_fee_share", creator, ammConfig]` antes de cotizar un pago del creador. Un PDA ausente es el caso común y significa que se aplica el predeterminado de configuración.
+</Note>
+
+## Comparación con CLMM y AMM v4
+
+Ver [`reference/fee-comparison`](/docs/i18n/es/reference/fee-comparison) para una matriz lado a lado. Resumen:
+
+- **AMM v4** usa una comisión de intercambio fija del 0.25% con una división LP/protocolo diferente y sin comisión de fondo.
+- **CLMM** las comisiones son por nivel de espaciado de tick, acumuladas por posición (no por pool), y se reclaman mediante `DecreaseLiquidity` o `CollectFees`.
+
+## A dónde ir a continuación
+
+- [`products/cpmm/math`](/docs/i18n/es/products/cpmm/math) — donde la deducción de comisión de intercambio se conecta a la curva.
+- [`products/cpmm/instructions`](/docs/i18n/es/products/cpmm/instructions) — las listas de cuentas de instrucción `Collect*`, incluyendo la cuenta `creator_fee_share` que ambas rutas del creador ahora requieren.
+- [`algorithms/token-2022-transfer-fees`](/docs/i18n/es/algorithms/token-2022-transfer-fees) — cómo combinar correctamente una comisión de intercambio de pool con una comisión de transferencia de mint.
+
+Fuentes:
+
+- [`raydium-io/raydium-cp-swap` — `states/config.rs`, `states/pool.rs`, `states/curve.rs`](https://github.com/raydium-io/raydium-cp-swap)
+- [API de Raydium — `GET /main/cpmm-config`](https://api-v3.raydium.io/main/cpmm-config)

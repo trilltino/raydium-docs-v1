@@ -1,0 +1,107 @@
+---
+title: "Treasury"
+description: "Multisig protokol, pengumpulan biaya, buyback, treasury, dan alamat biaya pembuatan pool."
+---
+
+<Info>
+  **Halaman ini diterjemahkan secara otomatis oleh AI. Versi bahasa Inggris adalah acuan resmi.**
+
+  [Lihat versi bahasa Inggris →](/docs/en/ray/treasury)
+</Info>
+
+<Info>
+  Halaman ini mencantumkan alamat publik yang digunakan untuk pengumpulan biaya protokol Raydium, buyback RAY, saldo treasury USDC, dan biaya pembuatan pool SOL. Periksa saldo dan transfer on-chain sebelum mengandalkannya untuk akuntansi.
+</Info>
+
+## Alur sekilas
+
+```text
+Biaya pool
+  -> Alamat pengumpulan khusus program
+      -> Rute buyback RAY
+      -> Rute treasury USDC, jika berlaku
+
+Biaya pembuatan pool
+  -> Alamat biaya SOL khusus program
+```
+
+Setiap alamat dalam alur ini bersifat publik dan dapat diperiksa.
+
+## Multisig protokol
+
+| Tujuan | Alamat |
+|---|---|
+| Multisig protokol | `GThUX1Atko4tqhN2NaiTazWSeFWMuiUvfFnyJyUghFMJ` |
+
+Tautan cepat:
+
+- [Squads](https://v3.squads.so)
+- [Solscan](https://solscan.io/account/GThUX1Atko4tqhN2NaiTazWSeFWMuiUvfFnyJyUghFMJ)
+
+## Alamat pengumpulan biaya
+
+Ketika swap membayar biaya sisi protokol, program yang relevan mengumpulkan biaya tersebut di alamat pengumpulan.
+
+Alamat pengumpulan per program dicantumkan di bawah [Dompet pengumpulan biaya protokol](/docs/i18n/id/reference/program-addresses#protocol-fee-collection-wallets).
+
+Alamat pengumpulan dapat menyimpan kumpulan token SPL yang bercampur. Misalnya, biaya dari pool SOL/USDC dapat menghasilkan saldo wSOL dan USDC, sedangkan pool SOL/RAY dapat menghasilkan saldo wSOL dan RAY.
+
+Periksa alamat pengumpulan dengan:
+
+```bash
+spl-token accounts --owner projjosVCPQH49d5em7VYS7fJZzaqKixqKtus7yk416
+```
+
+## Penyimpanan buyback RAY
+
+RAY yang dibeli kembali disimpan di:
+
+| Tujuan | Alamat |
+|---|---|
+| Akumulasi RAY yang dibeli kembali | `DdHDoz94o2WJmD9myRobHCwtx1bESpHTd4SSPe6VEZaz` |
+
+Periksa dengan:
+
+```bash
+spl-token accounts --owner DdHDoz94o2WJmD9myRobHCwtx1bESpHTd4SSPe6VEZaz
+```
+
+Aktivitas buyback historis dapat direkonstruksi dari transfer masuk dan swap yang mengalir ke alamat ini.
+
+## Alamat treasury
+
+Biaya yang tidak dialihkan ke buyback RAY dapat dikonsolidasikan ke alamat treasury USDC.
+
+| Sumber | Alamat treasury |
+|---|---|
+| CLMM | `CHynyGLd4fDo35VP4yftAZ9724Gt49uXYXuqmdWtt68F` |
+| CPMM | `FS3HipLdf13nhaeN9NhRfGr1cnH84GdNEam3WHhUXVYJ` |
+
+Periksa alamat treasury dengan:
+
+```bash
+spl-token accounts --owner CHynyGLd4fDo35VP4yftAZ9724Gt49uXYXuqmdWtt68F
+```
+
+## Biaya pembuatan pool
+
+Membuat pool CPMM atau Standard AMM v4 mengenakan biaya pembuatan pool yang didenominasikan dalam SOL. Biaya ini terakumulasi di alamat khusus program.
+
+Alamat penerima untuk kedua cluster dicantumkan di bawah [Penerima biaya pembuatan pool](/docs/i18n/id/reference/program-addresses#pool-creation-fee-receivers).
+
+Pembuatan pool CLMM masih memerlukan sewa akun, tetapi tidak menggunakan jalur biaya pembuatan pool SOL terpisah yang sama.
+
+## Cara mengaudit alur biaya
+
+Siapa pun dapat memverifikasi alur biaya Raydium dari data transaksi publik:
+
+1. Tarik transaksi swap dari pool Raydium.
+2. Identifikasi program pool: CLMM, CPMM, atau Standard AMM v4.
+3. Periksa akuntansi biaya dan transfer token dalam transaksi.
+4. Cocokkan pergerakan sisi protokol ke alamat pengumpulan yang relevan.
+5. Lacak transaksi keluar dari alamat pengumpulan.
+6. Cocokkan akumulasi RAY ke `DdHDoz...VEZaz` atau saldo USDC ke alamat treasury di atas.
+
+## Melaporkan ketidaksesuaian
+
+Jika perutean yang diamati tidak cocok dengan alamat yang tercantum di sini, laporkan melalui [`security/disclosure`](/docs/i18n/id/security/disclosure).

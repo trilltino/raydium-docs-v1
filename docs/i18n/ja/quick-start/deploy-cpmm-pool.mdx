@@ -1,0 +1,152 @@
+---
+title: "CPMM プールをデプロイする"
+description: "新しい CPMM プールを作成するペースト・アンド・ゴー Node スクリプト。環境変数でミントとシード量を設定します。"
+---
+
+<Info>
+  **このページは AI による自動翻訳です。すべての内容は英語版を正とします。**
+
+  [英語版を表示 →](/docs/en/quick-start/deploy-cpmm-pool)
+</Info>
+
+<Info>
+  **このスクリプトの役割。** 指定した 2 つのミント用に新しい CPMM プールを作成し、0.25% フィー層を選択し、シード量で示唆される価格で初期流動性をシードし、新しいプール ID とトランザクション署名を出力します。
+</Info>
+
+## セットアップ
+
+[クイックスタートの前提条件](/docs/i18n/ja/quick-start)を読んで、`RPC_URL`、`KEYPAIR`、および依存関係がインストールされていることを確認してください。
+
+また、**両方のミントのシード量でウォレットに資金を供給**し、ワンタイムのプール作成フィーとアカウント家賃をカバーするのに十分な SOL を用意する必要があります（メインネットで合計約 0.19 SOL — 家賃/フィーの内訳は [`reference/fee-comparison`](/docs/i18n/ja/reference/fee-comparison#creation-costs) を参照するか、フィーのみについては [`ray/protocol-fees`](/docs/i18n/ja/ray/protocol-fees#pool-creation-fees) を参照してください）。
+
+**devnet で実行する場合。** `cluster` を `"devnet"` に切り替えるだけでは不十分です。このスクリプトは `cluster` に従わない 2 つの名前付きインポートをピン留めしています：`programId: CREATE_CPMM_POOL_PROGRAM` と `poolFeeAccount: CREATE_CPMM_POOL_FEE_ACC` はどちらもメインネット定数です。SDK から `DEVNET_PROGRAM_ID` をインポートし、代わりに `DEVNET_PROGRAM_ID.CREATE_CPMM_POOL_PROGRAM` と `DEVNET_PROGRAM_ID.CREATE_CPMM_POOL_FEE_ACC` を使用してください — [CLMM スクリプト](/docs/i18n/ja/quick-start/deploy-clmm-pool)が使用するのと同じパターンです。
+
+## スクリプト
+
+`create-cpmm.mjs` として保存します：
+
+```ts create-cpmm.mjs icon="js"
+import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import {
+  Raydium,
+  TxVersion,
+  CREATE_CPMM_POOL_PROGRAM,
+  CREATE_CPMM_POOL_FEE_ACC,
+} from "@raydium-io/raydium-sdk-v2";
+import BN from "bn.js";
+import fs from "node:fs";
+
+// ── Config from env ──────────────────────────────────────────────
+const RPC_URL  = process.env.RPC_URL  ?? "https://api.mainnet-beta.solana.com";
+const KEYPAIR  = process.env.KEYPAIR  ?? `${process.env.HOME}/.config/solana/id.json`;
+const MINT_A   = process.env.MINT_A;   // required, base58
+const MINT_B   = process.env.MINT_B;   // required, base58
+const AMOUNT_A = process.env.AMOUNT_A; // required, integer raw units
+const AMOUNT_B = process.env.AMOUNT_B; // required, integer raw units
+
+if (!MINT_A || !MINT_B || !AMOUNT_A || !AMOUNT_B) {
+  console.error("Set MINT_A, MINT_B, AMOUNT_A, AMOUNT_B env vars.");
+  process.exit(1);
+}
+
+// ── Setup ────────────────────────────────────────────────────────
+const connection = new Connection(RPC_URL, "confirmed");
+const owner = Keypair.fromSecretKey(
+  new Uint8Array(JSON.parse(fs.readFileSync(KEYPAIR, "utf8"))),
+);
+const raydium = await Raydium.load({
+  owner,
+  connection,
+  cluster: "mainnet",
+  disableFeatureCheck: true,
+  blockhashCommitment: "finalized",
+});
+
+// ── Pick the 0.25% fee tier ─────────────────────────────────────
+const feeConfigs = await raydium.api.getCpmmConfigs();
+const feeConfig  = feeConfigs.find((c) => c.index === 0);
+if (!feeConfig) throw new Error("0.25% fee tier not found in CPMM configs.");
+
+// ── Resolve mint metadata (Token-2022-aware) ────────────────────
+const mintA = await raydium.token.getTokenInfo(new PublicKey(MINT_A));
+const mintB = await raydium.token.getTokenInfo(new PublicKey(MINT_B));
+
+// ── Build and execute ───────────────────────────────────────────
+const { execute, extInfo } = await raydium.cpmm.createPool({
+  programId:       CREATE_CPMM_POOL_PROGRAM,
+  poolFeeAccount:  CREATE_CPMM_POOL_FEE_ACC,
+  mintA,
+  mintB,
+  mintAAmount:     new BN(AMOUNT_A),
+  mintBAmount:     new BN(AMOUNT_B),
+  startTime:       new BN(0), // open immediately
+  feeConfig,
+  associatedOnly:  false,
+  ownerInfo:       { useSOLBalance: true },
+  txVersion:       TxVersion.V0,
+  computeBudgetConfig: {
+    units: 600_000,
+    microLamports: 100_000,
+  },
+});
+
+const { txId } = await execute({ sendAndConfirm: true });
+
+console.log(`Pool ID:  ${extInfo.address.poolId.toBase58()}`);
+console.log(`LP mint:  ${extInfo.address.lpMint.toBase58()}`);
+console.log(`Vault A:  ${extInfo.address.vaultA.toBase58()}`);
+console.log(`Vault B:  ${extInfo.address.vaultB.toBase58()}`);
+console.log(`Tx:       https://solscan.io/tx/${txId}`);
+```
+
+## 実行する
+
+例：1 SOL と 160 USDC のシードで SOL/USDC プールを作成します：
+
+```bash icon="terminal"
+export MINT_A="So11111111111111111111111111111111111111112"   # wSOL
+export MINT_B="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"   # USDC
+export AMOUNT_A="1000000000"   # 1 SOL (9 decimals)
+export AMOUNT_B="160000000"    # 160 USDC (6 decimals)
+
+node create-cpmm.mjs
+```
+
+期待される出力：
+
+```text
+Pool ID:  HgC5...3kXb
+LP mint:  4ZAS...9rkV
+Vault A:  J9Mu...mP2k
+Vault B:  AaJq...8wxx
+Tx:       https://solscan.io/tx/5dQ...
+```
+
+## 何が起こったのか
+
+1. **`getCpmmConfigs`** は `api-v3.raydium.io` からライブフィー層リストを取得し、インデックス 0（0.25% 層 — 完全なセットについては [`reference/fee-comparison`](/docs/i18n/ja/reference/fee-comparison) を参照）を選択しました。
+2. **`getTokenInfo`** は各ミントのメタデータを解決しました。これには、どのトークンプログラムがそれを所有しているかが含まれます。CPMM は SPL Token と Token-2022 ミントの両方を受け入れます。SDK は自動的にルーティングします。
+3. **`createPool`** は以下を実行する 1 つのトランザクションを構築しました：
+   - ミントを正規順序にソートする、
+   - プール PDA、ボールト、LP ミント、および権限を導出する、
+   - ワンタイムの `create_pool_fee` を `CREATE_CPMM_POOL_FEE_ACC` に支払う、
+   - 呼び出し元の ATA が不足している場合は作成する、
+   - ボールトを `AMOUNT_A` と `AMOUNT_B` でシードする。
+4. **初期価格**はシード比率で設定されます：小数調整後 `price = AMOUNT_B / AMOUNT_A`。これは慎重に選択してください — ボットはプールが開くと数秒以内に誤った価格設定を裁定します。
+5. **`startTime: new BN(0)`** はトレーディングを即座に開きます。公開前に流動性をステージングするには、将来の Unix タイムスタンプを設定します。
+
+## 一般的なエラー
+
+- **`pool already exists`** — このミントペアのこのフィー層に対してプールが既に存在します。作成する前に検索してください。
+- **`insufficient funds`** — ウォレットに `MINT_A`、`MINT_B`、または SOL（プール作成フィー + 家賃用）の十分な量がありません。
+- **`Token-2022 extension not supported`** — ミントの 1 つが CPMM が受け入れない拡張機能を使用しています。[`reference/token-2022-support`](/docs/i18n/ja/reference/token-2022-support) を参照してください。
+
+## デプロイ後
+
+新しいプールに対して即座にスワップできます — [CLI からスワップする](/docs/i18n/ja/quick-start/swap-from-cli)スクリプトは新しい `POOL_ID` を直接受け入れます。アグリゲーター（Jupiter など）は数分以内に新しいプールをインデックスします。
+
+## 次のステップ
+
+- [`products/cpmm/overview`](/docs/i18n/ja/products/cpmm/overview) — CPMM とは何か、いつそれを選択するか。
+- [`user-flows/create-cpmm-pool`](/docs/i18n/ja/user-flows/create-cpmm-pool) — Raydium UI 経由のスクリーンショット付きの同じフロー。
+- [`user-flows/choosing-a-pool-type`](/docs/i18n/ja/user-flows/choosing-a-pool-type) — 代わりに CLMM を使用すべきでしたか？

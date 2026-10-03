@@ -5,7 +5,7 @@
 - This is the Raydium documentation set, built on [Mintlify](https://mintlify.com).
 - Pages are MDX files with YAML frontmatter; navigation lives in `docs.json`.
 - The information architecture, audience model, and chapter map are defined in `ARCHITECTURE.mdx` — consult that before authoring any new page.
-- The English tree at the repo root is the source of truth. Thirteen locales (`zh`, `zh-Hant`, `ja`, `ko`, `ru`, `es`, `de`, `fr`, `pt`, `tr`, `vi`, `id`, `ar`) mirror it; locale pages that don't exist on disk are auto-redirected to English by rules generated in `docs.json` — see "Multi-language hygiene" below.
+- The English tree under `docs/en` is the source of truth. Thirteen locales under `docs/i18n` (`zh`, `zh-Hant`, `ja`, `ko`, `ru`, `es`, `de`, `fr`, `pt`, `tr`, `vi`, `id`, `ar`) mirror it; locale pages that don't exist on disk are auto-redirected to English by rules generated in `docs.json` — see "Multi-language hygiene" below.
 - Run `mint dev` to preview locally, `mint broken-links` to check links.
 
 ## Terminology
@@ -21,6 +21,7 @@
 
 ## Style preferences
 
+- Read and apply [UNSLOP.md](UNSLOP.md) when writing or editing prose for this repo. It is a local copy of the [Cursor pstack unslop skill](https://github.com/cursor/plugins/blob/main/pstack/skills/unslop/SKILL.md). Preserve technical meaning, code syntax, and the project conventions in this file.
 - Use active voice and second person ("you").
 - Keep sentences concise — one idea per sentence.
 - Use sentence case for headings.
@@ -30,12 +31,12 @@
 
 ## Cross-reference conventions
 
-- **Program IDs and shared PDAs** live only in `reference/program-addresses.mdx`. Other pages link to it; don't restate addresses in prose or in prose tables elsewhere. Source-code links there are limited to publicly-available repos (`raydium-amm`, `raydium-cp-swap`, `raydium-clmm`, `raydium-idl`); the rest of the program family is closed-source — write "source not publicly available" rather than inventing a URL.
+- **Program IDs and shared PDAs** live only in `docs/en/reference/program-addresses.mdx`. Other pages link to it; don't restate addresses in prose or in prose tables elsewhere. Source-code links there are limited to publicly-available repos (`raydium-amm`, `raydium-cp-swap`, `raydium-clmm`, `raydium-idl`); the rest of the program family is closed-source — write "source not publicly available" rather than inventing a URL.
   - **Exception — code samples.** A runnable snippet may contain a literal address, because a snippet the reader has to edit before it runs is worse than a duplicated constant. Every such literal must carry a trailing comment pointing at the canonical entry, e.g. `// see reference/program-addresses`, so a rotation can be found by grepping for that comment. Declare it as a named constant at the top of the snippet rather than inlining it at the call site.
-  - **Exception — the canonical page itself.** `reference/program-addresses.mdx` is where addresses are written out; new addresses go there first, and a page that needs one links to its section.
-- **Error codes** live only in `reference/error-codes.mdx`. Instruction pages link to its anchors.
-- **Math definitions** live in `algorithms/`. Per-product `math.mdx` pages give the product-specific instantiation and link back.
-- **API endpoints** live in `api-reference/openapi/*.yaml`. Don't restate request/response shapes in narrative pages; link to the endpoint.
+  - **Exception — the canonical page itself.** `docs/en/reference/program-addresses.mdx` is where addresses are written out; new addresses go there first, and a page that needs one links to its section.
+- **Error codes** live only in `docs/en/reference/error-codes.mdx`. Instruction pages link to its anchors.
+- **Math definitions** live in `docs/en/algorithms/`. Per-product `math.mdx` pages give the product-specific instantiation and link back.
+- **API endpoints** live in `docs/en/api-reference/openapi/*.yaml`. Don't restate request/response shapes in narrative pages; link to the endpoint.
 
 ## Multi-language hygiene
 

@@ -1,0 +1,66 @@
+---
+title: "LaunchLab creator fees"
+description: "How creator fees accrue before graduation and through the CPMM pool creator after graduation, separately from platform-owned locked LP."
+---
+
+<Info>
+  LaunchLab creator revenue can come from two fee counters: the bonding-curve creator-fee vault before graduation and CPMM creator fees after graduation. Before the 2026-08-17 upgrade, `creator_scale` also produced a creator-owned LP Fee Key. Migrations executed after the upgrade assign that locked-LP share to the platform instead.
+</Info>
+
+## Pre-migration: direct fee accrual
+
+While a token trades on the bonding curve, each buy and sell can charge a creator-fee component. It accumulates in a per-creator, per-quote-mint vault.
+
+- The fee is denominated in the quote token.
+- `PlatformConfig.creator_fee_rate` sets the rate.
+- The creator can claim through `ClaimCreatorFee` before or after graduation.
+- Graduation stops new bonding-curve accrual but does not erase an unclaimed balance.
+
+## Post-migration: CPMM creator fees
+
+Every new launch graduates to CPMM. The selected CPMM `AmmConfig.creator_fee_rate` and `PoolState.creator_fee_on` determine whether creator fees accrue on CPMM swaps.
+
+The CPMM pool creator is:
+
+- the original launch creator when `PlatformConfig.platform_cp_creator` is the default pubkey; or
+- the configured `platform_cp_creator` otherwise.
+
+That recorded CPMM creator owns the creator-fee counters. They can use the creator-signed collection instruction, and any payer can trigger the destination-constrained permissionless path that pays the creator's canonical ATAs. See [`products/cpmm/fees`](/docs/en/products/cpmm/fees).
+
+## Locked LP is a separate platform right
+
+At CPMM migration, LaunchLab still validates:
+
+```text
+platform_scale + creator_scale + burn_scale = 1_000_000
+```
+
+Before the 2026-08-17 upgrade, LaunchLab locked `creator_scale` separately and minted the corresponding Fee Key to the token creator. For migrations executed after the upgrade, it combines `platform_scale + creator_scale`. If the combined share is non-zero, the LP-Lock program creates one Fee Key NFT for `platform_nft_wallet`. The `burn_scale` remainder is burned.
+
+The retained `creator_scale` field is therefore not a creator revenue stream for migrations executed under the updated program. It contributes to the platform's locked-LP amount. For historical pools, read the actual Fee Key and locked-liquidity records rather than inferring ownership from the current rule.
+
+Fee Keys created by migrations completed before the upgrade are not reassigned or modified. A launch created before the upgrade but migrated afterward uses the new platform-owned distribution.
+
+## Claim paths
+
+| Revenue | Beneficiary | Claim path |
+|---|---|---|
+| Bonding-curve creator fee | Original launch creator | LaunchLab `ClaimCreatorFee` |
+| CPMM creator fee | CPMM `pool_creator` | CPMM creator-signed or permissionless collection |
+| Locked-LP trading fees, pre-upgrade migration | Current holder of the creator or platform Fee Key created at that migration | LP-Lock / Burn & Earn harvest flow |
+| Locked-LP trading fees, updated migration | Current holder of the platform Fee Key | LP-Lock / Burn & Earn harvest flow |
+
+## Integrator checklist
+
+- Read `platform_cp_creator` to identify the post-graduation CPMM creator-fee beneficiary.
+- For updated migrations, do not display `creator_scale` as a creator Fee Key percentage. For historical migrations, read the actual Fee Key record.
+- Track the bonding-curve vault and CPMM creator-fee counters separately.
+- Treat the platform Fee Key as an LP-fee right, not a CPMM creator-fee credential.
+- Refresh the deployed IDL before enabling the updated migration builder.
+
+## Pointers
+
+- [`products/launchlab/platform-config`](/docs/en/products/launchlab/platform-config) — scale and creator-of-record fields.
+- [`products/launchlab/tips-and-gotchas/lp-fee-distribution`](/docs/en/products/launchlab/tips-and-gotchas/lp-fee-distribution) — exact LP split.
+- [`products/cpmm/fees`](/docs/en/products/cpmm/fees) — CPMM creator-fee accrual and collection.
+- [`user-flows/burn-and-earn`](/docs/en/user-flows/burn-and-earn) — Fee Key mechanics.

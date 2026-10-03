@@ -1,0 +1,46 @@
+---
+title: "أساسيات Solana"
+description: "البدائيات الأساسية في Solana التي تحتاج إلى فهمها لقراءة برامج Raydium — نموذج الحسابات، SPL / Token-2022، PDAs، CPIs، المعاملات، الرسوم، والأدوات."
+---
+
+<Info>
+  **هذه الصفحة مُترجَمة آليًا بواسطة الذكاء الاصطناعي. النسخة الإنجليزية هي المرجع المعتمد.**
+
+  [عرض النسخة الإنجليزية →](/docs/en/solana-fundamentals/index)
+</Info>
+
+## من يستهدفها هذا الفصل
+
+المطورون والباحثون في البروتوكولات القادمون من سلاسل أخرى (EVM، Cosmos، Move) أو الجدد على Solana. يمكن لمستخدمي النهاية تخطي هذا الفصل.
+
+الهدف عملي: إعطاء القارئ بالضبط ما يحتاج إلى قراءته في فصول المنتجات و SDK دون مفاجآت. هذا ليس درسًا عامًا عن Solana — راجع الوثائق الرسمية لـ Solana لذلك.
+
+## محتويات الفصل
+
+<CardGroup cols={2}>
+  <Card title="نموذج الحسابات" icon="database" href="/docs/i18n/ar/solana-fundamentals/account-model">
+    الحسابات مقابل البرامج، الإيجار، ملكية الحساب، حسابات البيانات مقابل الحسابات القابلة للتنفيذ، نموذج التفكير «الحساب كصف قاعدة بيانات».
+  </Card>
+  <Card title="SPL Token و Token-2022" icon="coins" href="/docs/i18n/ar/solana-fundamentals/spl-token-and-token-2022">
+    برنامج SPL Token الكلاسيكي مقابل Token-2022، حسابات الإصدار والرموز، ATA، امتدادات Token-2022 مثل رسوم التحويل والتي تؤثر على Raydium.
+  </Card>
+  <Card title="المعاملات والرسوم" icon="receipt" href="/docs/i18n/ar/solana-fundamentals/transactions-and-fees">
+    التعليمات، حدود حجم المعاملات، الموقعون، ميزانية الحساب، رسوم الأولوية، فئتا الرسوم التي يدفعها مستخدمو Raydium (الشبكة + البروتوكول).
+  </Card>
+  <Card title="PDAs و CPIs" icon="key" href="/docs/i18n/ar/solana-fundamentals/pdas-and-cpis">
+    العناوين المشتقة من البرنامج، البذور والنتوءات، استدعاء البرنامج المتقاطع، invoke_signed، الأنماط التي يستخدمها Raydium لتفويض السلطة.
+  </Card>
+  <Card title="البرامج و Anchor" icon="cube" href="/docs/i18n/ar/solana-fundamentals/programs-and-anchor">
+    نشر البرنامج، البرامج القابلة للترقية، إطار عمل Anchor، IDL، كيفية قراءة ملف IDL الخاص بـ Raydium.
+  </Card>
+  <Card title="الأدوات" icon="screwdriver-wrench" href="/docs/i18n/ar/solana-fundamentals/toolchain">
+    Solana CLI، SPL CLI، Anchor CLI، @solana/web3.js، @anchor-lang/core، solders/solana-py للـ Python. الإعداد الأساسي الذي يعمل.
+  </Card>
+</CardGroup>
+
+## إرشادات الكتابة
+
+- تقدم كل صفحة مثالاً عمليًا واحدًا يتم الرجوع إليه لاحقًا في سياق Raydium.
+- يحصل Token-2022 على معاملة من الدرجة الأولى لأن CPMM يدعمه؛ رسوم التحويل وسلطة التجميد تغير رياضيات المبادلة.
+- اجعل الكود قصيرًا (`<30` سطرًا) على هذه الصفحات؛ العروض التوضيحية الكاملة تذهب تحت SDK و API.
+- ارجع إلى وثائق Solana الرسمية مرة واحدة فقط، وليس بشكل متكرر.

@@ -1,0 +1,66 @@
+---
+title: "Stable AMM"
+description: "Eigenständiges Raydium-Programm mit interpolierten Preiskurven aus Lookup-Tabellen. Ermöglicht Liquidität für Stablecoin-Paare und andere Assets mit bekannten Preisbeziehungen."
+---
+
+<Info>
+  **Diese Seite wurde mit KI automatisch übersetzt. Maßgeblich ist stets die englische Version.**
+
+  [Englische Version ansehen →](/docs/en/products/stable/index)
+</Info>
+
+## Was es ist
+
+Stable AMM ist ein **eigenständiges Raydium-Programm** (eine eigene Deployment — kein Modus des AMM-v4-Programms), das für Paare mit bekannten, stabilen Preisbeziehungen konzipiert ist — hauptsächlich Stablecoin-zu-Stablecoin-Paare (USDC-USDT, USDH-USDC) und besicherte Token-Paare. Anstelle einer Constant-Product-Kurve nutzt es eine **Lookup-Tabelle mit (x, y, price)-Tupeln**, die in das `ModelDataInfo`-Konto jedes Pools eingebettet ist. Die Preisfindung erfolgt durch Interpolation innerhalb der Tabelle und erzeugt niedrigere Slippage bei kleinen Swaps.
+
+Es ist ein **reines AMM**: Die gesamte Liquidität sitzt in den eigenen Vaults des Pools. Ein OpenBook-Market-Making-Pfad aus der Anfangszeit ist seit Jahren inaktiv, und das [Upgrade vom 2026-06-22](/docs/i18n/de/reference/changelog) hat den verbleibenden Market-Code entfernt. Es teilt die gleiche `Fees`-Struktur und das gleiche Gebührenmodell wie AMM v4; der Unterschied liegt rein in der **Preiskurve** — anstelle von x·y=k interpolieren Sie ein vorausgefülltes Modell.
+
+**Programm-ID:** siehe [reference/program-addresses](/docs/i18n/de/reference/program-addresses).
+
+**Token-2022:** nicht unterstützt. Nur klassische SPL-Token.
+
+**Liquidität:** dünn. Die meisten benutzerorientierten Integrationen erreichen Stable-Pools über das [AMM-Routing-Programm](/docs/i18n/de/products/routing) für Best-Price-Routing über alle Raydium-AMMs. Das SDK unterstützt auch Stable-Pools direkt: Pools erscheinen als `version: 5` (`pooltype: "StablePool"`) auf `ApiV3PoolInfoStandardItem`, und das Standard-`LiquidityModule` (`addLiquidity` / `removeLiquidity` / swap) erkennt v5 automatisch und gibt die richtigen Anweisungen aus — siehe [Code-Demos](/docs/i18n/de/products/stable/code-demos).
+
+## Kapitelübersicht
+
+<CardGroup cols={2}>
+  <Card title="Übersicht" icon="circle-info" href="/docs/i18n/de/products/stable/overview">
+    Warum ein separates Programm, das Lookup-Table-Modell, Vergleich zu AMM v4 und CPMM.
+  </Card>
+  <Card title="Konten" icon="database" href="/docs/i18n/de/products/stable/accounts">
+    AmmInfo, ModelDataInfo, DataElement-Felder, Vault-Layout, Gebührenstruktur.
+  </Card>
+  <Card title="Mathematik" icon="function" href="/docs/i18n/de/products/stable/math">
+    Wie Interpolation Preise erzeugt, Pool-Asset-Buchhaltung, Gebührenanwendung identisch mit AMM v4.
+  </Card>
+  <Card title="Anweisungen" icon="terminal" href="/docs/i18n/de/products/stable/instructions">
+    Der aufrufbare Satz — Deposit, Withdraw, SwapBaseIn, SwapBaseOut, WithdrawPnl — und die Anweisungen, die im Upgrade vom 2026-06-22 entfernt wurden.
+  </Card>
+  <Card title="Gebühren" icon="percent" href="/docs/i18n/de/products/stable/fees">
+    0,02% Brutto-Handelsgebühr, aufgeteilt in 0,0176% LP / 0,0024% Protokoll. Keine Fondsgebühr, keine Creator-Gebühr.
+  </Card>
+  <Card title="Code-Demos" icon="code" href="/docs/i18n/de/products/stable/code-demos">
+    Erkennen Sie einen Stable-Pool, führen Sie Swaps durch / fügen Sie Liquidität hinzu / entfernen Sie Liquidität über das `LiquidityModule` des SDK (verarbeitet v5 nativ), und verwenden Sie die Off-Chain-Stable-Curve-Helfer.
+  </Card>
+</CardGroup>
+
+## Wann Sie dies lesen sollten
+
+- Sie integrieren ein Stablecoin- oder Asset-Paar und finden einen Stable-AMM-Pool mit dem besten Preis.
+- Sie erstellen eine Routing-Engine und müssen Stable-Pools als Liquiditätsquelle unterstützen.
+- Sie verwalten Liquidität in einem bestehenden Stable-Pool — lernen Sie den Deposit-/Withdraw-Ablauf.
+- Sie sind neugierig, wie AMM-Preisgestaltung durch eine Lookup-Tabelle programmierbar gemacht werden kann.
+
+## Wichtige Fakten
+
+| Aspekt | Wert |
+|--------|-------|
+| **Mainnet-Programm-ID** | `5quBtoiQqxF9Jv6KYKctB59NT3gtJD2Y65kdnB1Uev3h` |
+| **Devnet-Programm-ID** | `DRayDdXc1NZQ9C3hRWmoSf8zK4iapgMnjdNZWrfwsP8m` |
+| **Kurvenmodell** | Interpolierte Lookup-Tabelle (nicht x·y=k) |
+| **OpenBook-Abhängigkeit** | Keine (Market-Pfad lange inaktiv; Dead Code entfernt 2026-06-22) |
+| **Handelsgebühr** | 0,02% (nicht 0,25% wie AMM v4) |
+| **LP-Anteil der Gebühr** | 0,0176% (88% der Gebühr) |
+| **Protokoll-Anteil der Gebühr** | 0,0024% (12% der Gebühr) |
+| **Creator-Gebühr** | Keine |
+| **Fondsgebühr** | Keine |

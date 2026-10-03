@@ -1,0 +1,152 @@
+---
+title: "CPMM havuzu dağıtma"
+description: "Yapıştır ve çalıştır Node betiği; yeni bir CPMM havuzu oluşturur. Mint'leri ve tohum miktarlarını ortam değişkenleriyle yapılandırın."
+---
+
+<Info>
+  **Bu sayfa yapay zekâ tarafından otomatik olarak çevrilmiştir. İngilizce sürüm esas alınır.**
+
+  [İngilizce sürümü görüntüle →](/docs/en/quick-start/deploy-cpmm-pool)
+</Info>
+
+<Info>
+  **Bunun yaptığı şey.** Belirttiğiniz iki mint için yepyeni bir CPMM havuzu oluşturur, %0,25 ücret katmanını seçer, tohum miktarlarının ima ettiği fiyattan ilk likiditeyi sağlar ve yeni havuz kimliğini ile işlem imzasını yazdırır.
+</Info>
+
+## Kurulum
+
+[Hızlı başlangıç ön koşullarını](/docs/i18n/tr/quick-start) okuduğunuzdan ve `RPC_URL`, `KEYPAIR` ile bağımlılıkların yüklü olduğundan emin olun.
+
+Ayrıca **cüzdanı her iki mint'in tohum miktarlarıyla ve havuz oluşturma ücretini ile hesap kirasını karşılamak için yeterli SOL ile finanse etmeniz** gerekir (~mainnet'te toplam 0,19 SOL — kira/ücret dökümü için [`reference/fee-comparison`](/docs/i18n/tr/reference/fee-comparison#creation-costs) bölümüne veya yalnızca ücret için [`ray/protocol-fees`](/docs/i18n/tr/ray/protocol-fees#pool-creation-fees) bölümüne bakın).
+
+**Bunu devnet'te çalıştırma.** `cluster` değerini `"devnet"` olarak değiştirmek tek başına yeterli değildir. Bu betik, `cluster` takip etmeyen iki adlandırılmış import'u sabitleştiriyor: `programId: CREATE_CPMM_POOL_PROGRAM` ve `poolFeeAccount: CREATE_CPMM_POOL_FEE_ACC`, her ikisi de mainnet sabitleri. SDK'dan `DEVNET_PROGRAM_ID` import edin ve bunun yerine `DEVNET_PROGRAM_ID.CREATE_CPMM_POOL_PROGRAM` ve `DEVNET_PROGRAM_ID.CREATE_CPMM_POOL_FEE_ACC` kullanın — [CLMM betiğinin](/docs/i18n/tr/quick-start/deploy-clmm-pool) kullandığı aynı desen.
+
+## Betik
+
+`create-cpmm.mjs` olarak kaydedin:
+
+```ts create-cpmm.mjs icon="js"
+import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import {
+  Raydium,
+  TxVersion,
+  CREATE_CPMM_POOL_PROGRAM,
+  CREATE_CPMM_POOL_FEE_ACC,
+} from "@raydium-io/raydium-sdk-v2";
+import BN from "bn.js";
+import fs from "node:fs";
+
+// ── Config from env ──────────────────────────────────────────────
+const RPC_URL  = process.env.RPC_URL  ?? "https://api.mainnet-beta.solana.com";
+const KEYPAIR  = process.env.KEYPAIR  ?? `${process.env.HOME}/.config/solana/id.json`;
+const MINT_A   = process.env.MINT_A;   // required, base58
+const MINT_B   = process.env.MINT_B;   // required, base58
+const AMOUNT_A = process.env.AMOUNT_A; // required, integer raw units
+const AMOUNT_B = process.env.AMOUNT_B; // required, integer raw units
+
+if (!MINT_A || !MINT_B || !AMOUNT_A || !AMOUNT_B) {
+  console.error("Set MINT_A, MINT_B, AMOUNT_A, AMOUNT_B env vars.");
+  process.exit(1);
+}
+
+// ── Setup ────────────────────────────────────────────────────────
+const connection = new Connection(RPC_URL, "confirmed");
+const owner = Keypair.fromSecretKey(
+  new Uint8Array(JSON.parse(fs.readFileSync(KEYPAIR, "utf8"))),
+);
+const raydium = await Raydium.load({
+  owner,
+  connection,
+  cluster: "mainnet",
+  disableFeatureCheck: true,
+  blockhashCommitment: "finalized",
+});
+
+// ── Pick the 0.25% fee tier ─────────────────────────────────────
+const feeConfigs = await raydium.api.getCpmmConfigs();
+const feeConfig  = feeConfigs.find((c) => c.index === 0);
+if (!feeConfig) throw new Error("0.25% fee tier not found in CPMM configs.");
+
+// ── Resolve mint metadata (Token-2022-aware) ────────────────────
+const mintA = await raydium.token.getTokenInfo(new PublicKey(MINT_A));
+const mintB = await raydium.token.getTokenInfo(new PublicKey(MINT_B));
+
+// ── Build and execute ───────────────────────────────────────────
+const { execute, extInfo } = await raydium.cpmm.createPool({
+  programId:       CREATE_CPMM_POOL_PROGRAM,
+  poolFeeAccount:  CREATE_CPMM_POOL_FEE_ACC,
+  mintA,
+  mintB,
+  mintAAmount:     new BN(AMOUNT_A),
+  mintBAmount:     new BN(AMOUNT_B),
+  startTime:       new BN(0), // open immediately
+  feeConfig,
+  associatedOnly:  false,
+  ownerInfo:       { useSOLBalance: true },
+  txVersion:       TxVersion.V0,
+  computeBudgetConfig: {
+    units: 600_000,
+    microLamports: 100_000,
+  },
+});
+
+const { txId } = await execute({ sendAndConfirm: true });
+
+console.log(`Pool ID:  ${extInfo.address.poolId.toBase58()}`);
+console.log(`LP mint:  ${extInfo.address.lpMint.toBase58()}`);
+console.log(`Vault A:  ${extInfo.address.vaultA.toBase58()}`);
+console.log(`Vault B:  ${extInfo.address.vaultB.toBase58()}`);
+console.log(`Tx:       https://solscan.io/tx/${txId}`);
+```
+
+## Çalıştırın
+
+Örnek: 1 SOL ve 160 USDC tohum ile SOL/USDC havuzu oluşturun:
+
+```bash icon="terminal"
+export MINT_A="So11111111111111111111111111111111111111112"   # wSOL
+export MINT_B="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"   # USDC
+export AMOUNT_A="1000000000"   # 1 SOL (9 decimals)
+export AMOUNT_B="160000000"    # 160 USDC (6 decimals)
+
+node create-cpmm.mjs
+```
+
+Beklenen çıktı:
+
+```text
+Pool ID:  HgC5...3kXb
+LP mint:  4ZAS...9rkV
+Vault A:  J9Mu...mP2k
+Vault B:  AaJq...8wxx
+Tx:       https://solscan.io/tx/5dQ...
+```
+
+## Az önce ne oldu
+
+1. **`getCpmmConfigs`** `api-v3.raydium.io` adresinden canlı ücret katmanları listesini çekti ve indeks 0'ı (%0,25 katmanı) seçti — tam set için [`reference/fee-comparison`](/docs/i18n/tr/reference/fee-comparison) bölümüne bakın.
+2. **`getTokenInfo`** her mint'in meta verilerini çözdü; hangi token programının sahip olduğu da dahil. CPMM hem SPL Token hem de Token-2022 mint'lerini kabul eder; SDK otomatik olarak yönlendirir.
+3. **`createPool`** şunları yapan bir işlem oluşturdu:
+   - mint'leri kanonik sıraya göre sıralar,
+   - havuz PDA'sını, vault'ları, LP mint'ini ve yetkilendiriciyi türetir,
+   - `CREATE_CPMM_POOL_FEE_ACC` adresine tek seferlik `create_pool_fee` öder,
+   - eksikse arayanın ATA'larını oluşturur,
+   - vault'ları `AMOUNT_A` ve `AMOUNT_B` ile sağlar.
+4. **İlk fiyat** tohum oranı tarafından belirlenir: ondalık ayarlamadan sonra `price = AMOUNT_B / AMOUNT_A`. Bunu dikkatle seçin — botlar havuz açıldıktan saniyeler içinde herhangi bir yanlış fiyatlandırmayı arbitraj yapacaktır.
+5. **`startTime: new BN(0)`** ticareti hemen açar. Halka açılmadan önce likiditeyi hazırlamak için gelecekteki bir Unix zaman damgası ayarlayın.
+
+## Yaygın hatalar
+
+- **`pool already exists`** — Bu mint çifti için bu ücret katmanında zaten bir havuz var. Oluşturmadan önce arayın.
+- **`insufficient funds`** — Cüzdanınızda `MINT_A`, `MINT_B` veya SOL'un yeterli miktarı yok (havuz oluşturma ücreti + kira için).
+- **`Token-2022 extension not supported`** — Mint'lerinizden biri CPMM'nin kabul etmediği bir uzantı kullanıyor. [`reference/token-2022-support`](/docs/i18n/tr/reference/token-2022-support) bölümüne bakın.
+
+## Dağıtımdan sonra
+
+Yeni havuza karşı hemen swap yapabilirsiniz — [CLI'dan Swap yapın](/docs/i18n/tr/quick-start/swap-from-cli) betiği yeni `POOL_ID`'nizi doğrudan kabul eder. Toplayıcılar (Jupiter, vb.) yeni havuzu dakikalar içinde indeksleyecektir.
+
+## Sonraki adımlar
+
+- [`products/cpmm/overview`](/docs/i18n/tr/products/cpmm/overview) — CPMM nedir ve ne zaman seçilir.
+- [`user-flows/create-cpmm-pool`](/docs/i18n/tr/user-flows/create-cpmm-pool) — aynı akış ekran görüntüleriyle, Raydium UI aracılığıyla.
+- [`user-flows/choosing-a-pool-type`](/docs/i18n/tr/user-flows/choosing-a-pool-type) — bunun yerine CLMM kullanmalı mıydınız?

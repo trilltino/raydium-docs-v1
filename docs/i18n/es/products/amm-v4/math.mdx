@@ -1,0 +1,180 @@
+---
+title: "Matemáticas de AMM v4"
+description: "Invariante de producto constante con la convención de comisiones de AMM v4, conversión de precio de reserva a libro de órdenes, construcción de cuadrícula de órdenes objetivo y el paso de liquidación de PnL."
+---
+
+<Info>
+  **Esta página fue traducida automáticamente por IA. La versión en inglés es la fuente autorizada.**
+
+  [Ver versión en inglés →](/docs/en/products/amm-v4/math)
+</Info>
+
+## El invariante
+
+El pool mantiene `coin_reserve × pc_reserve = k`, donde (después de la eliminación de OpenBook en 2026-07):
+
+```
+coin_reserve = coin_vault_balance - accrued_pnl_coin
+pc_reserve   = pc_vault_balance   - accrued_pnl_pc
+```
+
+Hay dos cosas a notar:
+
+1. Las reservas ahora son **solo de bóveda**. El término histórico de orden abierta (tokens que el pool tenía en depósito como órdenes limitadas de OpenBook) ha sido eliminado — en la práctica era cero mucho antes de la eliminación. Puedes calcular `k` directamente desde los saldos de bóveda en cadena.
+2. La acumulación de PnL (`need_take_pnl_*`) se resta para que la curva se conserve cuando el administrador retira comisiones. El mismo principio que la exclusión de `protocol_fees_*` en CPMM.
+
+El programa calcula esto mediante `calc_total_without_take_pnl_no_orderbook` (la variante anterior consciente del libro de órdenes ha desaparecido).
+
+Cada operación `Swap*` garantiza que `k' ≥ k` después de agregar la parte de comisión del LP nuevamente en las reservas.
+
+## Convención de comisiones
+
+AMM v4 usa **comisiones de razón** (pares numerador/denominador) en lugar de la convención `1/1_000_000` de CPMM / CLMM. La estructura `Fees` en cadena (ver [`Fees::initialize`](https://github.com/raydium-io/raydium-amm/blob/master/program/src/state.rs) en el código fuente del programa) tiene valores predeterminados de:
+
+```
+Fees {
+  min_separate_numerator:    5,
+  min_separate_denominator:  10_000,   //  5/10_000 = 0.05%
+
+  trade_fee_numerator:      25,
+  trade_fee_denominator:    10_000,    // 25/10_000 = 0.25% — usado para precios de órdenes limitadas de OpenBook
+
+  pnl_numerator:            12,
+  pnl_denominator:          100,       // 12/100   = 12%   — parte del protocolo DE la comisión de swap
+
+  swap_fee_numerator:       25,
+  swap_fee_denominator:     10_000,    // 25/10_000 = 0.25% — comisión bruta en swaps de ruta AMM
+}
+```
+
+Interpretación (valores predeterminados publicados en mainnet):
+
+- **Comisión de swap total:** `swap_fee = amount_in × 25 / 10_000 = 0.25%` de la entrada bruta.
+- **Parte del protocolo:** `pnl_numerator / pnl_denominator = 12 / 100 = 12%` **de la comisión de swap**, lo que resulta en `0.25% × 12% = 0.03%` del volumen. Esta parte se acumula en los contadores de PnL y es retirada por `WithdrawPnl`.
+- **Parte del LP:** el `88%` restante de la comisión de swap, lo que resulta en `0.25% × 88% = 0.22%` del volumen. Se queda en el pool e infla `k`.
+- **Sin parte de fondo.** AMM v4 no tiene la división de comisión de fondo de CPMM/CLMM.
+
+Ten en cuenta que `pnl_numerator / pnl_denominator` es una fracción **de la comisión**, no del volumen de operaciones — una lectura errónea común de estos nombres de campo.
+
+`trade_fee_numerator / trade_fee_denominator` (también `25 / 10_000`) fue usado históricamente por la integración de OpenBook al calcular precios inclusivos de comisión para la cuadrícula de órdenes limitadas del AMM. Con el código de OpenBook eliminado, este campo es vestigial; la comisión de swap activa es `swap_fee_*`.
+
+Las desviaciones de estos valores predeterminados son raras pero existen en algunos pools heredados; siempre lee las comisiones de `AmmInfo.fees` antes de cotizar.
+
+## Matemáticas de swap directo (ruta AMM)
+
+El caso más simple: el usuario realiza un swap contra las bóvedas del pool sin interactuar con OpenBook. Las reservas internas del pool (incluidas las asignaciones en libro) son el denominador.
+
+**SwapBaseIn (entrada exacta):**
+
+```
+amount_after_fee = amount_in − ceil(amount_in × swap_fee_numerator / swap_fee_denominator)
+amount_out = amount_after_fee × out_reserve
+           / (in_reserve + amount_after_fee)
+require(amount_out >= minimum_amount_out)
+```
+
+Las reservas utilizadas aquí son los saldos de bóveda (menos PnL acumulado). Históricamente, la fórmula también agregaba los tokens que el AMM tenía bloqueados en órdenes de OpenBook; **ese término ha sido eliminado** — las reservas efectivas ahora equivalen a los saldos de bóveda brutos menos PnL pendiente. La ruta `MonitorStep` / liquidación implícita que solía actualizar el lado de OpenBook ha sido eliminada.
+
+**SwapBaseOut (salida exacta):**
+
+```
+amount_in_after_fee = ceil(in_reserve × amount_out / (out_reserve − amount_out))
+amount_in_gross     = ceil(amount_in_after_fee × swap_fee_denominator
+                            / (swap_fee_denominator − swap_fee_numerator))
+require(amount_in_gross <= maximum_amount_in)
+```
+
+## Interacción con libro de órdenes (histórica)
+
+<Note>
+  **Eliminada.** La construcción de cuadrícula descrita en esta sección refleja cómo AMM v4 *originalmente* reflejaba la curva en un mercado de OpenBook. La integración de OpenBook — incluyendo el crank `MonitorStep` y la lógica de cuadrícula `build_orders` — ha sido **eliminada del programa** (actualización 2026-07). Las matemáticas a continuación se preservan puramente como contexto histórico para lo que las cuentas `target_orders` / `amm_open_orders` en cadena fueron una vez dimensionadas.
+</Note>
+
+Separado de los swaps de usuario, AMM v4 históricamente colocaba una **cuadrícula** de órdenes limitadas en el mercado de OpenBook. La cuadrícula se calculaba a partir de parámetros de `AmmInfo`:
+
+- **`depth`** — número de niveles de precio por lado.
+- **`amount_wave`** — unidad base de tamaño por nivel.
+- **`min_size`**, **`coin_lot_size`**, **`pc_lot_size`** — restricciones del mercado de OpenBook.
+- **`state_data.swap_acc_coin_fee`**, **`swap_acc_pc_fee`** — contadores de comisión acumulada desde el último `TakePnl`.
+
+El programa deriva precios por nivel caminando desde el precio de curva actual en pasos de razón constante:
+
+```
+price_level(k) = curve_price × (1.0001 ^ k)       # conceptualmente
+size_level(k)  = amount_wave × f(depth, k)        # afilado por profundidad
+```
+
+Los precios y tamaños exactos se determinan por `target_orders` calculados en `build_orders` y comparados con `amm_open_orders` en cada `MonitorStep`. Cualquier divergencia resulta en cancelaciones + nuevos posts. Las órdenes recién completadas en OpenBook se liquidan en las bóvedas del pool en la siguiente operación que actualiza el lado de OpenBook.
+
+Los integradores rara vez necesitan calcular la cuadrícula — el mantenedor de Raydium la mantiene — pero es útil saber que:
+
+- Un pool con liquidez significativa **en libro** tiene esa liquidez contribuyendo a `k`, no inactiva.
+- Un mercado de OpenBook obsoleto (cola de eventos llena, cranks bloqueados) previene actualizaciones de cuadrícula; el AMM puede entonces cotizar precios que divergen del libro de órdenes visible hasta el siguiente crank.
+
+## Paso de liquidación (PnL)
+
+La parte del protocolo del 0.03% se acumula en `state_data.need_take_pnl_coin` y `state_data.need_take_pnl_pc`. `TakePnl` mueve estas cantidades fuera de las bóvedas al destino especificado por el administrador, luego pone a cero los contadores.
+
+Propiedad crucial: las reservas en el invariante siempre se calculan **menos** PnL acumulado, por lo que `TakePnl` no mueve la curva. Esto coincide con la convención de CPMM.
+
+## Ejemplo trabajado
+
+Estado del pool:
+
+- `coin_reserve = 1_000_000_000_000` (1,000,000 lado coin; 6 decimales)
+- `pc_reserve   = 2_000_000_000_000` (2,000,000 lado pc; 6 decimales)
+- Comisiones: `swap_fee = 25/10_000` predeterminado (0.25% del volumen) y `pnl = 12/100` — la relación `Fees` almacenada es 12/100, es decir, el 12% *de la comisión de swap*, lo que equivale al 0.03% del volumen.
+
+Usuario: `SwapBaseIn` entrada exacta `1_000_000_000` coin (1,000 coin).
+
+```
+swap_fee        = ceil(1_000_000_000 * 25 / 10_000)    = 2_500_000
+amount_after_fee =                                      997_500_000
+
+amount_out = amount_after_fee * pc_reserve
+           / (coin_reserve + amount_after_fee)
+           = 997_500_000 * 2_000_000_000_000
+           / (1_000_000_000_000 + 997_500_000)
+           = 1_993_011_970  (1,993.012 pc)
+
+// De la comisión de swap de 2_500_000:
+pnl_share = 2_500_000 * 12 / 100 = 300_000    (va al protocolo vía need_take_pnl_coin)
+lp_share  = 2_500_000 − 300_000  = 2_200_000  (se queda en coin_reserve)
+
+new coin_reserve = 1_000_000_000_000 + 1_000_000_000                 = 1_001_000_000_000
+                   (de los cuales 300_000 es PnL acumulado)
+  curve coin_reserve = 1_001_000_000_000 − 300_000 = 1_000_999_700_000
+new pc_reserve   = 2_000_000_000_000 − 1_993_011_970                 = 1_998_006_988_030
+
+k' = curve_coin_reserve * new_pc_reserve
+   ≈ 2.000_004_396E24
+k  = 1_000_000_000_000 * 2_000_000_000_000
+   = 2.0E24
+k' > k   ✓
+```
+
+La parte del LP (`2_200_000`) no se desglosa en ningún lugar — es simplemente el residual que eleva `k'`.
+
+## Reglas de precisión
+
+- Las multiplicaciones de reservas usan `u128`; las divisiones finales redondean hacia cero.
+- `swap_fee` redondea hacia arriba (para que el pool no cobre de menos).
+- `amount_in` para `SwapBaseOut` redondea hacia arriba (para que el usuario no pague de menos).
+- Los pools con ratios de reserva extremos pueden alcanzar `ZeroTradingTokens` en entradas muy pequeñas; la misma convención que CPMM.
+
+## Limitaciones vs CPMM
+
+- Las reservas de AMM v4 ahora son solo de bóveda, por lo que **puedes** cotizar directamente desde los saldos de bóveda (menos `need_take_pnl_*`) — el requisito anterior de agregar los montos `open_orders.free` / `open_orders.locked` ya no se aplica. La cotización del SDK / API sigue siendo la opción más simple.
+- AMM v4 no expone un TWAP estructurado en cadena. Los consumidores externos que quieran un precio respaldado por AMM-v4 deben calcularlo ellos mismos a partir de registros de operaciones.
+- Token-2022 no es compatible.
+
+## Dónde ir a continuación
+
+- [`products/amm-v4/instructions`](/docs/i18n/es/products/amm-v4/instructions) — donde `SwapBaseIn`, `Deposit`, etc. se conectan.
+- [`products/amm-v4/fees`](/docs/i18n/es/products/amm-v4/fees) — mecánica completa de comisiones, detalles de `TakePnl`.
+- [`algorithms/constant-product`](/docs/i18n/es/algorithms/constant-product) — la derivación compartida.
+
+Fuentes:
+
+- [Código fuente del programa Raydium AMM — `raydium-io/raydium-amm`](https://github.com/raydium-io/raydium-amm)
+- Módulo `Liquidity` del SDK v2 de Raydium

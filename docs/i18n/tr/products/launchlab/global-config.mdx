@@ -1,0 +1,232 @@
+---
+title: "LaunchLab GlobalConfig"
+description: "Protokol seviyesi yapılandırma hesapları — her LaunchLab başlatmasını yöneten ücret oranları, arz minimumları, kilit oranı tavanları, mezuniyet kapısı olan göç cüzdanları ve eğri başına indeksleme şeması."
+---
+
+<Info>
+  **Bu sayfa yapay zekâ tarafından otomatik olarak çevrilmiştir. İngilizce sürüm esas alınır.**
+
+  [İngilizce sürümü görüntüle →](/docs/en/products/launchlab/global-config)
+</Info>
+
+<Info>
+  `GlobalConfig`, **protokol seviyesi** yapılandırma hesabıdır. Birçok tane olabilir — `(curve_type, index)` ile anahtarlanır — ve her başlatma `Initialize` sırasında tam olarak birini seçer. Seçilen `GlobalConfig` üzerindeki değerler, o başlatmanın parametreleri için sabit sınırlar haline gelir. Platform seviyesi özelleştirme için (platform başına ücret oranı, izin verilen eğri şekilleri, mezuniyet sırasında NFT bölünmesi), bkz. [`products/launchlab/platform-config`](/docs/i18n/tr/products/launchlab/platform-config).
+</Info>
+
+## Nedir
+
+`GlobalConfig`, `(curve_type, index)` başına tekil bir PDA olup, her başlatmanın uyması gereken protokol tarafı kurallarını belirler:
+
+- İzin verilen bağlama eğrisinin türü (`curve_type`).
+- Eğrinin her alım ve satışta uyguladığı işlem ücreti oranı.
+- Mezuniyet sırasında alınan göç ücreti.
+- Arz, kilit oranı, satış oranı ve göç oranı için tabanlar.
+- Alıntı mint'i (genellikle sarılı SOL veya USDC) — kullanıcıların satın aldığı varlık.
+- Dört protokol tarafı cüzdan: protokol ücreti sahibi, göç ücreti sahibi ve CPMM ile eski AMM v4 mezuniyeti için saklanan iki göç kontrol cüzdanı.
+
+`GlobalConfig` hesapları, LaunchLab program yöneticisi veya devredilen yapılandırma oluşturma yetkisi tarafından **oluşturulabilir ve güncellenebilir**; başka herhangi bir imzalayan `InvalidOwner` (`6001`) alır. Kanonik yetkililer için [`reference/program-addresses`](/docs/i18n/tr/reference/program-addresses) bölümüne bakın.
+
+## Düzen
+
+```rust
+// states/config.rs
+pub const GLOBAL_CONFIG_SEED: &str = "global_config";
+
+#[account]
+pub struct GlobalConfig {
+    pub epoch:                   u64,         // recent_epoch tracker
+    pub curve_type:              u8,          // 0 = ConstantProduct, 1 = FixedPrice, 2 = LinearPrice
+    pub index:                   u16,         // discriminator within a curve_type
+    pub migrate_fee:             u64,         // SOL paid on graduation
+    pub trade_fee_rate:          u64,         // 1/1_000_000 of volume
+    pub max_share_fee_rate:      u64,         // 100 bps cap on the per-trade referral share fee
+    pub min_base_supply:         u64,         // floor on Initialize supply (no decimals)
+    pub max_lock_rate:           u64,         // ceiling on vesting locked / supply
+    pub min_base_sell_rate:      u64,         // floor on base_supply_graduation / supply
+    pub min_base_migrate_rate:   u64,         // floor on tokens that seed the post-graduation pool
+    pub min_quote_fund_raising:  u64,         // floor on quote_reserve_target (with decimals)
+    pub quote_mint:              Pubkey,
+    pub protocol_fee_owner:      Pubkey,      // claims protocol fees via CollectFee
+    pub migrate_fee_owner:       Pubkey,      // claims migration fees via CollectMigrateFee
+    pub migrate_to_amm_wallet:   Pubkey,      // can sign MigrateToAmm
+    pub migrate_to_cpswap_wallet:Pubkey,      // can sign MigrateToCpswap
+    pub padding_alignment:       [u8; 8],
+    pub padding:                 [u64; 15],
+}
+```
+
+PDA türetme:
+
+```ts
+const [globalConfig] = PublicKey.findProgramAddressSync(
+  [
+    Buffer.from("global_config"),
+    Buffer.from(quoteMint.toBytes()),
+    Buffer.from([curveType]),
+    u16ToBytes(index),
+  ],
+  LAUNCHLAB_PROGRAM_ID,
+);
+```
+
+(İmzalamadan önce zincir üzerindeki hesaptan tam seed sırasını doğrulayın — programın `create_config` talimatı gerçeğin kaynağıdır.)
+
+## Alan semantiği
+
+### `curve_type` ve `index`
+
+Birlikte bir `GlobalConfig`'i benzersiz şekilde anahtarlarlar. `(curve_type, index)` çifti başına bir `GlobalConfig` vardır:
+
+- `curve_type = 0` — Sabit ürün sanal rezerv eğrisi. Varsayılan ve en çok kullanılan.
+- `curve_type = 1` — Sabit fiyat eğrisi.
+- `curve_type = 2` — Doğrusal fiyat eğrisi.
+
+`index`, yöneticinin eğri türü başına birden fazla yapılandırma yayınlamasına izin veren bir `u16`'dır (örn. daha sıkı bir ücret ile bir tane, daha yüksek minimum alıntı artışı ile bir tane). `Initialize` sırasında başlatma bir `(curve_type, index)` çifti sağlar ve program eşleşen `GlobalConfig`'i yükler.
+
+### Ücretler
+
+- `trade_fee_rate` — işlem hacminin `1/1_000_000` cinsinden ifade edilir. Eğri üzerindeki her alım ve satışa uygulanır. `protocol_fee_owner`, `CollectFee` aracılığıyla payını talep eder.
+- `migrate_fee` — mezuniyet sırasında bir kez alınan lamport cinsinden sabit ücret (veya yapılandırmaya bağlı olarak alıntı birimleri). `migrate_fee_owner` tarafından `CollectMigrateFee` aracılığıyla talep edilir.
+- `max_share_fee_rate` — `10_000` (100 bps) olarak başlatılır. `BuyExactIn`, `BuyExactOut`, `SellExactIn` ve `SellExactOut`'un kabul ettiği `share_fee_rate` **argümanını** sınırlar — işlem sırasında doğrudan pay alıcısına ödenen referral ücreti. `PlatformConfig.fee_rate`'i sınırlamaz; bu oranın kendi tavanları vardır, [`platform-config`](/docs/i18n/tr/products/launchlab/platform-config#rate-caps) bölümünde açıklanmıştır. `CreateConfig`, başlatma sırasında `trade_fee_rate + max_share_fee_rate < RATE_DENOMINATOR_VALUE` olmasını zorunlu kılar. Güncelleme yolunda toplamı yalnızca `param = 6` (`max_share_fee_rate`) yeniden kontrol eder; `param = 0` (`trade_fee_rate`) yalnızca `trade_fee_rate < RATE_DENOMINATOR_VALUE` olduğunu doğrular; dolayısıyla tek başına işlem ücretini yükseltmek çifti birleşik sınırın üzerine taşıyabilir. Bunları, değişmezi koruyacak sırada ayarlayın.
+
+### Arz ve oran tabanları
+
+Bu tabanlar, bir başlatmanın `Initialize` sırasında seçebileceği eğri şekli parametrelerini sınırlar. Yaratıcının `CurveParams`'ı bunlardan herhangi birini ihlal ederse, `Initialize` `InvalidInput` ile geri döner.
+
+- `min_base_supply` — eğrinin bildirebileceği minimum `supply` (ondalık yok). Varsayılan `10_000_000`.
+- `max_lock_rate` — `1/1_000_000` cinsinden ifade edilir; varsayılan `300_000` (30%). `total_locked_amount <= supply * max_lock_rate / 1_000_000` aracılığıyla vesting'i sınırlar.
+- `min_base_sell_rate` — `1/1_000_000` cinsinden ifade edilir; varsayılan `200_000` (20%). `base_supply_graduation / supply`'i aşağıdan sınırlar.
+- `min_base_migrate_rate` — `1/1_000_000` cinsinden ifade edilir; varsayılan `200_000` (20%). Mezuniyet sonrası havuzu tohumlamak için kalan token sayısını sınırlar.
+- `min_quote_fund_raising` — bir başlatmanın bildirebileceği minimum `quote_reserve_target` (ondalık ile). Varsayılan alıntı mint'inin `30_000_000_000` birimi.
+
+### Alıntı mint'i ve protokol cüzdanları
+
+- `quote_mint` — kullanıcıların satın aldığı varlık. Çoğu başlatma sarılı SOL (`So111…112`) veya USDC (`EPjF…Dt1v`) kullanır. Bir `GlobalConfig` bir alıntı mint'ine bağlıdır; farklı bir alıntı hedefine ihtiyaç duyan başlatmalar farklı bir `(curve_type, index)` hedefler. Mint, SPL Token programı veya Token-2022 tarafından sahip olunabilir — aşağıya bakın.
+- `protocol_fee_owner` — `CollectFee`'yi imzalayan ve bu yapılandırmaya bağlı her başlatmada tahakkuk eden protokol ücretlerini talep eden pubkey. Zincir üzerinde depolanır; yönetici `UpdateConfig` aracılığıyla döndürebilir.
+- `migrate_fee_owner` — `CollectMigrateFee`'yi imzalayan pubkey.
+
+#### Token-2022 alıntı mint'leri
+
+`CreateConfig`, Token-2022 `quote_mint`'ini kabul eder ve böyle bir yapılandırmaya bağlı havuzlar bunu sondan sona taşır: alıntı kasası, her iki ücret kasası ve pay ücreti alıcısının token hesabı hepsi Token-2022'de oluşturulur ve swap talimatları alıntı tarafında bir `TransferFeeConfig` için hesap tutar. `PoolState.token_program_flag` bit1, başlatma başına seçimi kaydeder.
+
+Birine güvenmeden önce bilmek değer iki kısıtlama vardır:
+
+- **Kullanımdan kaldırılan `Initialize` buna karşı başlatılamaz.** Yalnızca `InitializeV2` ve `InitializeWithToken2022` Token-2022 alıntı programını kabul eder. Bkz. [`instructions`](/docs/i18n/tr/products/launchlab/instructions#instruction-inventory).
+- **Uzantı izin listesi uygulanmaz.** CPMM ve CLMM'nin aksine, LaunchLab bir alıntı mint'inin uzantılarını taramaz — `CreateConfig` mint'i olduğu gibi alır, bu nedenle tek kapı yönetici takdirine bağlıdır hangi mint'lerin bir yapılandırmaya bağlanacağı. Programın `NoSupportExtension` kontrolü yalnızca LaunchLab'ın kendisinin oluşturduğu Token-2022 temel mint'lerini kapsar. Birine bağlanmayı yüksek güven gerektiren bir eylem olarak değerlendirin; bkz. [`reference/token-2022-support`](/docs/i18n/tr/reference/token-2022-support#launchlab-quote-mints).
+
+### Göç cüzdanları
+
+Depolanan iki mezuniyet cüzdanı farklı imzacılar gerektirir:
+
+- `migrate_to_amm_wallet` — depolanan `migrate_type = 0` olan mevcut eski bir başlatma için `MigrateToAmm`'yi imzalar.
+- `migrate_to_cpswap_wallet` — `MigrateToCpswap`'ı imzalar. Yeni başlatılan her başlatma bu yolu kullanır.
+
+Bunlar genellikle Raydium tarafından işletilen mezuniyet krankı tarafından tutulur, bu nedenle mezuniyet eğri eşiğe ulaştıktan kısa süre sonra gerçekleşir, yaratıcının bunu çağrmasını beklemek yerine.
+
+### Platform tarafı izin listeleri
+
+`GlobalConfig` artık `requires_platform_auth`'a sahip değildir. Eski baytı padding'dir, bu nedenle hesap boyutu değişmez. Erişim artık `PlatformConfig.restrict_global_config` ve o platformun yöneticisi tarafından oluşturulan `PlatformAllowConfig` hesapları tarafından kontrol edilir. Bkz. [`platform-config`](/docs/i18n/tr/products/launchlab/platform-config).
+
+## Başlatma sırasında varsayılanlar
+
+`CreateConfig` çağrıldığında, program birçok alanı sabit kodlanmış varsayılanlarla tohumlar:
+
+```rust
+self.max_share_fee_rate     = 10_000;                  // 100 bps (referral share fee)
+self.min_base_supply        = 10_000_000;              // no decimals
+self.max_lock_rate          = 300_000;                 // 30%
+self.min_base_migrate_rate  = 200_000;                 // 20%
+self.min_base_sell_rate     = 200_000;                 // 20%
+self.min_quote_fund_raising = 30_000_000_000;
+```
+
+Yönetici `curve_type`, `index`, `migrate_fee`, `trade_fee_rate`, `quote_mint` ve dört cüzdan pubkey'ini oluşturma sırasında açıkça ayarlar; sonraki değerler `UpdateConfig` aracılığıyla ayarlanabilir.
+
+## Bir başlatma `GlobalConfig`'i nasıl seçer
+
+`Initialize` sırasında, yaratıcı şunları geçer:
+
+- Hangi `GlobalConfig` PDA'nın yükleneceğini seçmek için `(curve_type, index)`.
+- Eğri şeklini tanımlayan `CurveParams` (`supply`, `total_base_sell`, `total_quote_fund_raising`, `migrate_type`).
+- Kilitli arzı tanımlayan `VestingParams`.
+- Temel mint için `MintParams`.
+
+Program şunları zorunlu kılar:
+
+- `curve_type`, `global_config.curve_type` ile eşleşir.
+- `supply >= global_config.min_base_supply`.
+- `total_locked_amount <= supply * max_lock_rate / 1_000_000`.
+- `total_base_sell >= supply * min_base_sell_rate / 1_000_000`.
+- `(supply − total_base_sell − total_locked_amount) >= supply * min_base_migrate_rate / 1_000_000` — yani, mezuniyet sonrası havuzu tohumlamak için yeterli token.
+- `total_quote_fund_raising >= min_quote_fund_raising`.
+- `migrate_type == 1` (`CPSWAP`).
+- Seçilen platform `restrict_global_config == 1` varsa, eşleşen `PlatformAllowConfig` dahil edilir.
+
+`Initialize` sonrasında, başlatmanın `PoolState`'i `global_config` pubkey'ini doğrudan depolar, bu nedenle bağlama kalıcıdır.
+
+## Güncelleme yolu
+
+`UpdateConfig`, bir `(param: u8, value: u64)` çifti alır ve imzalayan olarak LaunchLab program yöneticisini **veya** devredilen yapılandırma oluşturma yetkisini kabul eder — başka herhangi bir imzalayan `InvalidOwner` (`6001`) alır. Her `param` değeri hangi alanın mutasyona uğrayacağını seçer:
+
+| `param` | Değiştirilen alan | Yeni değerin kaynağı | Doğrulama |
+|---------|---------------|----------------------|------------|
+| 0 | `trade_fee_rate` | `value` | `< 1_000_000` (assert edilir — ihlal, hata döndürmek yerine panik yaratır) |
+| 1 | `protocol_fee_owner` | `remaining_accounts[0].key` | varsayılan genel anahtar olmamalıdır |
+| 2 | `migrate_fee_owner` | `remaining_accounts[0].key` | varsayılan genel anahtar olmamalıdır |
+| 3 | `migrate_to_amm_wallet` | `remaining_accounts[0].key` | varsayılan genel anahtar olmamalıdır |
+| 4 | `migrate_to_cpswap_wallet` | `remaining_accounts[0].key` | varsayılan genel anahtar olmamalıdır |
+| 5 | `migrate_fee` | `value` | yok |
+| 6 | `max_share_fee_rate` | `value` | `< 1_000_000 − trade_fee_rate` |
+| 7 | `min_base_supply` | `value` | `> 0` |
+| 8 | `max_lock_rate` | `value` | `< 1_000_000` |
+| 9 | `min_base_sell_rate` | `value` | `0 < v < 1_000_000` |
+| 10 | `min_base_migrate_rate` | `value` | `0 < v < 1_000_000` |
+| 11 | `min_quote_fund_raising` | `value` | `> 0` |
+
+<Warning>
+  Dört cüzdan döndürmesi, aynı dispatch içindeki sıradan `param` değerleridir — **ayrı** bir
+  argüman şekli değildir. `value` değerini tamamen yoksayar ve yeni anahtarı *ilk*
+  `remaining_account`'tan okurlar; o hesabın atlanması bir `unwrap()` üzerinde panik yaratır.
+  `11`'in üzerindeki herhangi bir `param`, `InvalidInput` (`6002`) döndürür.
+</Warning>
+
+Eski `UpdateConfig` seçicisi `12` platform yetkilendirmesi için kaldırılmıştır. Platform yöneticileri artık kendi izin listelerini yönetir.
+
+## İstemciden `GlobalConfig` okuma
+
+```ts
+import { Raydium } from "@raydium-io/raydium-sdk-v2";
+
+// Fetch by PDA derivation:
+const [configPda] = PublicKey.findProgramAddressSync(
+  [
+    Buffer.from("global_config"),
+    quoteMint.toBytes(),
+    Buffer.from([curveType]),
+    u16ToBytes(index),
+  ],
+  LAUNCHLAB_PROGRAM_ID,
+);
+
+// The SDK exposes the layout, not a getter — decode the account yourself:
+import { LaunchpadConfig } from "@raydium-io/raydium-sdk-v2";
+const info = await connection.getAccountInfo(configPda);
+const config = LaunchpadConfig.decode(info!.data);
+console.log(config.tradeFeeRate.toString(), config.minFundRaisingB.toString());
+```
+
+Düzenin alan adlarının zincir üstü Rust adlarından farklı olduğuna dikkat edin: fon toplama tabanı `minFundRaisingB`, arz tabanı `minSupplyA`, satış/göç oranı tabanları ise `minSellRateA` / `minMigrateRateA` olarak çözülür.
+
+Tüm kullanılabilir yapılandırmaları listeleyen bir arayüz için, onları yansıtan LaunchLab API uç noktasını sorgulayın (`raydium.api.fetchLaunchConfigs()`); zincir üzerindeki hesap sayısı küçüktür (pratikte tek haneli).
+
+## İşaretçiler
+
+- [`products/launchlab/platform-config`](/docs/i18n/tr/products/launchlab/platform-config) — eğri şeklini daha da sınırlayan platform başına katman.
+- [`products/launchlab/accounts`](/docs/i18n/tr/products/launchlab/accounts) — bir başlatma için tam hesap grafiği.
+- [`products/launchlab/instructions`](/docs/i18n/tr/products/launchlab/instructions) — `Initialize` ve güncelleme talimatları.
+- [`reference/program-addresses`](/docs/i18n/tr/reference/program-addresses) — yönetici pubkey, program ID, paylaşılan yetkililer.
+
+Kaynaklar:
+
+- `raydium-launch/programs/launchpad/src/states/config.rs` — `GlobalConfig` struct ve `initialize`.
+- `raydium-launch/programs/launchpad/src/lib.rs` — `create_config`, `update_config`.

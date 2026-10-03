@@ -1,0 +1,193 @@
+---
+title: "Anchor IDL"
+description: "Wo Sie die IDL jedes Raydium-Programms finden, wie Sie TS / Rust / Python-Clients daraus regenerieren und die IDL-Änderungsrichtlinie des Protokolls."
+---
+
+<Info>
+  **Diese Seite wurde mit KI automatisch übersetzt. Maßgeblich ist stets die englische Version.**
+
+  [Englische Version ansehen →](/docs/en/sdk-api/anchor-idl)
+</Info>
+
+## Was eine IDL ist
+
+Anchor-Programme auf Solana veröffentlichen eine **IDL**-Datei (Interface Definition Language), die ihre Instruktionen, Account-Layouts, Error-Enum und Struct-Schemas beschreibt. Die IDL ist die Quelle der Wahrheit für die Client-Code-Generierung — das TS SDK, die Rust-CPI-Crate und Clients von Drittanbietern werden alle davon generiert (oder manuell dagegen geschrieben).
+
+Raydium veröffentlicht IDLs für CPMM, CLMM und LaunchLab. AMM v4, Stable AMM und Farm (v3 / v5 / v6) stammen aus der Zeit vor Anchor oder werden anderweitig nicht von Anchor verteilt — ihre Account-Strukturen werden manuell im SDK gepflegt.
+
+## Wo Sie sie finden
+
+IDLs befinden sich in einem dedizierten Repository:
+
+```
+https://github.com/raydium-io/raydium-idl
+```
+
+Die genauen Dateien:
+
+| Programm | IDL-Datei |
+|---------|----------|
+| CPMM | [`raydium_cpmm/raydium_cp_swap.json`](https://github.com/raydium-io/raydium-idl/blob/master/raydium_cpmm/raydium_cp_swap.json) |
+| CLMM | [`raydium_clmm/raydium_clmm.json`](https://github.com/raydium-io/raydium-idl/blob/master/raydium_clmm/raydium_clmm.json) |
+| LaunchLab | [`raydium_launchpad/raydium_launchpad.json`](https://github.com/raydium-io/raydium-idl/blob/master/raydium_launchpad/raydium_launchpad.json) |
+| AMM v4 | keine offizielle IDL — siehe [`raydium-sdk-V2/src/raydium/liquidity/layout.ts`](https://github.com/raydium-io/raydium-sdk-V2/blob/master/src/raydium/liquidity/layout.ts) für manuell geschriebene Layouts |
+| Stable AMM | keine offizielle IDL — Layouts im SDK |
+| Farm | keine offizielle IDL — Layouts im SDK |
+
+Die IDL-Dateien sind in der Git-Historie des Repos versioniert; pinnen Sie auf einen bestimmten Commit, wenn Sie Byte-für-Byte-Reproduzierbarkeit benötigen.
+
+Einige IDLs können auch direkt von Mainnet abgerufen werden:
+
+```bash
+anchor idl fetch <PROGRAM_ID> --provider.cluster mainnet
+```
+
+Es gibt jetzt **zwei** On-Chain-IDL-Mechanismen, und Rayidums Programme sind auf beide verteilt — das ist wichtig, weil eine bestimmte Anchor-CLI-Version möglicherweise nur einen kennt:
+
+| Programm | Wo sich die IDL befindet | Account | Berichte |
+|---------|--------------------|---------|---------|
+| CLMM | Legacy-Anchor-`anchor:idl`-Account | `FbDNAPsgm8Y5jWXQkXjpfN6Bp8xHeRkhMmsstAooPyY9` | `raydium_clmm` 0.1.0 — 38 Instruktionen, 52 Fehler (39 / 53 nach dem [Upgrade vom 2026-09-30](/docs/i18n/de/reference/changelog/2026-09-30-clmm-anchor-1-and-excess-lamports)) |
+| LaunchLab | Legacy-Anchor-`anchor:idl`-Account | `E6wT2uNeoWUvDrwdch1R8ETsyewR1ZM4WAwsa5hLJK5Z` | `raydium_launchpad` 0.2.0 — 27 Instruktionen |
+| Lock (Burn \& Earn) | Legacy-Anchor-`anchor:idl`-Account | `HzLkUWn57cdtyQNQLJpyu2EPF8qQAiGt4iuiEo1XnEFK` | 4 Instruktionen (Pre-`metadata` IDL-Spezifikation) |
+| **CPMM** | **Program Metadata program** `ProgM6JCCvbYkfKqJYHePx4xxSUSqJp7rh8Lyv7nk7S` | `FHuJXL7cEttfHk4sXdTAXVaRymBdKfVs7ZH6cMgA1ihk` (kanonisch, Seed `idl`) | `raydium_cp_swap` 0.2.0 |
+| AMM v4, Stable AMM, AMM Routing, Farm v3 / v5 / v6 | Nirgendwo | — | Nicht-Anchor-Programme; keine IDL wird veröffentlicht |
+
+<Warning>
+  **CPMM hat keinen Legacy-`anchor:idl`-Account.** Die IDL wurde zum Program Metadata program migriert, daher schlägt `anchor idl fetch CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C` bei jeder Anchor-CLI fehl, die nur die Legacy-PDA prüft. Verwenden Sie die mit dem SDK ausgelieferte IDL oder lesen Sie den Metadata-Account oben, bis Ihre CLI das Metadata-Programm unterstützt.
+</Warning>
+
+Alle drei Legacy-IDL-Accounts sind durch die IDL-Autorität `2XVnob28A5Qnpcy95UVeHWNT6G8Poy3tpA3AFyAMoZDt` beschreibbar, die von der BPF-Upgrade-Autorität der Programme getrennt ist — daher kann eine IDL aktualisiert werden, ohne neu bereitzustellen, und kann auch hinter einer Neubereitstellung zurückbleiben. Behandeln Sie die On-Chain-IDL als Komfort, nicht als Beweis für die Form des bereitgestellten Bytecodes.
+
+## Regenerieren eines TypeScript-Clients
+
+Anchors Codegen erzeugt einen typisierten Client aus der IDL:
+
+```bash
+# Mit der Anchor-CLI
+anchor build
+anchor idl parse \
+  --file target/idl/cpmm.json \
+  --out target/types/cpmm.ts
+
+# Oder mit den `@anchor-lang/core` TS-Helfern zur Laufzeit:
+```
+
+```ts
+import { Program, AnchorProvider } from "@anchor-lang/core";
+// Ziehen Sie die IDL direkt aus dem raydium-idl-Repo (oder bündeln Sie sie in Ihr Projekt).
+import cpmmIdl from "./idls/raydium_cp_swap.json";
+
+const provider = new AnchorProvider(connection, wallet, {});
+// Anchor >= 0.30 liest die Programm-ID aus `idl.address` — diese IDLs sind Spezifikation 0.1.0
+// und tragen sie. Die dreiargumentige Form `new Program(idl, programId, provider)` ist
+// Pre-0.30 und wirft einen Fehler.
+const program  = new Program(cpmmIdl as any, provider);
+
+// Typisierte Methoden-Builder werden automatisch generiert:
+await program.methods
+  .swapBaseInput(new BN(amountIn), new BN(minAmountOut))
+  .accounts({ ... })
+  .rpc();
+```
+
+Die meisten Integratoren tun dies **nicht** — sie verwenden den höherstufigen `raydium.cpmm.swap(...)`-Helfer, der die Anchor-Methoden plus alle Verwaltungsaufgaben umhüllt (ATA-Erstellung, Transfer-Fee-Anpassung, Compute-Budget, Token-2022-Programm-Routing). Regenerieren Sie nur, wenn Sie eine Schicht unter dem SDK benötigen.
+
+## Regenerieren eines Rust-Clients (CPI-Crate)
+
+Raydium veröffentlicht Anchor-Crates für die Programme, die IDLs haben:
+
+```toml
+# Cargo.toml — der Abhängigkeitsschlüssel muss der PACKAGE-Name der Crate sein.
+[dependencies]
+raydium-cp-swap = { git = "https://github.com/raydium-io/raydium-cp-swap", branch = "chore/upgrade-anchor", features = ["cpi"] }
+raydium-clmm    = { git = "https://github.com/raydium-io/raydium-clmm",    branch = "chore/upgrade-anchor", features = ["cpi"] }
+```
+
+Beziehen Sie sich im Code auf sie mit ihren **lib**-Namen, `raydium_cp_swap` und `raydium_clmm`. Es gibt keine Crate namens `raydium_amm_v3` unter irgendeiner Schreibweise. Beachten Sie den Branch. Beide Repos' `master` pinnen immer noch `anchor-lang 0.32.1`, daher benötigt eine Anchor-1.0-Integration `chore/upgrade-anchor` auf jedem. Mit beiden Crates auf diesem Branch teilen sie `=1.0.2` und können in einer Crate leben. Das Mischen einer `master`-Crate mit einer Upgrade-Branch-Crate wird nicht erstellt.
+
+Das `cpi`-Feature stellt `cpi::accounts::<Ix>`-Account-Structs und `cpi::<ix>()`-Aufrufer bereit — einsatzbereite CPI-Wrapper. Siehe [`sdk-api/rust-cpi`](/docs/i18n/de/sdk-api/rust-cpi) für Verwendungsmuster.
+
+Wenn Sie lieber frische Bindings generieren möchten:
+
+```bash
+# Aus der IDL mit anchor-client
+anchor idl parse \
+  --file raydium_cpmm/raydium_cp_swap.json \
+  --out src/generated/cpmm_bindings.rs
+```
+
+## Regenerieren eines Python-Clients
+
+Es gibt kein offizielles Raydium Python SDK. Generatoren von Drittanbietern sind:
+
+- **`anchorpy`** — Python-Port des Anchor TypeScript-Clients. Generiert typisierte Methoden-Builder aus IDLs.
+- **`solders`** — Low-Level-Solana-Primitive (Transaktionen, Keypairs, Pubkeys) in Rust-Bindings; wird unter `anchorpy` verwendet.
+
+```bash
+pip install anchorpy solders solana
+```
+
+```python
+from anchorpy import Program, Provider
+from solana.rpc.async_api import AsyncClient
+from pathlib import Path
+import json
+
+idl = json.loads(Path("cpmm.json").read_text())
+provider = Provider(AsyncClient("https://api.mainnet-beta.solana.com"), wallet)
+program  = Program(idl, CPMM_PROGRAM_ID, provider)
+
+await program.rpc["swap_base_input"](amount_in, min_amount_out, ctx=Context(accounts={...}))
+```
+
+Siehe [`sdk-api/python-integration`](/docs/i18n/de/sdk-api/python-integration) für eine ausführlichere Anleitung.
+
+## IDL-Änderungsrichtlinie
+
+Raydium befolgt diese Regeln für IDL-Stabilität:
+
+1. **Instruktions-Diskriminatoren ändern sich nie.** Das Hinzufügen neuer Instruktionen erweitert das Enum am Ende; bestehende Diskriminatoren bleiben stabil.
+2. **Account-Größen sind stabil; neue Felder kommen aus reserviertem Padding.** Jede Raydium-State-Struktur trägt eine nachfolgende Padding-Region, die bei der Erstellung dimensioniert wird, und ein neues Feld wird aus diesem Padding herausgeschnitten, anstatt angehängt zu werden — daher bleiben die Byte-Länge des Accounts und die Offsets aller *bereits vorhandenen* Felder fest. Die Folge ist, dass Bytes, die Sie zuvor als Padding gelesen haben, aussagekräftig werden können, und ein Feld kann zurück in Padding zurückgezogen werden (wie `PlatformConfig.curve_params` in der Version vom 2026-08-31). Lesen Sie die Struct-Definition nach einem Upgrade erneut; gehen Sie nicht davon aus, dass Padding Null bleibt.
+3. **Error-Enum-Codes sind nur Anhänge.** Ein vorhandener Error-Code bedeutet immer dasselbe.
+4. **Breaking Changes werden in neuen Programmen ausgeliefert.** Wenn ein Redesign erforderlich ist, stellt das Team eine neue Programm-ID bereit (z. B. CPMM als neues Programm statt Upgrade von AMM v4). Alte Pools laufen weiterhin auf dem alten Programm; neue Pools gehen zum neuen.
+
+Diese Richtlinie hält regenerierte Clients größtenteils rückwärtskompatibel: Ein Client, der gegen eine ältere IDL generiert wurde, dekodiert weiterhin die Felder, die er kennt, bei den Offsets, die er kennt. Was er *nicht* sieht, ist ein Feld, das aus dem herausgeschnitten wurde, was er immer noch als Padding behandelt — und im seltenen Ruhestandsfall kann ein Feld, das er dekodiert, möglicherweise nicht mehr geschrieben werden. Es sieht keine „zusätzlichen nachfolgenden Bytes": Die Account-Länge ändert sich nicht.
+
+## Was zu tun ist, wenn sich die IDL ändert
+
+1. **Aktualisieren Sie das SDK.** `npm update @raydium-io/raydium-sdk-v2`.
+2. **Regenerieren Sie Ihren Client-Code**, wenn Sie Anchor-Codegen direkt verwenden.
+3. **Diff das Account-Layout.** Die nachfolgenden Felder des neuen Layouts sind das Einzige, das Ihr Code nicht gesehen hat; bestätigen Sie, ob Sie sie benötigen.
+4. **Gehen Sie nicht davon aus, dass alte Instruktions-Diskriminatoren ungültig sind.** Gemäß Regel 1 funktionieren sie immer noch.
+5. **Führen Sie Integrationstests erneut aus** gegen Devnet, bevor Sie zu Mainnet wechseln.
+
+## IDL-Fehlerbehebung
+
+### Fehler „Invalid discriminator"
+
+Bedeutet normalerweise, dass ein Client, der gegen Version N der IDL erstellt wurde, versucht, eine Instruktion aufzurufen, die nur in einer Pre-Deploy-Version des Programms vorhanden war. Ziehen Sie die IDL erneut aus dem Live-Programm:
+
+```bash
+anchor idl fetch <PROGRAM_ID>
+```
+
+Für CPMM funktioniert dies nicht — siehe die IDL-Standorttabelle oben; ziehen Sie stattdessen die gebündelte IDL des SDK.
+
+### Account-Dekodierungsfehler
+
+Wenn `program.account.<Name>.fetch(pubkey)` mit „Invalid account discriminator" fehlschlägt, wurde der Account von einer vorherigen Programmversion erstellt und Anchor lehnt seinen 8-Byte-Diskriminator ab. Die Lösung besteht darin, den Raw-Layout-Parser aus dem SDK (`PoolInfoLayout.decode(accountData)`) zu verwenden, der keine Anchor-Diskriminatoren erzwingt.
+
+### Fehlende Instruktionen im generierten Client
+
+Anchors TS-Codegen generiert nur Methoden für Instruktionen, deren IDL-Eintrag einen `name` hat, der als gültiger Bezeichner analysiert wird. Rayidums Instruktionen erfüllen alle diese Anforderungen, aber wenn Sie einen Unterschied sehen, überprüfen Sie, ob die IDL-Datei aus der aktuellen SDK-Version stammt.
+
+## Verweise
+
+- [`sdk-api/rust-cpi`](/docs/i18n/de/sdk-api/rust-cpi) — Verwendung der Rust-CPI-Crates.
+- [`sdk-api/python-integration`](/docs/i18n/de/sdk-api/python-integration) — Python über `anchorpy`.
+- [`sdk-api/typescript-sdk`](/docs/i18n/de/sdk-api/typescript-sdk) — der höherstufige TS-Client.
+
+Quellen:
+
+- [Raydium IDL Repository](https://github.com/raydium-io/raydium-idl)
+- [Anchor IDL Spezifikation](https://www.anchor-lang.com/docs/basics/idl)

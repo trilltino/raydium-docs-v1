@@ -1,0 +1,168 @@
+---
+title: "AI 통합"
+description: "Raydium 문서를 코딩 에이전트나 LLM 워크플로우에 연결하세요 — MCP 서버, llms.txt 인덱스, 페이지별 복사, 사전 구성된 컨텍스트 파일."
+---
+
+<Info>
+  **이 페이지는 AI 자동 번역입니다. 모든 내용은 영문판을 기준으로 합니다.**
+
+  [영문판 보기 →](/docs/en/sdk-api/ai-integration)
+</Info>
+
+<Info>
+  이 문서는 AI 도구와 사람 모두가 사용할 수 있도록 설계되었습니다. 코딩 에이전트(Claude Code, Cursor, Windsurf, Continue 등)를 구축하거나 문서에 대해 RAG를 실행하는 경우, 아래의 인터페이스를 통해 커스텀 스크래핑 없이 Raydium 문서를 연결할 수 있습니다.
+</Info>
+
+## 사용 가능한 인터페이스
+
+| 인터페이스 | URL 패턴 | 사용 시기 |
+|---|---|---|
+| **MCP 서버** | `https://docs.raydium.io/mcp` | AI 에디터(Claude Code, Cursor, Windsurf 등)가 Raydium 문서를 기본적으로 쿼리하고 인용하도록 하려는 경우. |
+| **`llms.txt` 인덱스** | `https://docs.raydium.io/llms.txt` | RAG 파이프라인을 구축하고 모든 페이지의 평면 인덱스가 필요한 경우. |
+| **`llms-full.txt` 본문** | `https://docs.raydium.io/llms-full.txt` | 전체 코퍼스를 단일 연결 파일로 오프라인 인덱싱하려는 경우. |
+| **페이지별 복사 메뉴** | 모든 본문 페이지 상단의 `Copy page` 버튼 | 한 페이지를 LLM과의 채팅에 붙여넣으려는 경우. |
+| **페이지별 딥링크** | `View as Markdown`, `Open in ChatGPT`, `Open in Claude`, `Open in Cursor`, `Open in VS Code` | 문서 페이지에서 선택한 도구로 한 번의 클릭으로 이동하려는 경우. |
+
+`Copy page` 버튼과 딥링크 메뉴는 모든 페이지의 우측 상단(페이지 제목 옆)에 있습니다. 둘 다 문서 플랫폼의 컨텍스트 메뉴로 구동됩니다.
+
+## MCP 서버
+
+MCP(Model Context Protocol) 서버를 사용하면 AI 클라이언트가 Raydium 문서를 도구로 쿼리할 수 있습니다. 설정 후 에이전트는 "`addLiquidity` 파라미터에 대해 Raydium 문서를 검색해줘"라고 요청하면 인용된 답변을 받을 수 있습니다.
+
+### Claude Code
+
+```bash
+claude mcp add --transport http raydium-docs https://docs.raydium.io/mcp
+```
+
+추가 후 Claude Code에 "Raydium 문서에서 X를 검색해줘"라고 요청하면 도구를 사용합니다.
+
+### Cursor
+
+Cursor 설정(`Cmd/Ctrl + ,` → MCP)에 추가하세요:
+
+```json
+{
+  "mcpServers": {
+    "raydium-docs": {
+      "url": "https://docs.raydium.io/mcp"
+    }
+  }
+}
+```
+
+### Windsurf, Continue, 일반 클라이언트
+
+모든 MCP 호환 클라이언트는 `https://docs.raydium.io/mcp`를 가리킬 수 있습니다. 그 엔드포인트 자체가 디스커버리 표면입니다 — `GET`은 서버 구성(이름, 버전, 전송 방식, 지침, 도구 목록)을 반환하므로 별도의 매니페스트 파일이 필요하지도, 제공되지도 않습니다.
+
+### 서버가 노출하는 것
+
+Raydium 문서 MCP 서버는 하나의 주요 도구인 `search_docs(query: string)`를 노출하며, 이는 쿼리에 대해 가장 높은 순위의 구절과 그들의 정규 URL을 반환합니다. 에이전트는 사용한 URL을 인용할 책임이 있습니다. 우리는 에이전트별 추적이나 속도 제한을 하지 않습니다.
+
+## RAG용 `llms.txt`
+
+`llms.txt`는 "기계 판독 가능한 문서 인덱스"에 대한 새로운 표준입니다. Raydium은 다음을 발행합니다:
+
+- `https://docs.raydium.io/llms.txt` — 제목과 한 줄 요약이 있는 모든 페이지의 평면 목록, 챕터별로 구성됨.
+- `https://docs.raydium.io/llms-full.txt` — 모든 페이지의 전체 마크다운 본문, 연결됨, 페이지 경계는 제목으로 보존됨.
+
+`full` 변형은 매 문서 배포마다 재생성됩니다. 일정에 따라 가져오거나(매일이면 충분함) 필요에 따라 가져오세요.
+
+```bash
+# 전체 코퍼스를 RAG 수집 파이프라인에 드롭하세요.
+curl -sSL https://docs.raydium.io/llms-full.txt -o raydium-docs.md
+```
+
+## 페이지별 전달 메뉴
+
+모든 본문 페이지에는 컨텍스트 메뉴(우측 상단, 제목 옆)가 있으며 다음의 한 번의 클릭 작업이 있습니다:
+
+- **Copy** — 페이지를 평문 마크다운으로 복사합니다.
+- **View as Markdown** — 소스 `.md`를 새 탭에서 열어 저장할 수 있습니다.
+- **Open in ChatGPT / Claude / Perplexity** — 페이지 콘텐츠를 명명된 도구의 채팅 프롬프트에 미리 로드합니다.
+- **Open in Cursor / VS Code** — 페이지 콘텐츠가 있는 버퍼를 명명된 에디터에서 엽니다.
+
+MCP를 설정하지 않고 단일 페이지에 대해 모델에 질문하려는 경우 올바른 인터페이스입니다.
+
+## 코딩 에이전트용 사전 구성된 컨텍스트 파일
+
+Raydium과 통합하고 에이전트가 처음부터 올바른 기본 지식을 갖도록 하려면 이 파일들을 프로젝트에 드롭하세요:
+
+### `.cursorrules` / `.windsurfrules` / 에이전트 시스템 프롬프트
+
+```text
+You are integrating with Raydium, a Solana DeFi protocol with five product
+surfaces: AMM v4, CPMM, CLMM, Farm, and LaunchLab. Authoritative docs live
+at docs.raydium.io. The official SDK is `@raydium-io/raydium-sdk-v2` (pin
+the version you've verified against). For server-built swaps, prefer the
+Trade API at transaction-v1.raydium.io. Always:
+
+- Pass a `Connection` and `cluster` that match.
+- Keep all amounts as `BN` instances; never call `.toNumber()` on amounts.
+- Pre-fund the user's wallet for ATA creation rent.
+- Pass an explicit `computeBudgetConfig` for any tx that may compete in
+  high-volume windows.
+- Re-fetch `poolInfo` immediately before high-value transactions; cached
+  state goes stale.
+
+When uncertain about an instruction's accounts list, defer to
+`docs.raydium.io/products/<product>/accounts` and the on-chain IDL.
+```
+
+`.cursorrules`(Cursor), `.windsurfrules`(Windsurf), 또는 `CLAUDE.md`(Claude Code)로 저장하거나 에이전트의 시스템 프롬프트에 붙여넣으세요. 정확한 파일명과 위치는 도구 버전에 따라 다르므로, 자동으로 파일을 선택하지 않으면 도구의 설정 문서를 확인하세요.
+
+### 고정 컨텍스트 목록
+
+"항상 포함" 페이지 목록을 허용하는 코딩 에이전트의 경우, 이 목록은 대부분의 Raydium 통합에 필요한 최소 컨텍스트입니다:
+
+```text
+https://docs.raydium.io/ko/sdk-api/typescript-sdk
+https://docs.raydium.io/ko/sdk-api/trade-api
+https://docs.raydium.io/ko/products/cpmm/instructions
+https://docs.raydium.io/ko/products/clmm/instructions
+https://docs.raydium.io/ko/integration-guides/priority-fee-tuning
+https://docs.raydium.io/ko/reference/program-addresses
+https://docs.raydium.io/ko/reference/error-codes
+```
+
+통합하는 제품에 따라 조정하세요.
+
+## 인덱싱 레시피
+
+자신의 RAG를 구축하고 `llms-full.txt`를 사용하지 않으려면 다음이 정규 레시피입니다:
+
+```ts
+import { fetch } from "undici";
+
+const INDEX_URL = "https://docs.raydium.io/llms.txt";
+const BASE      = "https://docs.raydium.io";
+
+const index    = await (await fetch(INDEX_URL)).text();
+const pageUrls = [...index.matchAll(/^- \[(.+?)\]\((.+?)\)/gm)].map(m => m[2]);
+
+for (const path of pageUrls) {
+  const md = await (await fetch(`${BASE}${path}.md`)).text();
+  // ingest md into your vector store, keyed by path
+}
+```
+
+모든 페이지는 정규 경로에 `.md` 접미사가 추가되어 제공됩니다(예: `/sdk-api/typescript-sdk` → `/sdk-api/typescript-sdk.md`).
+
+## 주의사항
+
+- **프롬프트에 개인 상태를 붙여넣지 마세요.** MCP 서버는 공개 문서에만 있는 것을 알고 있습니다. 지갑 키, RPC 자격 증명 및 유사한 비밀은 에이전트 컨텍스트에 절대 들어가면 안 됩니다.
+- **AI 출력은 권위 있는 것이 아닙니다.** 모델은 프로그램 주소, 명령어 이름, 계정 목록을 놀랍도록 쉽게 환각합니다. 에이전트가 생성한 트랜잭션을 신뢰하기 전에 항상 문서와 IDL에 대해 검증하세요.
+- **버전 드리프트.** SDK v2는 1.0 이전입니다. 이전 릴리스에서 학습한 에이전트는 고정된 버전에 대해 컴파일되지 않는 코드를 내보낼 수 있습니다. 에이전트의 시스템 프롬프트에 고정된 SDK 버전을 포함하세요.
+
+## 포인터
+
+- [`sdk-api/typescript-sdk`](/docs/i18n/ko/sdk-api/typescript-sdk) — 주요 SDK 참조.
+- [`sdk-api/trade-api`](/docs/i18n/ko/sdk-api/trade-api) — 서버 구축 스왑 트랜잭션, 에이전트 친화적 통합에 이상적.
+- [`reference/program-addresses`](/docs/i18n/ko/reference/program-addresses) — 검증된 프로그램 ID.
+- [Model Context Protocol](https://modelcontextprotocol.io) — 업스트림 MCP 사양.
+- [`llms.txt` 제안](https://llmstxt.org) — 인덱스 표준에 대한 컨텍스트.
+
+출처:
+
+- [Mintlify `llms.txt` 지원](https://www.mintlify.com/docs/ai/llmstxt) 및 [AI 수집](https://mintlify.com/docs/ai-ingestion).
+- Raydium 문서 배포.

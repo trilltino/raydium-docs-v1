@@ -1,0 +1,78 @@
+---
+title: "快速開始"
+description: "三個指令碼分別執行交換、建立 CPMM 池和建立 CLMM 池並初始化頭寸 — 真實鏈上輸出，最少設定。交換和 CPMM 指令碼可直接貼上執行；CLMM 流程需要額外幾個步驟。"
+---
+
+<Info>
+  **本頁內容由 AI 自動翻譯，所有內容以英文版本為準。**
+
+  [查看英文版 →](/docs/en/quick-start/index)
+</Info>
+
+<Info>
+  **本章涵蓋的內容。** 三個端到端指令碼，各自執行一項真實的鏈上操作。交換和 CPMM 指令碼是單一檔案，你可以貼上、用環境變數設定並執行。CLMM 指令碼是多檔案流程 — 詳見其專屬頁面。使用這些指令碼在建立更大規模的應用前驗證你的設定。
+
+  **本章不涵蓋的內容。** 參考文件。如需完整的建構者 API、參數參考和邊界情況，請參閱 [SDK & API](/docs/i18n/zh-Hant/sdk-api) 和各產品的 `code-demos` 頁面。
+</Info>
+
+## 前置條件
+
+執行一次：
+
+```bash icon="terminal"
+mkdir raydium-quickstart && cd raydium-quickstart
+npm init -y
+npm install @raydium-io/raydium-sdk-v2 @solana/web3.js @solana/spl-token bn.js
+```
+
+你需要：
+
+- **Node 18+** 且支援 ESM（`package.json` 中有 `"type": "module"` 或使用 `.mjs` 副檔名）。
+- **Solana 金鑰對** 位於 `~/.config/solana/id.json`（或任何位置 — 設定 `KEYPAIR`）。參閱 [`solana-fundamentals/toolchain`](/docs/i18n/zh-Hant/solana-fundamentals/toolchain#solana-cli) 以產生金鑰對。
+- **已充值的錢包。** 交換指令碼只需要輸入金額加上小額緩衝 — CPMM 交換的網路費用約 0.0015 SOL（參閱 [`reference/fee-comparison`](/docs/i18n/zh-Hant/reference/fee-comparison#network-fees-per-typical-operation)），如果交換需要為你開設代幣帳戶則需一次性租金。建立池的成本更高：CPMM 指令碼本身在種子流動性或租金之前需要約 0.15 SOL 的一次性池建立費用。在充值錢包前，請查看各指令碼的設定部分以了解目前的費用。
+- **RPC URL。** 免費公開 RPC 適合測試；若要進行超過煙霧測試的操作，請使用付費提供商。
+
+每個 shell 工作階段設定一次：
+
+```bash icon="terminal"
+export RPC_URL="https://api.mainnet-beta.solana.com"
+export KEYPAIR="$HOME/.config/solana/id.json"
+```
+
+<Info>
+  **叢集。** 三個指令碼預設使用主網。Devnet 需要 `RPC_URL=https://api.devnet.solana.com` 加上指令碼內的 `cluster: "devnet"` — 對於兩個池建立指令碼，這不是唯一的變更；詳見各指令碼的設定部分以了解還需要改變什麼。請注意 devnet 上的池種子流動性稀少；預期需要自行鑄造測試代幣。
+</Info>
+
+## 三個指令碼
+
+<CardGroup cols={3}>
+  <Card title="從 CLI 交換" icon="right-left" href="/docs/i18n/zh-Hant/quick-start/swap-from-cli">
+    透過 CPMM 池報價並執行交換 — 確認設定正常運作的最快方式。
+  </Card>
+  <Card title="部署 CPMM 池" icon="droplet" href="/docs/i18n/zh-Hant/quick-start/deploy-cpmm-pool">
+    為你選擇的代幣對建立新的 CPMM 池，以 0.25% 費用層級的初始流動性進行種子。
+  </Card>
+  <Card title="部署 CLMM 池" icon="chart-line" href="/docs/i18n/zh-Hant/quick-start/deploy-clmm-pool">
+    建立新的 CLMM 池並開設初始集中頭寸，預設使用最低費用層級。
+  </Card>
+</CardGroup>
+
+## 本章之後
+
+各指令碼會列印其鏈上結果 — 交換報價和交易連結、新池地址，或新頭寸及其 NFT — 以及指向 [SDK & API](/docs/i18n/zh-Hant/sdk-api) 章節中下一頁的單行指示，該頁面對應於指令碼執行的操作。當你準備好編寫自己的整合時：
+
+- **後端和機器人** → [Trade API](/docs/i18n/zh-Hant/sdk-api/trade-api)。
+- **前端和完全控制應用** → [TypeScript SDK](/docs/i18n/zh-Hant/sdk-api/typescript-sdk)。
+- **鏈上組合** → [Rust CPI](/docs/i18n/zh-Hant/sdk-api/rust-cpi)。
+- **在它們之間選擇** → [SDK & API](/docs/i18n/zh-Hant/sdk-api) 頂部的比較表。
+
+## 版本資訊
+
+```text
+SDK:       @raydium-io/raydium-sdk-v2@0.2.64-alpha   (pin advanced 2026-09-09)
+Programs:  see /reference/program-addresses
+Cluster:   mainnet-beta (also runs on devnet with the change noted above)
+Verified:  2026-09-09 (checked against 0.2.64-alpha source and the demo repo)
+```
+
+如果指令碼在較新的 SDK 版本上出現問題，請查看 SDK 的發行說明 — 建構者回傳形狀在次要版本之間已演變。

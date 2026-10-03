@@ -1,0 +1,204 @@
+---
+title: "TypeScript SDK"
+description: "@raydium-io/raydium-sdk-v2 полный цикл — установка, четыре модульных фасада, построение транзакций и подводные камни, которые ловят каждого нового интегратора."
+---
+
+<Info>
+  **Эта страница переведена с помощью ИИ. За эталон принимается английская версия.**
+
+  [Открыть английскую версию →](/docs/en/sdk-api/typescript-sdk)
+</Info>
+
+<Info>
+  **Баннер версии.** На этой странице документируется `@raydium-io/raydium-sdk-v2@0.2.64-alpha`, версия, которую используют все примеры кода на этом сайте. SDK находится в статусе pre-1.0, и поверхность типов менялась между релизами — зафиксируйте вашу версию.
+
+  Версия была обновлена с `0.2.42-alpha` на 2026-09-09 вместе с обновлениями программ: `0.2.64-alpha` — текущий релиз SDK. Репозиторий [`raydium-sdk-V2-demo`](https://github.com/raydium-io/raydium-sdk-V2-demo), на который ссылаются страницы с примерами кода, устанавливает `0.2.62-alpha`, поэтому зафиксируйте одну из этих версий, если вы следуете примеру в точности. Примеры на этих страницах были последний раз **выполнены** против `0.2.42-alpha` (2026-04); их сигнатуры вызовов были перепроверены против исходного кода `0.2.64-alpha` на 2026-09-09, но любое несовпадение считайте ошибкой документации и [откройте issue](https://github.com/raydium-io/raydium-docs-v1/issues/new).
+</Info>
+
+## Установка
+
+```bash
+npm install @raydium-io/raydium-sdk-v2 @solana/web3.js @solana/spl-token
+# или
+pnpm add @raydium-io/raydium-sdk-v2 @solana/web3.js @solana/spl-token
+```
+
+SDK написан на TypeScript и поставляется с `.d.ts` рядом с JS артефактом. Минимальный набор инструментов: Node 18+, TypeScript 5.0+, `moduleResolution: "bundler"` или `"node16"`.
+
+## Инициализация
+
+Точка входа — `Raydium.load`:
+
+```ts
+import { Raydium } from "@raydium-io/raydium-sdk-v2";
+import { Connection, Keypair, clusterApiUrl } from "@solana/web3.js";
+
+const connection = new Connection(process.env.RPC_URL ?? clusterApiUrl("mainnet-beta"));
+const owner      = Keypair.fromSecretKey(/* ... */);
+
+const raydium = await Raydium.load({
+  owner,
+  connection,
+  cluster: "mainnet",           // "mainnet" | "devnet"
+  disableFeatureCheck: true,    // пропустить проверку функций SDK при запуске
+  blockhashCommitment: "confirmed",
+});
+```
+
+`Raydium.load` асинхронна, потому что по умолчанию она загружает список токенов (`raydium.token.load()`) с `api-v3.raydium.io`. Передайте `disableLoadToken: true`, чтобы пропустить эту загрузку. Проверка доступности функций — это отдельный вызов `/v3/main/AvailabilityCheckAPI`, и она **уже пропускается**, если вы явно не передадите `disableFeatureCheck: false`. Конфигурации комиссий вообще не загружаются во время загрузки — они приходят лениво из `raydium.api.getCpmmConfigs()` / `getClmmConfigs()` при первом использовании.
+
+## Модульные фасады
+
+После загрузки объект `raydium` предоставляет десять модульных фасадов плюс клиент API:
+
+```ts
+raydium.cpmm       // CPMM пулы: createPool, addLiquidity, withdrawLiquidity, swap, ...
+raydium.clmm       // CLMM пулы: createPool, openPositionFromBase, increasePositionFromBase,
+                   //             decreaseLiquidity, harvestAllRewards, swap, лимитные ордера, ...
+raydium.liquidity  // AMM v4 пулы: computeAmountOut, swap, addLiquidity, removeLiquidity, ...
+raydium.farm       // Farm v3/v5/v6: deposit, withdraw, harvestAllRewards, create,
+                   //                restartReward(s), addNewRewardToken(s)
+raydium.launchpad  // LaunchLab: createLaunchpad, buyToken, buyTokenExactOut, sellToken,
+                   //            claimCreatorFee, построители curve-rule и platform-config, ...
+raydium.tradeV2    // Маршрутизация между пулами: поиск маршрутов, расчёт, выполнение маршрута
+raydium.marketV2   // Создание маркета OpenBook (устаревшее)
+raydium.utils1216  // Разовые помощники для исторических клеймов
+raydium.token      // Список токенов + метаданные: load(), getTokenInfo()
+raydium.account    // Токен-аккаунты кошелька, поиск и создание ATA
+raydium.api        // REST-клиент (fetchPoolById, getCpmmConfigs, fetchLaunchConfigs, ...)
+```
+
+## Построители транзакций
+
+Каждая мутирующая функция возвращает построитель вместо немедленного выполнения:
+
+```ts
+import { Percent } from "@raydium-io/raydium-sdk-v2";
+
+const { execute, builder, transaction, instructionTypes, signers, extInfo } =
+  await raydium.cpmm.addLiquidity({
+    poolInfo,
+    inputAmount,              // BN — one side, not a pair
+    baseIn: true,
+    slippage: new Percent(1, 100),   // a Percent, not a number
+    txVersion: TxVersion.V0,
+  });
+```
+
+Возвращаемые поля:
+
+- **`execute`** — удобная функция, которая подписывает и отправляет. Эквивалентна `builder.execute`.
+- **`builder`** — экземпляр `TxBuilder` со всеми накопленными инструкциями и подписантами. `builder.build()` возвращает `TxBuildData`, чьё поле `transaction` — это единственная legacy-транзакция `Transaction`; `builder.buildV0()` возвращает `TxV0BuildData` с единственной `VersionedTransaction`. Только `buildMultiTx` / `buildMultiTxV0` дают массив.
+- **`transaction`** — построенная `Transaction` / `VersionedTransaction`.
+- **`instructionTypes`** / **`signers`** — накопленные метки инструкций и набор подписантов.
+- **`extInfo`** — специфичные для продукта дополнения. Например, `cpmm.createPool` возвращает `extInfo.address.{poolId, lpMint, vaultA, vaultB}`; `launchpad.createLaunchpad` возвращает `extInfo.address` (`LaunchpadPoolInfo` плюс `poolId`).
+
+<Note>
+  В возвращаемом типе нет поля `innerTransactions` — его деструктуризация является ошибкой
+  TypeScript. Построители, чей возвращаемый тип — `MakeMultiTxData` (например,
+  `clmm.harvestAllRewards`, `farm.harvestAllRewards`, `tradeV2.swap`,
+  `launchpad.createLaunchpad`), вместо него предоставляют `transactions`, а их `execute`
+  **требует** `{ sequentially: boolean }` и разрешается в `{ txIds }`, а не `{ txId }`.
+</Note>
+
+`txVersion` управляет форматом транзакции legacy vs V0. V0 (таблицы поиска адресов) — рекомендуемое по умолчанию — позволяет более крупным свопам поместиться в одну транзакцию.
+
+### Почему асинхронные построители?
+
+Почти каждый построитель внутри загружает состояние в цепи: информацию о пуле (для котировок), владение программой токена (для маршрутизации Token-2022 vs SPL), освобождение от аренды аккаунта (для создания ATA) и т. д. SDK агрессивно кэширует, но первый вызов для нового пула включает RPC round-trips. Держите долгоживущий экземпляр `raydium`, чтобы избежать повторной загрузки.
+
+## Дополнения модуля CLMM (последний релиз)
+
+Фасад CLMM получил поверхности для новых функций динамической комиссии, односторонней комиссии и лимитных ордеров:
+
+- **`raydium.clmm.createCustomizablePool`** — надмножество `createPool`, которое принимает `collectFeeOn` и `dynamicFeeConfig` (`PublicKey` аккаунта конфигурации). Именно передача `dynamicFeeConfig` включает динамические комиссии; отдельного флага `enableDynamicFee` нет, как и `dynamicFeeConfigId`. Классический `createPool` продолжает работать для пулов с комиссией по умолчанию.
+- **`raydium.clmm.openLimitOrder`** — открыть лимитный ордер на одном тике. Принимает `poolInfo`, `baseIn` (направление), `orderTick`, `amount`, а также опционально `tickArrayBitmap`, `noneIndex`, `ownerInfo`. Используйте экспортируемый помощник `getOrderTick({ baseIn, mintADecimal, mintBDecimal, tickSpacing, price })` для квантования тика.
+- **`raydium.clmm.increaseLimitOrder` / `decreaseLimitOrder`** — отрегулировать незаполненную часть существующего ордера. Оба принимают `{ poolInfo, limitOrder, amount }`; `decreaseLimitOrder` добавляет опциональный `slippage`. Уменьшение откатывается на полностью заполненном ордере с `InvalidOrderPhase`.
+- **`raydium.clmm.settleLimitOrder` / `settleAllLimitOrder`** — собрать заполненный выход в ATA владельца. `settleLimitOrder` принимает только `{ limitOrder }` — без `poolInfo`. Вызвать может либо владелец ордера, либо хранитель `limit_order_admin` программы.
+- **`raydium.clmm.closeLimitOrder` / `closeAllLimitOrder`** — закрыть полностью урегулированные ордера для возврата аренды.
+- **`raydium.api.getClmmDynamicConfigs()`** — помощник REST, который обращается к новому эндпоинту `/main/clmm-dynamic-config`. (Помощника или эндпоинта для конфигурации лимитных ордеров не существует: лимитные ордера идентифицируются тиком, а не аккаунтом конфигурации на каждый пул.)
+
+Пакет не объявляет subpath-экспортов, поэтому `@raydium-io/raydium-sdk-v2/<anything>` не разрешается ни в каком написании — импортируйте всё из корневого модуля верхнего уровня. (Внутри `src/raydium/clmm/utils/` был переименован в `src/raydium/clmm/libraries/`, но это никогда не было публичной точкой входа.)
+
+Полные пошаговые руководства на TypeScript находятся в [`products/clmm/code-demos`](/docs/i18n/ru/products/clmm/code-demos).
+
+## Частые ошибки
+
+### 1. Несовпадение кластера
+
+Конфигурация запуска SDK зависит от кластера. Смешивание `cluster: "mainnet"` с devnet `Connection` вызывает молчаливую неправильную маршрутизацию: SDK котирует против mainnet `AmmConfig`, но отправляет в devnet. Всегда передавайте оба параметра.
+
+### 2. Забывчивость при предварительном создании ATA
+
+При первом взаимодействии с монетой Associated Token Account пользователя может не существовать. SDK автоматически добавляет инструкцию `AssociatedTokenAccount::create`, когда обнаруживает отсутствующий ATA, что стоит небольшое количество аренды. Если в вашем кошельке мало SOL, это молча не сработает. Проверьте и пополните перед повторной попыткой.
+
+### 3. Устаревший `poolInfo`
+
+`poolInfo` — это кэшированный снимок. Если состояние пула изменилось с момента его загрузки (например, крупная сделка переместила цену), `minAmountOut` свопа может быть вычислен против старого состояния и упасть ниже суммы выхода в цепи, откатившись. Перезагрузите `poolInfo` непосредственно перед построением высокостоимостных транзакций или используйте `computeAmountOut` SDK, который повторно запрашивает резервы.
+
+### 4. Приоритетные комиссии
+
+SDK не добавляет цены за вычислительные единицы по умолчанию. В периоды высокого объёма (запуски новых пулов, события мем-монет) это означает, что ваша транзакция конкурирует со многими другими и может не попасть. Предоставьте явный `computeBudgetConfig`:
+
+```ts
+const { execute } = await raydium.cpmm.swap({
+  poolInfo,
+  baseIn,                    // required: which side inputAmount is denominated in
+  inputAmount: new BN(...),
+  swapResult: ...,           // required: from CurveCalculator.swapBaseInput/Output
+  slippage: 0.005,
+  txVersion: TxVersion.V0,
+  computeBudgetConfig: {
+    units: 250_000,          // лимит CU
+    microLamports: 50_000,   // приоритетная комиссия за CU
+  },
+});
+```
+
+Смотрите [`integration-guides/priority-fee-tuning`](/docs/i18n/ru/integration-guides/priority-fee-tuning) для руководства по размерам.
+
+### 5. Допуск проскальзывания должен соответствовать типу пула
+
+CPMM и AMM v4 используют математику CPMM (низкое влияние на обычные сделки). CLMM кусочная (влияние прыгает при пересечении тиков). Если вы скопируете допуск проскальзывания 0,5% из примера CPMM в своп CLMM, который пересекает несколько тиков, транзакция, вероятно, откатится. `computeAmountOut` SDK возвращает `priceImpact`; установите ваш допуск выше него.
+
+### 6. `BN` vs `number`
+
+Все поля сумм в SDK — это экземпляры `bn.js` `BN` — никогда не JavaScript `number`. Преобразование значений сумм через `.toNumber()` молча усекает на `2^53`; для любого значения выше ~9 квадрильонов (не редкость на 9-десятичных монетах) это дает неправильный результат. Держите всё в `BN` до финального рендера UI.
+
+## Политика версионирования
+
+- `@raydium-io/raydium-sdk-v2` — единственный SDK, который поддерживает Raydium. Все документы, примеры и руководства по интеграции нацелены на него.
+- Старый пакет v1 (`@raydium-io/raydium-sdk`) существует на npm по историческим причинам. Поддержка закончилась после выпуска CPMM и LaunchLab (v1 никогда не получал поддержку ни для одного из них), и с 2024 года не было релизов v1. Считайте v1 end-of-life: не используйте его для нового кода и перенесите любые оставшиеся интеграции v1 на v2.
+- SDK v2 находится в статусе pre-1.0. Критические изменения между минорными релизами 0.x возможны; зафиксируйте версию, которую вы проверили, и проверьте примечания к релизу GitHub при обновлении.
+
+## Обновление
+
+При обновлении между минорными версиями SDK:
+
+1. Перепроверьте тип возврата каждого мутирующего вызова — изменения формы (например, `extInfo`) происходят часто.
+2. Переформируйте сигнатуры загрузки `poolInfo` — поле могло быть переименовано.
+3. Перепроверьте вашу обработку проскальзывания; SDK переключался между автоматически связанным и опциональным связанным поведением между релизами.
+4. Если вы используете `raydium.tradeV2` (маршрутизация), перепроверьте форму маршрута — это наиболее нестабильная часть поверхности. Обратите внимание, что фасад был переименован из `trade` в `tradeV2`; старого имени больше не существует.
+
+## Получение помощи
+
+Для вопросов SDK и API:
+
+- **GitHub issues** — подавайте на [github.com/raydium-io/raydium-sdk-V2/issues](https://github.com/raydium-io/raydium-sdk-V2/issues) для ошибок и запросов функций. Команда Raydium активно мониторит.
+- **Discord** — канал `#dev-support` на [discord.gg/raydium](https://discord.gg/raydium) для синхронной помощи.
+- **Telegram** — чат разработчиков, ссылка на который находится на [raydium.io](https://raydium.io) (избегайте непроверенных групп Telegram).
+
+Для проблем безопасности **не** публикуйте в открытых каналах — смотрите [`security/disclosure`](/docs/i18n/ru/security/disclosure).
+
+## Ссылки
+
+- [`sdk-api/rest-api`](/docs/i18n/ru/sdk-api/rest-api) — HTTP дополнение к SDK.
+- [`sdk-api/trade-api`](/docs/i18n/ru/sdk-api/trade-api) — построенные сервером транзакции свопа.
+- [`sdk-api/anchor-idl`](/docs/i18n/ru/sdk-api/anchor-idl) — регенерация клиентов непосредственно из IDL программ.
+- [`sdk-api/python-integration`](/docs/i18n/ru/sdk-api/python-integration) — Python эквивалент через `solana-py`.
+- [`integration-guides/priority-fee-tuning`](/docs/i18n/ru/integration-guides/priority-fee-tuning) — размер `computeBudgetConfig`.
+
+Источники:
+
+- [Исходный код Raydium SDK v2](https://github.com/raydium-io/raydium-sdk-V2)
+- Примечания к релизам Raydium SDK.

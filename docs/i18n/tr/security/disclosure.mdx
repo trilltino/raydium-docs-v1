@@ -1,0 +1,247 @@
+---
+title: "Sorumlu açıklama"
+description: "Raydium'un hata ödül programı: kapsam (yalnızca zincir üstü program kodu), ciddiyet seviyeleri ve ödüller, iletişim yolları (Immunefi veya güvenlik e-postası), ödeme yapısı ve SDK / UI / API sorunlarını bildirmek için ödül dışı kanal."
+---
+
+<Info>
+  **Bu sayfa yapay zekâ tarafından otomatik olarak çevrilmiştir. İngilizce sürüm esas alınır.**
+
+  [İngilizce sürümü görüntüle →](/docs/en/security/disclosure)
+</Info>
+
+<Info>
+  Raydium, **yalnızca zincir üstü program kodunu kapsayan** etkin bir hata ödül programı yürütmektedir — [`reference/program-addresses`](/docs/i18n/tr/reference/program-addresses) içinde listelenen program kimliklerindeki Solana akıllı sözleşmeleri. Program 25 Nisan 2023'ten beri Immunefi'de canlı durumdadır. Ödemeler ciddiyet ve ekonomik etki ile ölçeklenir ve kritik seviyenin en üstünde \$505.000'a kadar ulaşır.
+
+  **SDK, REST API'leri ve ön uç (raydium.io) ödülün kapsamında değildir.** Oradaki sorunlar ödeme almaz, ancak raporlar yine de hoş karşılanır — iletişim yolu için aşağıdaki [Ödül dışı raporlar (SDK / API / UI)](#ödül-dışı-raporlar-sdk-/-api-/-ui) bölümüne bakınız.
+
+  Bu sayfa, ödülün neyi kapsadığı, nasıl bildirim yapılacağı ve yanıt sürecinden ne beklenebileceğinin kaynağıdır.
+</Info>
+
+## Kapsam
+
+### Ödül kapsamında (ödeme yapılır)
+
+Ödül **yalnızca dağıtılmış zincir üstü program koduna** uygulanır:
+
+- **Dağıtılmış programlar** [`reference/program-addresses`](/docs/i18n/tr/reference/program-addresses) içindeki program kimliklerinde:
+  - AMM v4 (`675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8`)
+  - CPMM (`CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C`)
+  - CLMM (`CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK`)
+  - Stable AMM (`5quBtoiQqxF9Jv6KYKctB59NT3gtJD2Y65kdnB1Uev3h`)
+  - LaunchLab (`LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj`)
+  - Farm v3 / v5 / v6
+  - LP-Lock / Burn & Earn (`LockrWmn6K5twhz3y9w1dQERbmgSaRkfnTeTKbpofwE`)
+  - AMM Routing
+- **Akıllı sözleşme CPI bileşebilirlik hataları** — bir bileşen programının Raydium programını doğru şekilde kullanması Raydium programının kendisinin yanlış davranmasına neden olduğu durumlar.
+
+### Ödül kapsamında değil (bildirmek hoş karşılanır — aşağıya bakınız)
+
+- **Raydium SDK v2** (`@raydium-io/raydium-sdk-v2`) npm'de.
+- **REST API'leri** ([API Referansı](/docs/i18n/tr/api-reference) sekmesinde listelenen her ana bilgisayar — `api-v3.raydium.io`, `transaction-v1.raydium.io`, `launch-*-v1.raydium.io`, vb.).
+- **Ön uç** (`raydium.io`) — XSS, CSRF, kimlik doğrulama akışı hataları, cüzdan sahteciliği, bozuk UI durumları dahil.
+- **Zincir dışı indeksleyiciler, görüntü / IPFS ağ geçitleri ve UI'ye veri sunan diğer altyapı**.
+
+Bunlar ödeme almaz. Raporlar yine de hoş karşılanır ve yararlıdır — aşağıdaki [Ödül dışı kanal](#ödül-dışı-raporlar-sdk-/-api-/-ui) üzerinden gönderin.
+
+### Kapsam dışı (hiç uygun değil)
+
+- Raydium ile bileşen olan üçüncü taraf programları (onların takımlarına bildirin).
+- Raydium üzerinden yönlendiren üçüncü taraf toplayıcıları (örn. Jupiter).
+- **Raydium tarafından bakımı yapılmayan** zincir dışı araçlar (Python'da topluluk SDK'ları, üçüncü taraf botlar, vb.).
+- Raydium takım üyelerine karşı sosyal mühendislik saldırıları.
+- Doğrulayıcı tarafı gizli anlaşması veya çoğunluk hissesi saldırıları gerektiren herhangi bir bulgu (bu Solana katmanı, DeFi ödül hedefi değil).
+- Genel RPC uç noktalarına spam yaparak DoS.
+- Çalışan bir kavram kanıtı olmayan otomatik tarama aracı çıktıları.
+
+**Programa özgü istisnalar (Immunefi listesine göre):**
+
+- **AMM v4 / OpenBook bağımlılıkları** — OpenBook bağımlılıklarına ilişkin hatalar kapsam dışıdır. AMM v4 Durum 6'ya ayarlanmıştır, bu nedenle likidite artık OpenBook pazarlarına paylaşılmamaktadır.
+- **Önceki güvenlik incelemelerinde zaten işaretlenmiş bulgular** uygun değildir: CLMM'nin Ottersec incelemesi ve Hybrid AMM programının Kudelski, Ottersec ve MadShield incelemeleri. Zaten açıklanmış bir sorunu yeniden bildirmek ödeme almaz.
+- **CLMM verim talep başarısızlığı tasarım gereği** — CLMM, ticaret ücreti ve tarım verimi jetonlarını LP'lere yayar. Bir saldırgan kasa veya ücret jetonlarını boşaltırsa, kullanıcılar verimi talep edemez ve işlemler başarısız olur. Bu tasarım gereğidir ve **değil** bir güvenlik açığı olarak kabul edilir.
+
+### Gri alan — önce tartışın
+
+- MEV-direnci ilkellerindeki hatalar dış altyapı ile etkileşim kurar.
+- "Doğru" davranışın belirsiz olduğu Token-2022 entegrasyon kenar durumları.
+- Kod hatasına temiz şekilde eşlenmeyen ekonomik / oyun-teorik saldırılar.
+
+Emin olmadığınızda, bildirmek tarafında hata yapın.
+
+## Ciddiyet ve ödüller
+
+Raporlar [Immunefi Güvenlik Açığı Ciddiyet Sınıflandırma Sistemi V2.3](https://immunefi.com/immunefi-vulnerability-severity-classification-system-v2-3/) kullanılarak sınıflandırılır, **Kuralların Önceliği** modeli altında: bu sayfadaki şartlar ve Immunefi listesi yönetir ve farklı oldukları yerde varsayılan sınıflandırmaya göre öncelik alır. Ödüller USD cinsinden belirtilir ve Raydium takımı tarafından **RAY, SOL veya USDC** cinsinden ödenir.
+
+Akıllı sözleşme ödül seviyeleri:
+
+| Ciddiyet | Ödül |
+|----------|--------|
+| **Kritik** | **Doğrudan etkilenen fonların %10'u**, **\$505.000** ile sınırlı, **\$50.000 minimum** ile |
+| **Yüksek** | **\$5.000–\$40.000** |
+| **Orta** | **Sabit \$5.000** |
+
+Orta altında ayrı ödeme yapılan bir seviye yoktur. \$50.000 kritik minimum, araştırmacıları doğrudan etkilenen fonlar küçük olduğunda raporu gizlemekten caydırmak için özel olarak mevcuttur.
+
+### Kritik ödül hesaplaması
+
+Ana ağ varlıkları için, kritik ödül **doğrudan etkilenen fonların %10'u**, maksimum **\$505.000**'a kadar. Riskte olan fonların %10'u **\$50.000**'ın altına düşerse, rapor yine de **\$50.000 minimum** ödeme alır. Üst sınır ve riskte olan fonların %10'u temeli kritik akıllı sözleşme raporlarına uygulanır.
+
+### Kapsam içi etkiler
+
+Ödül, Immunefi'nin standartlaştırılmış etki taksonomisini kullanır. Raydium'a özgü örnekler, her etkinin programlara nasıl eşlendiğini göstermek için verilir.
+
+**Kritik**
+
+- **Herhangi bir kullanıcı fonunun doğrudan çalınması**, istirahat halinde veya hareket halinde, talep edilmemiş verim hariç — örn. geçerli bir Raydium talimatı aracılığıyla bir kullanıcının LP fonlarını boşaltmak veya sınırsız LP jetonlarının basılması.
+- **Fonların kalıcı olarak dondurulması** — örn. havuz muhasebesi bozulması, fonlar kalıcı olarak kurtarılamaz hale gelir.
+- **Kullanıcı fonlarını kalıcı olarak dondurabilecek veya kullanıcı işlem onayı olmadan fonları boşaltabilecek veya çalabilecek güvenlik açıkları** — örn. program yükseltme yetkisini atlamak veya tüm protokol ücretlerini çalma hatası.
+
+**Yüksek**
+
+- **Talep edilmemiş verimin çalınması** — örn. çiftliklerden veya CLMM pozisyonlarından bekleyen ödülleri çalmak.
+- **Talep edilmemiş verimin kalıcı olarak dondurulması**.
+- **Herhangi bir süre için fonların geçici olarak dondurulması** — örn. bir kullanıcının pozisyonunu dondurarak kötü niyetli bir tx aracılığıyla kapatamaması.
+- **Kullanıcı fonlarını geçici olarak dondurabilecek veya kullanıcı fonlarının değerini kasıtlı olarak değiştirebilecek güvenlik açıkları** — örn. havuz matematiğini manipüle etmek veya kayma korumasını atlamak.
+
+**Orta**
+
+- **Akıllı sözleşme, jeton fonlarının eksikliği nedeniyle çalışamaz**.
+- **Kar için blok doldurma**.
+- **Taciz** (saldırganın kar motifi yok, ancak kullanıcılara veya protokole zarar) — örn. bir havuzdaki tüm swapların geri döndüğü taciz edilebilir DoS.
+- **Gaz çalınması**.
+- **Sınırsız gaz tüketimi**.
+
+## İletişim yolları
+
+### Birincil: Immunefi
+
+Raydium'un hata ödülü [Immunefi](https://immunefi.com/bug-bounty/raydium/information/) üzerinde listelenir. Immunefi platformu aracılığıyla bildirin:
+
+1. Bir Immunefi hesabı oluşturun.
+2. Raydium ödül sayfasına gidin.
+3. Tam bir PoC ile bulguyu gönderin. **Tüm ciddiyet seviyeleri için bir kavram kanıtı gereklidir** — açıklamalar ve ifadeler kabul edilmez, çalışan kod gereklidir. Kritik ve Yüksek raporlar ayrıca önerilen bir düzeltme içermelidir.
+4. Raporlar hızlı şekilde işlenir — programın medyan çözüm süresi ~1 gündür.
+
+**Ödemeler Raydium takımı tarafından doğrudan işlenir**, Immunefi emanet tarafından değil — USD cinsinden belirtilir ve RAY, SOL veya USDC cinsinden ödenir. **Ödeme işleme için KYC gerekli değildir**.
+
+### Alternatif: e-posta gönderimi
+
+Ödül kapsamı bulguları, Immunefi yerine (veya buna ek olarak) e-posta ile de gönderilebilir:
+
+- `security@raydium.io`
+- `security@reactorlabs.io`
+
+Immunefi'de olduğu gibi tam çalışan bir PoC ve Kritik / Yüksek raporlar için önerilen bir düzeltme ekleyin. Gerekirse takımın PGP anahtarı ile hassas ayrıntıları şifreleyin — e-postada sorun ve takım anahtarları değiştirecektir. Aynı bulguyu aynı anda birden fazla kanal üzerinden göndermeyin (Immunefi *veya* e-posta seçin).
+
+### Doğrudan (kritik, zaman duyarlı bulgular için)
+
+Bulgu aktif olarak istismar ediliyorsa veya yakın zamanda gerçekleşecekse ve Immunefi triajı için bekleyemezseniz, en hızlı ikincil yol:
+
+- **Doğrudan e-posta** `security@raydium.io` veya `security@reactorlabs.io` — takıma doğrudan ulaşmanın en hızlı yolu; konu satırını aktif bir istismar olarak işaretleyin.
+- **Immunefi'nin acil durum düğmesi** ödül sayfasında — iş saatleri içinde dakikalar içinde yükseltir.
+- **Immunefi aracılığıyla şifreli iletişim** — Immunefi, uçtan uca şifreli bir mesajı Raydium takımına iletebilir.
+
+Güvenlik raporları için genel kanallardan (X / Twitter, Telegram, Discord) kaçının — açıklama kendisi istismarı tetikleyebilir. Hem rapor hem de herhangi bir takip iletişim için Immunefi veya yukarıdaki güvenlik e-postalarını kullanın.
+
+### Ödül dışı raporlar (SDK / API / UI)
+
+Ödülün **dışındaki** bileşenlerdeki sorunlar için — SDK, REST API'leri, `raydium.io` ön ucu veya herhangi bir zincir dışı altyapı — ödeme yoktur, ancak takım yine de bunları duymak ister. Kullanın:
+
+- **E-posta**: güvenlik çıkarımları olan herhangi bir şey için `security@raydium.io` veya `security@reactorlabs.io` (XSS, CSRF, kimlik doğrulama akışı sızıntıları, imzalı mesaj yeniden oynatma, cüzdan sahteciliği, API tarafından açığa çıkarılan hassas veriler, vb.). Hata hassassa takımın PGP anahtarı ile şifreleyin; e-postada sorun ve takım anahtarları değiştirecektir.
+- **GitHub sorunları**: SDK'daki, dokümanlar içindeki veya Raydium tarafından bakımı yapılan herhangi bir açık kaynak repo'daki güvenlik dışı işlevsel hatalar için. İlgili depo üzerinde bir sorun açın (örn. [`raydium-io/raydium-sdk-V2`](https://github.com/raydium-io/raydium-sdk-V2)).
+- **Discord** (`discord.gg/raydium`): güvenliğe dokunmayan düşük etkili UI / UX geri bildirimi için iyidir. **Bir yabancı tarafından okunursa istismarı etkinleştirebilecek herhangi bir şey yayınlamayın**.
+
+Ödül dışı raporlardan ne alırsınız:
+
+- **Onay** birkaç iş günü içinde yanıtta.
+- **Çapraz depo koordinasyonu** düzeltme program ve SDK'yı kapsıyorsa.
+- **Genel kredi** (izniniz ile) ilgili değişiklik günlüğü veya sürüm notlarında.
+- **Önemli bulguların tekrar raporlayanları** bazen bir katkıda bulunan programa davet edilir; bu yol zincir üstü ödülden ayrıdır ve takdir edilir.
+
+Ne almaz:
+
+- Ciddiyet ne olursa olsun ölçekli bir ödeme. Ödül program kodu bulguları içindir.
+- Aşağıdaki güvenli liman politikası kapsamında kapsam — bu politika özel olarak ödül kapsamı araştırmasına atıfta bulunur. SDK / API / UI testi için, normal sorumlu açıklama kurallarını ve standart hizmet şartlarını izleyin.
+
+## Katılım kuralları
+
+### Yapın
+
+- **Yalnızca ana ağın yerel bir çatalında veya genel testnet'te test edin**. Tüm kavram kanıtı çalışması yerel çatallar üzerinde yapılmalıdır.
+- Rapora çalışan bir PoC ekleyin (tüm ciddiyet seviyeleri için gerekli).
+- Ekonomik etkiyi bilginiz en iyi şekilde tahmin edin.
+- Bir düzeltme önerileri — Kritik ve Yüksek raporlar için gerekli.
+
+### Yapmayın
+
+- **Ana ağ veya genel testnet dağıtılmış kodunda test edin.** Böyle bir test yasaktır; yalnızca yerel çatalları kullanın.
+- **Fiyatlandırma orakülleri veya üçüncü taraf akıllı sözleşmeleri** veya üçüncü taraf sistemleri, uygulamaları, tarayıcı uzantılarını veya web sitelerini test edin.
+- Güvenlik açığını bir düzeltme dağıtılmadan önce herkese açık şekilde açıklamayın (gizli bir ödülde yayınlanmamış bir hatanın genel açıklanması yasaktır).
+- Önemli trafik üreten otomatik test çalıştırın veya proje varlıklarına karşı herhangi bir hizmet reddi saldırısı.
+- Raydium takım üyeleri veya kullanıcılarına karşı kimlik avı veya diğer sosyal mühendislik girişimleri.
+- Aynı bulguyu aynı anda birden fazla kanal üzerinden gönderin — Immunefi *veya* e-posta seçin, ikisi birden değil ve asla genel DM'ler aracılığıyla.
+
+Bunlar [Immunefi Kurallarını](https://immunefi.com/rules/) izler; ihlaller ödülü geçersiz kılar.
+
+## Yanıt zaman çizelgesi
+
+Programın **medyan çözüm süresi yaklaşık 1 gündür** (genel Immunefi listesine göre). Aşağıdaki aşamalar, bir raporun nasıl ilerlediğinin göstergesidir; tam SLA'lar Immunefi listesi ve triaj süreci tarafından yönetilir, bu sayfa tarafından değil:
+
+| Aşama | Gösterge süresi |
+|-------|-------------|
+| İlk triaj | ~1 gün (medyan) |
+| Ciddiyet sınıflandırması | Birkaç iş günü |
+| Düzeltme geliştirme | Ciddiyet + karmaşıklığa bağlı |
+| Düzeltme dağıtımı | Zincir üstü program zaman kilidi tabi |
+
+Kritik bulgular için, düzeltme yolu hızlanır: takım multisig'i toplar, bir düzeltme taslağı hazırlar, inceleme için gönderir ve zaman kilitli dağıtımı sıraya alır.
+
+## Herkese açık olarak açıklanmayacak şeyler
+
+Bir düzeltme dağıtılana ve Raydium takımı sizinle açıklamayı koordine edene kadar:
+
+- Bulgu hakkında tweet atmayın (hatta belirsiz "Büyük bir şey buldum").
+- Hata sınıfını üçüncü şahıslara açıklamayın.
+- PoC kodunu Raydium'un triaj takımı dışında kimseyle paylaşmayın.
+
+Düzeltme dağıtımı + koordine açıklama penceresi sonrasında:
+
+- Genel yazılar hoş karşılanır ve teşvik edilir.
+- Raydium, önemli yazıları çapraz olarak tanıtacaktır.
+- İsimlendirilmeyi kabul eden araştırmacılar [Immunefi Whitehat Hall of Fame](https://immunefi.com/hall-of-fame/) üzerinde kredi alırlar.
+
+## Güvenli liman politikası
+
+Yukarıdaki kapsam ve kurallar içinde yürütülen araştırma açıkça yetkilendirilir. Raydium:
+
+- Bu politikayı izleyen iyi niyetli araştırma için yasal işlem başlatmayacaktır.
+- Araştırma faaliyetlerine müdahale etmeyecektir (örn. araştırmacı cüzdanlarını kara listeye almak).
+- Bulguyu anlamak için işbirliği yapacaktır.
+
+Kapsam veya kurallar *dışında* araştırma güvenli liman politikası tarafından korunmaz. Araştırma planınız sınırda ise, test etmeden önce Immunefi'nin "Projeye Sor" kanalı aracılığıyla sorun.
+
+## Dikkate değer geçmiş açıklamalar
+
+**Program kodu ödülü** için toplu istatistikler, 25 Nisan 2023'ten beri Immunefi'de canlı (rakamlar genel Immunefi listesine göre):
+
+- Bugüne kadar ödenen toplam ödüller: ~\$3.4M.
+- Medyan çözüm süresi: ~1 gün.
+
+Immunefi Whitehat Hall of Fame, isimlendirilmeyi kabul eden araştırmacıları listeler. Ödül dışı raporlar (SDK / API / UI) ayrı olarak izlenir ve Immunefi'de yerine ilgili depo'nun sürüm notlarında kabul edilir.
+
+## İlgili programlar
+
+- **Agave doğrulayıcı hata ödülü (Anza)** — Solana doğrulayıcı istemcisi hatalarını kapsar (konsensüs, güvenlik, canlılık, DoS). Solana katmanı sorunları için oraya bildirin; SPL programları ve web mülkleri açıkça kapsam dışıdır. [Agave güvenlik politikası](https://github.com/anza-xyz/agave/security/policy).
+- **Squads Protocol Hata Ödülü** — multisig'in kendisini kapsar. [docs.squads.so/main/security/bug-bounty](https://docs.squads.so/main/security/bug-bounty).
+- **Immunefi** — Raydium dahil birçok DeFi protokolünü kapsar. [immunefi.com](https://immunefi.com).
+
+Katmanları kapsayan bir hata (örn. Raydium'da kendini gösteren bir Solana doğrulayıcı hatası) tüm uygulanabilir programlara bildirilmelidir.
+
+## İşaretçiler
+
+- [`security/audits`](/docs/i18n/tr/security/audits) — önceki denetim geçmişi.
+- [`security/admin-and-multisig`](/docs/i18n/tr/security/admin-and-multisig) — yetki yapısı.
+- [`security/attack-vectors`](/docs/i18n/tr/security/attack-vectors) — bilinen saldırı sınıfları.
+
+Kaynaklar:
+
+- [Immunefi Raydium ödül sayfası](https://immunefi.com/bug-bounty/raydium/information/) — kanonik kapsam, ödeme şartları ve iletişim yolu.

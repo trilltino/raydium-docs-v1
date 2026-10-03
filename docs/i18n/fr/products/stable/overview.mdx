@@ -1,0 +1,82 @@
+---
+title: "Aperçu de Stable AMM"
+description: "Stable AMM est un programme Raydium autonome qui remplace la courbe de produit constant par une table de recherche interpolée, réduisant le slippage pour les actifs corrélés."
+---
+
+<Info>
+  **Cette page est traduite automatiquement par IA. La version anglaise fait foi.**
+
+  [Voir la version anglaise →](/docs/en/products/stable/overview)
+</Info>
+
+## Résumé en un paragraphe
+
+Stable AMM est un **programme Raydium autonome** — son propre déploiement, pas un mode d'AMM v4 — qui remplace une formule de courbe par une **table de recherche pré-remplie**. Au lieu d'utiliser x·y=k, le pool stocke un tableau creux de points (x, y, prix) et utilise la **recherche binaire + interpolation linéaire** pour calculer les prix. Cette conception excelle pour les paires de stablecoins et autres actifs ayant des relations de prix connues : les swaps entre tokens indexés 1-à-1 ont un slippage quasi nul. C'est un **AMM pur** : toute la liquidité réside dans les coffres du pool. (Il disposait d'un chemin de market-making OpenBook au début de sa vie, mais ce chemin est dormant depuis des années ; la [mise à jour du 2026-06-22](/docs/i18n/fr/reference/changelog) a finalement supprimé le code mort du marché.) La liquidité est actuellement faible ; la plupart des intégrateurs accèdent aux pools Stable via le [programme AMM Routing](/docs/i18n/fr/products/routing).
+
+## Pourquoi une table de recherche au lieu de xy=k
+
+Les AMM à produit constant subissent un slippage élevé sur les paires avec des bandes de prix serrées. Un swap USDC-USDT devrait coûter presque rien ; sur un pool à produit constant, k=x·y force un mouvement de prix même pour un petit volume. Une table de recherche permet à l'administrateur du pool d'exprimer la *vraie* relation de prix :
+
+- Pour les stablecoins : densifier la table autour de 1:1 pour que les micro-swaps coûtent ~0 slippage.
+- Pour les paires collatéralisées : encoder le ratio cible et laisser la grille façonner la surface de frais/incitation.
+
+La table est maintenant **fixe** — elle a été remplie historiquement via l'instruction `UpdateModelData`, qui a depuis été supprimée, donc les pools existants conservent leurs tables telles quelles. Le coût on-chain est juste la recherche d'interpolation — beaucoup moins cher que de recalculer une formule.
+
+## Comment ça marche : le compte model-data
+
+Le pool détient un compte `ModelDataInfo` — un **tableau de 50 000 éléments** de structs `DataElement`. Chaque élément contient :
+
+```
+DataElement {
+  x: u64,           // table X coordinate
+  y: u64,           // table Y coordinate
+  price: u64,       // price at (x, y)
+}
+```
+
+Seuls les premiers `valid_data_count` éléments sont remplis ; le reste est à zéro. Lors d'un swap, le programme :
+
+1. **Calcule un ratio** à partir des réserves actuelles du pool et utilise la recherche binaire pour trouver quels deux éléments de la table encadrent ce ratio.
+2. **Interpole linéairement** entre les deux points encadrants pour obtenir le prix de cotation.
+3. **Applique les frais** (0,02 % du montant d'entrée) et retourne le résultat à l'utilisateur.
+
+Le champ `multiplier` sur les comptes de table tient compte de la possibilité que x et y soient stockés à une échelle réduite (par exemple, avec 6 décimales au lieu de 18). La découverte des prix se redimensionne en conséquence.
+
+## Comparaison : Stable AMM vs. AMM v4 vs. CPMM
+
+| Dimension | Stable AMM | AMM v4 | CPMM |
+|-----------|-----------|--------|------|
+| Courbe | Table de recherche + interpolation | Produit constant (xy=k) | Produit constant |
+| Cas d'usage principal | Stablecoins, paires indexées | Paires générales, liquidité profonde héritée | Paires générales, nouveaux déploiements |
+| Dépendance OpenBook | **Non** (chemin de marché longtemps dormant ; code mort supprimé 2026-06) | **Oui** | Non |
+| Token-2022 | Non | Non | Oui |
+| Profil de slippage | Minimal à 1:1 | Élevé à ratios serrés | Modéré sur la plage |
+| Courbe ajustable par l'admin | Non plus (`UpdateModelData` supprimé ; tables maintenant fixes) | Non (`SetParams` uniquement) | Non |
+| Taille de la table | ~50k éléments × 24 octets | N/A | N/A |
+| Calcul par swap | ~5k–15k CU (recherche binaire + interpolation) | ~150k–200k CU | ~60k–100k CU |
+| Nombre de comptes par swap | 9 (nouvelle disposition ; 18 ancienne compatibilité) | ~18 (AMM + OpenBook) | ~11 |
+
+## Modèle mental
+
+Un pool Stable AMM est un **AMM à table de recherche interpolée** qui détient toute sa liquidité dans ses propres coffres. La différence clé avec un pool à produit constant est que la courbe de découverte des prix n'est pas codée en dur — c'est un tableau creux intégré au compte `ModelDataInfo` du pool. Les opérations actuellement appelables sont **swap direct** (utilisateur ↔ pool), **dépôt / retrait** (opérations LP), et **`WithdrawPnl`** (balayage des frais d'admin). La manivelle OpenBook (`MonitorStep`) — longtemps dormante depuis que le pool a arrêté de publier des ordres — et les instructions de configuration/admin du pool ont été supprimées.
+
+## Quand Stable AMM est le bon choix
+
+- Vous exploitez une paire de stablecoins ou d'autres actifs corrélés et voulez une tarification serrée et prévisible.
+- Vous avez une connaissance approfondie de la relation de prix de votre paire et voulez l'encoder directement comme une courbe.
+- Vous avez déjà des intégrations pour AMM v4 et avez simplement besoin d'une variante de courbe différente.
+
+Pour un nouveau pool à usage général sans exigence de corrélation serrée, [CPMM](/docs/i18n/fr/products/cpmm) est le choix par défaut plus simple et plus liquide.
+
+## Où aller ensuite
+
+- [Comptes](/docs/i18n/fr/products/stable/accounts) — référence des champs `AmmInfo`, `ModelDataInfo`, `DataElement`.
+- [Mathématiques](/docs/i18n/fr/products/stable/math) — recherche binaire, interpolation et application des frais.
+- [Instructions](/docs/i18n/fr/products/stable/instructions) — l'ensemble appelable (swap, dépôt, retrait, `WithdrawPnl`) et les instructions supprimées.
+- [Frais](/docs/i18n/fr/products/stable/fees) — le frais de 0,02 % et sa répartition 88 / 12.
+- [Démos de code](/docs/i18n/fr/products/stable/code-demos) — routage et intégration directe.
+
+Sources :
+
+- [`reference/program-addresses`](/docs/i18n/fr/reference/program-addresses) pour l'ID du programme canonique
+- [`reference/changelog`](/docs/i18n/fr/reference/changelog) pour la mise à jour de suppression du code de marché du 2026-06-22

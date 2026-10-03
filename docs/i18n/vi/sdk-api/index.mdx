@@ -1,0 +1,71 @@
+---
+title: "SDK & API"
+description: "Tài liệu tham khảo cho TypeScript SDK của Raydium, REST API, Anchor IDL, và các mẫu tích hợp cho Rust, Python và công cụ AI."
+---
+
+<Info>
+  **Trang này được dịch tự động bằng AI. Phiên bản tiếng Anh là bản chính thức.**
+
+  [Xem bản tiếng Anh →](/docs/en/sdk-api/index)
+</Info>
+
+## Chương này dành cho ai
+
+Các nhà phát triển tích hợp với Raydium từ ngoài chuỗi (TS/JS, Python, backend) hoặc từ một chương trình Solana khác (Rust CPI). Cũng bao gồm các agent AI và những người tích hợp công cụ lập trình — xem [Tích hợp AI](/docs/i18n/vi/sdk-api/ai-integration).
+
+<Info>
+  **Muốn chạy thử cái gì đó trước?** Ba script end-to-end — swap, triển khai pool CPMM, triển khai pool CLMM — nằm trong [Bắt đầu nhanh](/docs/i18n/vi/quick-start). Các script swap và CPMM là các tệp đơn lẻ bạn có thể dán và chạy; luồng CLMM cần thêm một vài bước. Chạy một giao dịch thực tế trước, sau đó quay lại đây để xem tài liệu tham khảo đầy đủ.
+</Info>
+
+## Chọn đường dẫn tích hợp của bạn
+
+Năm đường dẫn để lựa chọn. Đường dẫn phù hợp tùy thuộc vào những gì gọi Raydium và bạn cần bao nhiêu quyền kiểm soát.
+
+| Đường dẫn | Phù hợp nhất cho | Độ trễ | Logic tùy chỉnh | Ngôn ngữ |
+|---|---|---|---|---|
+| [Trade API](/docs/i18n/vi/sdk-api/trade-api) | Backend, bot, Blink — bất cứ nơi nào bạn muốn tx được xây dựng bởi máy chủ | Thấp nhất | Hạn chế (các tuyến đường được đặt trước) | Bất kỳ |
+| [TypeScript SDK](/docs/i18n/vi/sdk-api/typescript-sdk) | Ứng dụng Node/TS và frontend cần quyền truy cập đầy đủ vào builder | Trung bình | Đầy đủ | TS / JS |
+| [Tích hợp Python](/docs/i18n/vi/sdk-api/python-integration) | Backend Python và pipeline ML | Trung bình | Đầy đủ (xây dựng instr thủ công) | Python |
+| [Rust CPI](/docs/i18n/vi/sdk-api/rust-cpi) | Các chương trình soạn thảo gọi Raydium từ trên chuỗi | N/A (trên chuỗi) | Đầy đủ + có thể soạn | Rust |
+| [Anchor IDL](/docs/i18n/vi/sdk-api/anchor-idl) | Codegen cho các ngôn ngữ không có hỗ trợ chính thức (Go, Kotlin, Swift, ...) | Thay đổi | Đầy đủ | Bất kỳ với công cụ codegen Anchor |
+
+Nếu bạn không chắc chắn: backend và bot → **Trade API**; frontend và ứng dụng có quyền kiểm soát đầy đủ → **TypeScript SDK**; soạn thảo trên chuỗi → **Rust CPI**.
+
+## Nội dung chương
+
+<CardGroup cols={2}>
+  <Card title="TypeScript SDK" icon="js" href="/docs/i18n/vi/sdk-api/typescript-sdk">
+    `@raydium-io/raydium-sdk-v2`: cài đặt, khởi tạo, các mô-đun cốt lõi (pool, farm, launch), trình xây dựng giao dịch, những cạm bẫy phổ biến.
+  </Card>
+  <Card title="REST API" icon="cloud" href="/docs/i18n/vi/sdk-api/rest-api">
+    Các điểm cuối công khai cho thông tin pool, thông tin mint, giá cả và giao dịch được xây dựng bởi máy chủ. Giới hạn tốc độ, hướng dẫn bộ nhớ đệm, phiên bản.
+  </Card>
+  <Card title="Trade API" icon="right-left" href="/docs/i18n/vi/sdk-api/trade-api">
+    Giao dịch swap được xây dựng bởi máy chủ: báo giá, xây dựng, ký, gửi. Mẫu tích hợp không SDK cho backend, bot và Blink.
+  </Card>
+  <Card title="Anchor IDL" icon="file-code" href="/docs/i18n/vi/sdk-api/anchor-idl">
+    Nơi tìm IDL của mỗi chương trình, cách tạo lại client từ nó, những gì cần chú ý khi IDL được cập nhật.
+  </Card>
+  <Card title="Rust CPI" icon="rust" href="/docs/i18n/vi/sdk-api/rust-cpi">
+    Các mẫu để gọi các chương trình Raydium từ một chương trình Solana khác — xây dựng danh sách tài khoản, hạt giống người ký, xử lý lỗi.
+  </Card>
+  <Card title="Tích hợp Python" icon="python" href="/docs/i18n/vi/sdk-api/python-integration">
+    Công thức `solders` + `solana-py` để xây dựng swap/pool ops Raydium từ Python. Hữu ích cho backend và bot.
+  </Card>
+  <Card title="Tích hợp AI" icon="robot" href="/docs/i18n/vi/sdk-api/ai-integration">
+    MCP server, chỉ mục `llms.txt`, menu sao chép trên mỗi trang, các tệp ngữ cảnh được xây dựng sẵn cho Claude Code / Cursor / Windsurf và các agent lập trình khác.
+  </Card>
+</CardGroup>
+
+## Kỷ luật phiên bản
+
+Mỗi mẫu mã trên mỗi trang trong chương này có một banner ở đầu:
+
+```
+SDK:       @raydium-io/raydium-sdk-v2 vX.Y.Z
+Program:   see /reference/program-addresses
+Cluster:   mainnet-beta
+Verified:  YYYY-MM-DD
+```
+
+Nếu bạn chỉnh sửa một mẫu mã, hãy cập nhật banner.

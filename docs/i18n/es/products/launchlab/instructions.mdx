@@ -1,0 +1,570 @@
+---
+title: "Instrucciones de LaunchLab"
+description: "Initialize, Buy, Sell, Graduate, CollectFees, SetParams — formas de argumentos, listas de cuentas y pre/postcondiciones para cada instrucción de LaunchLab."
+---
+
+<Info>
+  **Esta página fue traducida automáticamente por IA. La versión en inglés es la fuente autorizada.**
+
+  [Ver versión en inglés →](/docs/en/products/launchlab/instructions)
+</Info>
+
+<Info>
+  LaunchLab expone un conjunto de instrucciones compacto: seis llamadas orientadas al usuario más algunos primitivos administrativos. El SDK las envuelve todas; esta página documenta la superficie bruta para agregadores, herramientas de monitoreo y programas que necesitan CPI.
+
+  La actualización del programa 2026-09 reconstruyó LaunchLab en Anchor 1.0.2 / Solana 3.1.10 y eliminó tres mecanismos de transición: el `Initialize` deprecado ahora siempre falla, `MigrateToAmm` perdió sus tres argumentos y cada cuenta de OpenBook, y la compuerta `get_upgrade_timestamp` que hacía varios controles condicionales al reloj se ha ido. También añade una instrucción administrativa, `CollectExcessLamports`. Consulta la [entrada del changelog 2026-09-09](/docs/i18n/es/reference/changelog/2026-09-09-launchlab-anchor-1-and-excess-lamports).
+</Info>
+
+## Inventario de instrucciones
+
+| Grupo | Instrucción | Invocable por |
+|-------|-------------|-------------|
+| Configuración global | `CreateConfig` / `UpdateConfig` | Administrador del programa; la autoridad delegada de crear-configuración también puede llamar a `CreateConfig` |
+| Ciclo de vida del lanzamiento | `Initialize` | **Nadie — siempre falla con `NotApproved`.** Se retiene solo para que el discriminador permanezca ocupado y el IDL se mantenga estable. Usa `InitializeV2`. |
+| Ciclo de vida del lanzamiento | `InitializeV2` | Cualquiera (creador) — mint base de SPL Token; registra `amm_creator_fee_on` para la graduación eventual de CPMM, y acepta un mint de cotización Token-2022. |
+| Ciclo de vida del lanzamiento | `InitializeWithToken2022` | Cualquiera (creador) — mint base Token-2022, `TransferFeeConfig` opcional; acepta cualquier programa de token de cotización |
+| Comercio | `BuyExactIn` / `BuyExactOut` | Cualquiera — compra de entrada exacta / salida exacta en la curva de vinculación |
+| Comercio | `SellExactIn` / `SellExactOut` | Cualquiera — venta de entrada exacta / salida exacta en la curva de vinculación |
+| Graduación | `MigrateToAmm` | Cartera de migración — graduación heredada de AMM v4 para pools inicializados antes de que se aplicara la creación solo CPMM. No toma argumentos ni cuentas de OpenBook desde 2026-09. |
+| Graduación | `MigrateToCpswap` | Cartera de migración — graduación a CPMM. Todos los lanzamientos recién inicializados usan esta ruta. Envuelve `InitializeWithPermission` en CPMM. |
+| Tarifas | `CollectFee` | Administrador — barrer tarifas de protocolo de un lanzamiento |
+| Tarifas | `CollectMigrateFee` | Administrador — barrer tarifas de migración acumuladas |
+| Tarifas | `ClaimCreatorFee` | Creador — reclamar tarifas de creador acumuladas durante la fase de curva |
+| Vesting | `CreateVestingAccount` | Creador — asignar tokens bloqueados a un beneficiario, desbloqueados después de la graduación |
+| Vesting | `CreatePlatformVestingAccount` | Administrador de plataforma — asignar tokens bloqueados a beneficiarios del lado de la plataforma |
+| Vesting | `ClaimVestedToken` | Beneficiario — reclamar tokens desbloqueados después del acantilado |
+| Configuración de plataforma | `CreatePlatformConfig` / `UpdatePlatformConfig` | Administrador de plataforma |
+| Configuración de plataforma | `CreatePlatformCurveRule` / `UpdatePlatformCurveRule` / `RemovePlatformCurveRule` / `ClosePlatformCurveRule` | `PlatformConfig.curve_rule_manager` o el administrador de plataforma — gestionar la regla de parámetros de lanzamiento de una `GlobalConfig` |
+| Tarifas de plataforma | `ClaimPlatformFee` / `ClaimPlatformFeeFromVault` | Administrador de plataforma |
+| Acceso a plataforma | `CreatePlatformAllowConfig` / `ClosePlatformAllowConfig` | Administrador de plataforma — mantener la lista de permitidos de `GlobalConfig` utilizada cuando esa plataforma habilita la restricción |
+| Renta | `CollectExcessLamports` | Administrador del programa o la cartera dedicada de recopilación de lamports — barrer lamports por encima del mínimo exento de renta de bóvedas y PDAs controladas por LaunchLab. Añadido 2026-09. |
+
+La división "ExactIn/ExactOut" refleja `SwapBaseInput` / `SwapBaseOutput` de CPMM — en cadena son discriminadores de instrucción separados con redondeo ligeramente diferente.
+
+**Selección de ruta de graduación.** Cada nueva llamada a `InitializeV2` e `InitializeWithToken2022` debe establecer `migrate_type = 1` (`CPSWAP`). Cualquier intento de inicializar un nuevo pool vinculado a AMM v4 devuelve `MigrateTypeNotMatch`. `amm_creator_fee_on` solo selecciona si la tarifa de creador de CPMM resultante se aplica al token de cotización o a ambos tokens; no selecciona el programa de destino. El `Initialize` heredado no puede crear un lanzamiento en absoluto (ver abajo).
+
+`MigrateToAmm` sigue siendo invocable para un `PoolState` existente que fue inicializado con `migrate_type = 0` antes de esta restricción. La versión no reescribe el estado del pool existente ni elimina la instrucción heredada.
+
+**Programa de token del lado de la cotización.** El mint de cotización puede ser propiedad del programa SPL Token o Token-2022. Cada instrucción que lo toca — `CreateConfig`, `InitializeV2`, `InitializeWithToken2022`, las cuatro instrucciones de comercio, `CollectFee`, `CollectMigrateFee`, `ClaimCreatorFee`, `ClaimPlatformFee` y `ClaimPlatformFeeFromVault` — toma el programa propietario en su ranura de cuenta de programa de cotización. Las posiciones de cuenta no cambiaron; solo el valor aceptado cambió. Pasa el programa que realmente posee `GlobalConfig.quote_mint`, que puedes leer de `PoolState.token_program_flag` bit1 para un lanzamiento existente (ver [`accounts`](/docs/i18n/es/products/launchlab/accounts#poolstate)) o de la propiedad de la cuenta de mint de otra manera.
+
+El `Initialize` deprecado es irrelevante aquí: su cuenta de programa de cotización sigue siendo tipada a SPL Token, y desde la actualización 2026-09 la instrucción falla antes de leer cualquier cuenta. Lanza a través de `InitializeV2` o `InitializeWithToken2022`.
+
+`MigrateToCpswap` es la otra excepción, en la dirección opuesta — toma **ambos** programas incondicionalmente en lugar de uno por mint. Ver [las cuentas de migración abajo](#cpmm-migration-token-programs).
+
+## `Initialize`
+
+<Warning>
+  **Eliminado en efecto desde la actualización 2026-09 — esta instrucción siempre falla.** El manejador de `initialize` ahora es nada más que un registro de `Not supported. Please use initialize_v2 instruction` y `NotApproved` (`6000`). Se retiene puramente para que su discriminador permanezca ocupado y el IDL mantenga una forma estable. (La estructura `Accounts` no ha cambiado, por lo que la validación generada por Anchor aún se ejecuta primero; la transacción se revierte de todos modos.)
+
+  Anteriormente estaba controlada por el reloj: funcionaba hasta tres días después del corte de `get_upgrade_timestamp` y fallaba después. Ese ayudante de marca de tiempo se ha ido, por lo que el fallo es ahora incondicional. Los lanzamientos existentes creados a través de él no se ven afectados — comercian y se gradúan normalmente a través de `MigrateToAmm` o `MigrateToCpswap` dependiendo de su `migrate_type` almacenado.
+
+  Los argumentos y la lista de cuentas de más abajo son los de `InitializeV2`. El `Initialize`
+  obsoleto toma las mismas 18 cuentas en el mismo orden y solo los tres primeros argumentos — no
+  tiene `amm_fee_on` — y su posición `quote_token_program` está tipada como SPL Token en lugar de
+  `Interface<TokenInterface>`.
+</Warning>
+
+Crea un nuevo lanzamiento. `InitializeV2` añade únicamente el argumento `amm_fee_on` sobre el `Initialize` obsoleto; el **número y el orden de las cuentas son idénticos**, y la única diferencia a nivel de cuenta es que `quote_token_program` está tipada `Interface<TokenInterface>` para que se acepte un mint de cotización Token-2022.
+
+**Argumentos**
+
+Cuatro argumentos posicionales, no una sola estructura. (`InitializeWithToken2022` añade un quinto, `transfer_fee_extension_param: Option<TransferFeeExtensionParams>`; el `Initialize` obsoleto omite `amm_fee_on`.)
+
+```rust
+base_mint_param: MintParams {
+    decimals: u8,                 // must equal the program's BASE_MINT_DECIMALS
+    name:     String,
+    symbol:   String,
+    uri:      String,
+}
+
+curve_param: CurveParams {        // Borsh enum — one leading variant-tag byte
+    Constant { data: ConstantCurve { supply: u64, total_base_sell: u64,
+                                     total_quote_fund_raising: u64, migrate_type: u8 } },
+    Fixed    { data: FixedCurve    { supply: u64,
+                                     total_quote_fund_raising: u64, migrate_type: u8 } },
+    Linear   { data: LinearCurve   { supply: u64,
+                                     total_quote_fund_raising: u64, migrate_type: u8 } },
+}
+
+vesting_param: VestingParams {
+    total_locked_amount: u64,     // 0 requires cliff_period == unlock_period == 0
+    cliff_period:        u64,     // seconds after fundraising ends
+    unlock_period:       u64,     // seconds
+}
+
+amm_fee_on: AmmCreatorFeeOn       // 0 = QuoteToken, 1 = BothToken (CPMM migrations only)
+```
+
+La variante debe coincidir con `global_config.curve_type` o la instrucción revierte con `InputNotMatchCurveConfig` (`6003`). No hay `open_time`, ni argumento `quote_mint` (viene de `global_config`), ni estructura `fees` ni `post_graduation_lp_policy` — la disposición del LP se establece en `PlatformConfig`, no por lanzamiento.
+
+**Cuentas** — 18 en total (16 declaradas más las dos que añade `#[event_cpi]`)
+
+| # | Nombre | W | S | Notas |
+|---|------|---|---|-------|
+| 1 | `payer` | W | S | Paga toda la renta. No tiene que ser el creador. |
+| 2 | `creator` |   |   | Se registra como `pool_state.creator`; no es firmante. |
+| 3 | `global_config` |   |   | Suministra el mint de cotización, el tipo de curva y cada piso/tope. |
+| 4 | `platform_config` |   |   | Suministra la tasa de comisión de la plataforma y la política de disposición del LP. |
+| 5 | `authority` |   |   | PDA `["vault_auth_seed"]` — un único PDA global, compartido por todos los lanzamientos. |
+| 6 | `pool_state` | W |   | Cuenta nueva. |
+| 7 | `base_mint` | W | S | Keypair nuevo — esta instrucción lo inicializa. |
+| 8 | `quote_mint` |   |   | Debe ser igual a `global_config.quote_mint`. |
+| 9 | `base_vault` | W |   | PDA `["pool_vault", pool_state, base_mint]`. |
+| 10 | `quote_vault` | W |   | PDA `["pool_vault", pool_state, quote_mint]`. |
+| 11 | `metadata_account` | W |   | PDA de metadatos de Metaplex. |
+| 12 | `base_token_program` |   |   | SPL Token para `InitializeV2`; Token-2022 para `InitializeWithToken2022`. |
+| 13 | `quote_token_program` |   |   | El programa que posee `quote_mint` — SPL Token o Token-2022. |
+| 14 | `metadata_program` |   |   | Metaplex Token Metadata. |
+| 15 | `system_program` |   |   | |
+| 16 | `rent_program` |   |   | Sysvar de renta. |
+| 17 | `event_authority` |   |   | PDA `["__event_authority"]`; añadida por `#[event_cpi]`. |
+| 18 | `program` |   |   | El id del programa LaunchLab; añadido por `#[event_cpi]`. |
+
+**Precondiciones**
+
+- `quote_mint ∈ launch_config.allowed_quote_mints`.
+- `base_supply_graduation ≤ base_supply_max`.
+- Los parámetros de tarifa pasan las comprobaciones `launch_config.max_*_fee_rate`.
+- `open_time ≥ now − slop` (SDK aplica `≥ now`; el programa tolera un ligero antedatado).
+- `curve_type` es reconocido.
+
+**Postcondiciones**
+
+- `base_mint` tiene `supply = curve_param.supply`, todo en `base_vault`.
+- La autoridad de acuñación se **revoca** en esta misma instrucción (`set_authority(MintTokens, None)`) justo después de acuñar el suministro — no en la graduación. Por tanto, el mint base queda permanentemente con suministro fijo, y ninguna instrucción posterior puede acuñar más.
+- `PoolState` inicializado con `status = Fund` (`0`), `real_a = 0`, `real_b = 0`.
+- `total_fund_raising_b` viene directamente de `curve_param.total_quote_fund_raising`.
+- Para `InitializeWithToken2022` con un `TransferFeeConfig` adjunto: `transfer_fee_config_authority = launch_authority`, y `withdraw_withheld_authority = PlatformConfig.transfer_fee_extension_auth` cuando ese campo está establecido, de lo contrario `launch_authority`. El lado de retiro se escribe en la creación de mint precisamente para que la plataforma pueda barrer tarifas retenidas antes de la graduación. Ver [`platform-config`](/docs/i18n/es/products/launchlab/platform-config#token-2022-transfer-fee-authorities).
+
+**Errores comunes** — `NotApproved` (`6000`, incondicionalmente, para el `Initialize` obsoleto), `InvalidInput` (`6002`, se viola un piso de suministro / tasa / recaudación de `GlobalConfig`), `InputNotMatchCurveConfig` (`6003`, la variante de `curve_param` no coincide con `global_config.curve_type`), `MigrateTypeNotMatch` (`6007`, `migrate_type != 1`), `MathOverflow` (`6008`), `VestingRatioTooHigh` (`6010`), `NoSupportExtension` (`6017`), `NotEnoughRemainingAccounts` (`6018`), `InvalidPlatformAllowConfig` (`6022`), `CurveParamNotMatchPlatformRule` (`6025`). Una comprobación fallida de Anchor `address =` / `constraint =` aparece como un código 2xxx, no como uno de estos — ninguno de `InvalidQuoteMint`, `FeeRateTooHigh` o `InvalidCurveParams` existe en el enum de errores del programa.
+
+## `Buy` (variante canónica: `BuyExactIn`)
+
+El usuario proporciona una cantidad de entrada fija; la curva calcula la salida.
+
+**Argumentos**
+
+```
+amount_in:           u64
+minimum_amount_out:  u64
+share_fee_rate:      u64   // referral fee on a 1_000_000 denominator; must be
+                           // <= global_config.max_share_fee_rate. Pass 0 for no
+                           // referral. Any non-zero value requires the share-fee
+                           // receiver as remaining_accounts[0].
+```
+
+**Cuentas**
+
+| # | Nombre | W | S | Notas |
+|---|------|---|---|-------|
+| 1 | `payer` | W | S | Operador. |
+| 2 | `authority` |   |   | PDA `["vault_auth_seed"]` — un único PDA global, sin semilla por lanzamiento. |
+| 3 | `global_config` |   |   | `address = pool_state.global_config`. |
+| 4 | `platform_config` |   |   | `address = pool_state.platform_config`. |
+| 5 | `pool_state` | W |   | |
+| 6 | `user_base_token` | W |   | `token::mint = base_token_mint`. |
+| 7 | `user_quote_token` | W |   | `token::mint = quote_token_mint`. |
+| 8 | `base_vault` | W |   | `address = pool_state.base_vault`. |
+| 9 | `quote_vault` | W |   | `address = pool_state.quote_vault`. |
+| 10 | `base_token_mint` |   |   | |
+| 11 | `quote_token_mint` |   |   | |
+| 12 | `base_token_program` |   |   | El programa que posee el mint base — SPL Token o Token-2022. |
+| 13 | `quote_token_program` |   |   | El programa que posee el mint de cotización. |
+| 14 | `event_authority` |   |   | PDA `["__event_authority"]`; añadida por `#[event_cpi]`. |
+| 15 | `program` |   |   | El id del programa LaunchLab; añadido por `#[event_cpi]`. |
+
+**Cuentas restantes** — la fontanería de comisiones, leída en este orden exacto:
+
+1. `share_fee_receiver` — **solo** cuando `share_fee_rate > 0`.
+2. `system_program` — siempre; se verifica `== System::id()`, si no `InvalidInput`.
+3. `platform_fee_vault` — PDA `[platform_config, quote_token_mint]`; creada en el primer uso.
+4. `creator_fee_vault` — PDA `[creator, quote_token_mint]`; creada en el primer uso.
+
+Quedarse corto devuelve `NotEnoughRemainingAccounts` (`6018`). No hay posición para
+`associated_token_program`, y `system_program` es una cuenta *restante* en lugar de una declarada.
+
+**Precondiciones**
+
+- `launch_state.status == Active`.
+- `now ≥ open_time`.
+- `user_quote_ata.balance ≥ quote_in`.
+- `quote_in > 0`.
+
+**Efecto**
+
+1. Divide `quote_in` en `quote_in_after_fee` y las partes de tarifa.
+2. Resuelve Newton la curva para `base_out` dada la cotización posterior a la tarifa.
+3. `require(base_out ≥ minimum_base_out)` de lo contrario revierte `ExceededSlippage`.
+4. Mueve `quote_in` usuario → bóveda. Mueve `base_out` bóveda → usuario.
+5. Actualiza `base_sold += base_out`, `quote_reserve_real += quote_in_after_fee × (lp_share / total_share)`.
+6. Actualiza contadores de tarifa (`protocol_fees_quote`, `creator_fees_quote`).
+7. `state_data.num_buys += 1`.
+8. Si `quote_reserve_real ≥ quote_reserve_target` después de la actualización, el SDK típicamente encadena una instrucción `Graduate` en la misma transacción. El programa no se gradúa automáticamente dentro de `Buy` — se requiere un `Graduate` posterior.
+
+## `BuyExactOut`
+
+El usuario especifica el `base_out` exacto; el programa calcula `quote_in`.
+
+**Argumentos**
+
+```
+amount_out:         u64
+maximum_amount_in:  u64
+share_fee_rate:     u64   // as for BuyExactIn
+```
+
+Las mismas cuentas y el mismo contrato de cuentas restantes que `BuyExactIn`. Usa la integral cuadrática de forma cerrada (o inversa de CPMM, para curve_type 1) en lugar de iteración de Newton.
+
+## `Sell` / `SellExactIn` / `SellExactOut`
+
+Espejo de `Buy`. El usuario devuelve `base_in` a la curva y recibe `quote_out`. La tarifa se deduce de `quote_out`, por lo que el usuario recibe menos que los ingresos integrados brutos.
+
+**Precondiciones** —
+
+- `user_base_ata.balance ≥ base_in`.
+- Vender no puede empujar `base_sold` por debajo de 0 (redundante con lo anterior dado que la contabilidad es consistente).
+- El lanzamiento es `Active`.
+
+**Efecto** — simétrico a `Buy`. `base_sold` disminuye, `quote_reserve_real` disminuye. Las tarifas aún se acumulan.
+
+### Tarifas de transferencia del lado de la cotización
+
+Cuando el mint de cotización lleva un `TransferFeeConfig`, la cantidad que la bóveda mueve y la cantidad que el pagador es debitado o acreditado difieren, y el límite de slippage se verifica contra el lado del pagador. En un mint de cotización sin la extensión cada caso abajo es idéntico a un mint heredado simple.
+
+| Instrucción | Argumento | Verificado contra |
+|---|---|---|
+| `BuyExactIn` | `amount_in` | La curva tiene precio en `amount_in − transfer_fee(amount_in)` — lo que llega a la bóveda. Un llenado completo debita exactamente `amount_in`; un llenado parcial debita la cantidad de bóveda consumida más su tarifa inversa. |
+| `BuyExactOut` | `maximum_amount_in` | La cantidad de bóveda **más** la tarifa de transferencia inversa — el débito real. |
+| `SellExactIn` | `minimum_amount_out` | Lo que el vendedor mantiene después de que el mint retiene su tarifa, no la cantidad bruta que sale de la bóveda. |
+| `SellExactOut` | `amount_out` | Entregado exactamente. La curva apunta a `amount_out` más la tarifa de transferencia inversa. |
+
+Dos consecuencias para cotizar:
+
+- Un límite calculado como si el mint fuera sin tarifa es rechazado. Pasar el costo sin tarifa como `maximum_amount_in`, o los ingresos sin tarifa como `minimum_amount_out`, revierte con `ExceededSlippage`.
+- `real_quote` avanza solo por lo que llegó a la bóveda. Un `BuyExactIn` de `amount_in` en un mint de cotización del 5% mueve `real_quote` por `amount_in × 0.95`.
+
+Un mint de cotización con tarifa del 100% (`10000` puntos base) no puede ser invertido y revierte con `CalculateOverflow` en las rutas exactas de salida.
+
+Ambos mints del lado del comercio también están restringidos al programa pasado en su ranura coincidente, por lo que un `base_token_program` no coincidente ahora falla en lugar de ser ignorado. Ver [`algorithms/token-2022-transfer-fees`](/docs/i18n/es/algorithms/token-2022-transfer-fees) para la matemática de tarifa subyacente.
+
+### Cuentas restantes de comercio
+
+Las cuatro instrucciones de comercio toman su plomería de tarifas a través de `remaining_accounts`, en este orden:
+
+| Índice | Cuenta | Cuándo |
+|---|---|---|
+| 0 | `share_fee_receiver` | Solo cuando `share_fee_rate > 0`. Desplaza cada índice abajo por uno cuando está presente. |
+| siguiente | `system_program` | Siempre. Financia la creación de bóveda de tarifas. |
+| siguiente | `platform_fee_vault` | Siempre. PDA en semillas `[platform_config, quote_token_mint]`, creada en primer uso. |
+| siguiente | `creator_fee_vault` | Siempre. PDA en semillas `[creator, quote_token_mint]`, creada en primer uso. |
+
+<Note>
+  **Cambiado en 2026-09: los últimos tres ahora son incondicionales, y `system_program` es validado.** Antes de esta versión el programa solo los leía cuando `unix_timestamp >= get_upgrade_timestamp()`, y omitía la división de tarifa de plataforma/creador completamente antes de ese momento. La marca de tiempo está muy en el pasado, por lo que el comportamiento en mainnet no ha cambiado en la práctica — pero la rama se ha ido del código, y un constructor que aún omite las tres cuentas ahora siempre falla con `NotEnoughRemainingAccounts` (`6018`) en lugar de solo después del corte. La ranura `system_program` es además verificada contra `System::id()` y devuelve `InvalidInput` (`6002`) si contiene cualquier otra cosa, donde anteriormente cualquier cuenta era aceptada en esa posición.
+</Note>
+
+## `MigrateToAmm` / `MigrateToCpswap`
+
+Gradúa un lanzamiento en un pool comercializable una vez que la curva ha alcanzado `total_quote_fund_raising`. Los nuevos lanzamientos son solo CPMM. `MigrateToAmm` se retiene para pools existentes cuyo `migrate_type` almacenado es `0`.
+
+**Quién firma**
+
+- `MigrateToAmm` — la `migrate_to_amm_wallet` registrada en la vinculación `GlobalConfig`.
+- `MigrateToCpswap` — la `migrate_to_cpswap_wallet` registrada en la vinculación `GlobalConfig`.
+
+Estas carteras típicamente son mantenidas por el crank de graduación operado por Raydium; en la práctica la graduación llega segundos después de que se cruza el umbral, independientemente de quién activó la compra final.
+
+**Argumentos**
+
+Ninguno.
+
+<Warning>
+  **Cambio de ruptura (solo cartera de migración, 2026-09).** `MigrateToAmm` eliminó los tres argumentos — `base_lot_size`, `quote_lot_size`, `market_vault_signer_nonce` — **y nueve cuentas**. Sus datos de instrucción ahora son el discriminador desnudo, por lo que un constructor antiguo tanto envía 17 bytes de argumento inesperados como suministra una lista de cuentas que ya no se alinea.
+
+  Esto sigue la propia [eliminación de OpenBook](/docs/i18n/es/reference/changelog/2026-07-22-amm-v4-openbook-removal) de AMM v4: `Initialize2` de AMM v4 ya no toma `market_program` u `amm_open_orders`, por lo que LaunchLab no tenía nada más que reenviar. El programa también dejó de hacer CPI a `initialize_openbook_market`, que es lo que los tres argumentos configuraban.
+
+  Cuentas eliminadas: `openbook_program`, `request_queue`, `event_queue`, `bids`, `asks`, `market_vault_signer`, `market_base_vault`, `market_quote_vault`, y `amm_open_orders`. La cuenta `market` **permanece** en su posición — AMM v4 aún la registra como un campo de referencia — pero ahora se declara como un `#[account(mut)]` desnudo: sin restricción de propietario, dirección o semillas. Es completamente no validada, se reenvía directamente al CPI `Initialize2` de AMM v4, y el programa ya no la inicializa. Un llamador que quiera que la cuenta de mercado sea un mercado inicializado real tiene que crearla él mismo de antemano.
+
+  La lista de 23 cuentas restantes es, en orden: `payer`, `base_mint`, `quote_mint`, `market`, `amm_program`, `amm_pool`, `amm_authority`, `amm_lp_mint`, `amm_base_vault`, `amm_quote_vault`, `amm_target_orders`, `amm_config`, `amm_create_fee_destination`, `authority`, `pool_state`, `global_config`, `base_vault`, `quote_vault`, `pool_lp_token`, `spl_token_program`, `associated_token_program`, `system_program`, `rent_program`.
+
+  `MigrateToCpswap` no se ve afectado — nunca tuvo argumentos.
+</Warning>
+
+**Efecto (común a ambos)**
+
+1. Verifica `pool_state.status == Migrate` (es decir, `quote_reserve_target` ha sido alcanzado). De lo contrario revierte con `PoolMigrated` (el estado ya era `Migrated`) o `PoolFunding` (aún en financiación).
+2. Verifica `pool_state.migrate_type` coincide con la instrucción (`0` para AMM, `1` para CPMM). De lo contrario revierte con `MigrateTypeNotMatch`.
+3. Calcula las reservas posteriores a la graduación:
+   - `base_amount_out = base_vault.amount − vesting_schedule.total_locked_amount`
+   - `quote_amount_out = quote_vault.amount − quote_protocol_fee − migrate_fee − platform_fee`
+4. CPI en el programa de destino (`AMM v4 Initialize2` o `CPMM InitializeWithPermission`) con esas reservas para crear el pool posterior a la graduación.
+5. Para migraciones de CPMM ejecutadas después de la actualización 2026-08-17, combina `platform_scale + creator_scale` en una participación de LP bloqueada propiedad de la plataforma y acuña como máximo un NFT de Clave de Tarifa a `platform_nft_wallet`. Quema el resto de `burn_scale`. Antes de la actualización, `creator_scale` estaba bloqueado por separado y su Clave de Tarifa iba al creador del token. Las migraciones históricas completadas no se modifican. Para graduación heredada de AMM v4, la disposición de LP sigue el flujo existente de esa instrucción.
+6. (Sin paso de autoridad de mint. `base_mint.mint_authority` ya fue establecido a `None` en la creación del lanzamiento — ver la nota abajo.)
+7. Voltea `pool_state.status = Migrated`, establece `vesting_schedule.start_time = block_time + cliff_period`.
+
+**Traspaso de autoridad de extensión de transferencia Token-2022** — cuando el mint base es un mint Token-2022 que lleva `TransferFeeConfig` **y** `PlatformConfig.transfer_fee_extension_auth` es no predeterminado, la migración también reasigna las autoridades de esa extensión a la clave de plataforma:
+
+- `transfer_fee_config_authority` siempre es reasignada. El PDA de `authority` del lanzamiento la mantiene durante toda la fase previa a la graduación, por lo que siempre hay algo que mover.
+- `WithheldWithdraw` es reasignada **solo cuando el PDA de `authority` aún la mantiene**. Los lanzamientos creados desde 2026-08-27 en adelante ya llevan `transfer_fee_extension_auth` en esa autoridad desde la creación de mint, por lo que el paso se omite. La guardia es lo que evita que la migración revierta en esos mints — el PDA no puede renunciar a una autoridad que ya no mantiene.
+
+Si `transfer_fee_extension_auth` es `Pubkey::default()` en el momento de la migración, ninguna autoridad se mueve y ambas permanecen con el PDA de `authority` permanentemente. Ver [`platform-config`](/docs/i18n/es/products/launchlab/platform-config#token-2022-transfer-fee-authorities).
+
+<Note>
+  **El suministro del mint base se fija desde la creación, no desde la graduación.** `InitializeV2` e `InitializeWithToken2022` acuñan el suministro completo en la bóveda base y luego inmediatamente revocan `MintTokens` en la misma instrucción, por lo que `base_mint.mint_authority` es `None` durante toda la vida del lanzamiento. La migración no la toca. (Las revisiones anteriores de esta página colocaban la revocación en la graduación; eso era incorrecto.) Las únicas autoridades que la migración puede mover son las de transferencia de Token-2022 descritas abajo.
+</Note>
+
+**Postcondiciones** — `BuyExactIn`, `BuyExactOut`, `SellExactIn`, `SellExactOut` rechazarán desde este punto en adelante con `PoolMigrated`. El pool de AMM resultante es canónico y comercia como cualquier otro pool de AMM v4 / CPMM.
+
+**Errores comunes** — `PoolFunding`, `PoolMigrated`, `MigrateTypeNotMatch`, `InvalidCpSwapConfig`, `MathOverflow`.
+
+### Cuentas restantes de migración de CPMM
+
+Los clientes que construyen `MigrateToCpswap` deben usar estos índices de `remaining_accounts` fijos:
+
+| Índice | Cuenta |
+|---|---|
+| 0–4 | Propietario de Clave de Tarifa de Plataforma, mint, cuenta de token, PDA de liquidez bloqueada y cuenta de metadatos |
+| 5 | Creador de lanzamiento original; usado cuando `platform_cp_creator` no está establecido |
+| 6 | PDA de permiso de CPMM derivado de `[b"permission", launch_authority]` |
+| 7 | `platform_cp_creator` configurado; usado cuando el campo es no predeterminado |
+| 8 | PDA de mint de soporte de CPMM para `mint0` ordenado, derivado de `[b"support_mint", mint0]` |
+| 9 | PDA de mint de soporte de CPMM para `mint1` ordenado, derivado de `[b"support_mint", mint1]` |
+
+La instrucción requiere al menos diez cuentas restantes. Las cuentas de mint de soporte son entradas de CPI de solo lectura. Deriva ambas direcciones incluso cuando el mint no tiene un registro de soporte inicializado. Los constructores más antiguos que aún añaden cuentas de bloqueo de creador u omiten los índices 8–9 deben ser actualizados.
+
+<Note>
+  **Cambiado en 2026-09.** Dos limpiezas, ninguna de las cuales cambia un constructor correcto:
+
+  - **La ruta de CPMM permisionada es ahora la única ruta.** `MigrateToCpswap` solía elegir entre `InitializeCpSwap` e `InitializeCpSwapWithPermission` basado en `unix_timestamp >= get_upgrade_timestamp()`. El ayudante de marca de tiempo y el CPI heredado se han ido, por lo que la ruta permisionada — y por lo tanto el mínimo de diez cuentas — se aplica incondicionalmente.
+  - **Tres restricciones de dirección se movieron de la estructura de cuenta al cuerpo de la instrucción.** `platform_config`, `base_vault`, y `quote_vault` aún se requieren para coincidir con los valores almacenados en `PoolState`, pero la falta de coincidencia ahora se genera por `require_keys_eq!` en lugar de por la restricción `address =` de Anchor. La comprobación es equivalente; solo la superficie de error difiere — obtienes el genérico `RequireKeysEqViolated` (`2502`) de Anchor en lugar de `ConstraintAddress` (`2012`), y se reporta sin un nombre de cuenta. Actualiza cualquier manejo de errores que coincidiera con `2012` para estas tres cuentas.
+</Note>
+
+### Programas de token de migración de CPMM
+
+`MigrateToCpswap` toma ambos programas de token incondicionalmente y determina cuál posee cada mint. Sus dos cuentas de programa de token fueron renombradas en consecuencia:
+
+| Posición | Cuenta | Valor |
+|---|---|---|
+| primera | `token_program` | Siempre el programa SPL Token heredado |
+| segunda | `token_program_2022` | Siempre el programa Token-2022 |
+
+Reemplazan el anterior `base_token_program` (cualquiera que fuera el programa que poseía el mint base) y `quote_token_program` (siempre heredado). Las posiciones no han cambiado, por lo que esto es un cambio de valor en lugar de un cambio de diseño — pero los dos valores están casi invertidos, y un constructor que sigue pasando su par antiguo suministrará Token-2022 donde se requiere el programa heredado tan pronto como cualquiera de los mints sea un mint Token-2022.
+
+El programa heredado se requiere incluso cuando ninguno de los mints lo usa, porque el mint de LP de CPMM y el NFT de Clave de Tarifa de liquidez bloqueada siempre viven en él.
+
+## Lista de permitidos de `GlobalConfig` de plataforma
+
+`PlatformConfig.restrict_global_config` controla la comprobación:
+
+- `0`: la plataforma acepta cualquier `GlobalConfig` válido de otra manera; no se requiere cuenta de permitidos.
+- `1`: `Initialize`, `InitializeV2` e `InitializeWithToken2022` deben incluir el `PlatformAllowConfig` coincidente en cualquier lugar en `remaining_accounts`.
+
+El administrador de plataforma crea o cierra el PDA con `CreatePlatformAllowConfig` y `ClosePlatformAllowConfig`. Sus semillas son `[b"platform_allow_config", platform_config, global_config]`. Las instrucciones `PlatformGlobalAccess` administradas anteriormente por el administrador y el PDA se retiran.
+
+## Reglas de parámetros de lanzamiento de plataforma
+
+Cuatro instrucciones gestionan una cuenta `PlatformCurveRule`. Las cuatro son firmadas por `PlatformConfig.curve_rule_manager` o por el administrador de plataforma — el programa acepta al administrador re-derivando el PDA de `PlatformConfig` del firmante, por lo que ninguna cuenta separada lo prueba. Un firmante que es ninguno de los dos devuelve `InvalidCurveRuleAuthority`.
+
+| Instrucción | Cuentas | Argumentos |
+|---|---|---|
+| `CreatePlatformCurveRule` | `curve_rule_authority` (firmante, mut), `platform_config`, `global_config`, `platform_curve_rule` (mut), `system_program` | ninguno |
+| `UpdatePlatformCurveRule` | los mismos cinco | `group_id: u16`, `constraints: Vec<ParamConstraint>` |
+| `RemovePlatformCurveRule` | los mismos cinco | `group_id: u16` |
+| `ClosePlatformCurveRule` | los primeros cuatro | ninguno |
+
+`platform_curve_rule` es el PDA en `[b"platform_curve_rule", platform_config, global_config]`.
+
+- **`Create`** asigna la cuenta sin grupo. Ese estado no restringe nada.
+- **`Update`** inserta o actualiza el grupo con ese `group_id`, reemplazándolo completamente si existe. Redimensiona la cuenta para que quepa, por lo que el firmante completa la renta que crece y recibe de vuelta la renta que se reduce. Un nuevo grupo más allá del décimo devuelve `CurveRuleGroupsExceeded`; más de 25 restricciones, un campo desconocido u operador, o el mismo par `(field, op)` dos veces en un grupo devuelve `InvalidCurveRuleConstraint`; los cuatro campos derivados de `TotalSellA` en una configuración no de producto constante devuelven `CurveRuleFieldNotSupportedByCurve`.
+- **`Remove`** elimina un grupo por id, reduciendo la cuenta y reembolsando la diferencia. Un id desconocido devuelve `CurveRuleGroupNotExist`.
+- **`Close`** devuelve toda la renta al firmante. La configuración es entonces sin restricciones de nuevo incluso mientras `restrict_curve_param` permanece `1`.
+
+Ninguno de los cuatro cambia si las reglas se aplican. Eso es `UpdatePlatformConfig::RestrictCurveParam(0 | 1)`, que solo el administrador de plataforma puede llamar.
+
+**En la ruta de lanzamiento.** Mientras `restrict_curve_param` es `1`, `InitializeV2` e `InitializeWithToken2022` requieren el PDA de regla en `remaining_accounts` — incluyendo cuando no existe, para que omitirlo no pueda omitir la comprobación. Una cuenta faltante es `NotEnoughRemainingAccounts`; un lanzamiento que no satisface ningún grupo es `CurveParamNotMatchPlatformRule`. La comprobación se ejecuta antes de los propios límites de `GlobalConfig` y solo puede reducirlos. Modelo y libros de jugadas: [`products/launchlab/curve-rules`](/docs/i18n/es/products/launchlab/curve-rules). Ambos errores son evitables del lado del cliente — el SDK refleja esta comprobación como una función pura, ver [Verifica antes de enviar](/docs/i18n/es/products/launchlab/curve-rules#check-before-you-send).
+
+## `CollectFee`
+
+Barrido administrativo de las tarifas comerciales acumuladas del protocolo en un único lanzamiento.
+
+**Argumentos** — ninguno.
+
+**Cuentas**
+
+| # | Nombre | W | S | Notas |
+|---|------|---|---|-------|
+| 1 | `protocol_fee_owner` |   | S | Debe ser igual a `global_config.protocol_fee_owner`. |
+| 2 | `authority` |   |   | PDA `[b"vault_auth_seed"]`; firma la transferencia de bóveda. |
+| 3 | `pool_state` | W |   | Mutada para poner a cero `quote_protocol_fee`. |
+| 4 | `global_config` |   |   | Fuente de verdad para el firmante. |
+| 5 | `quote_vault` | W |   | Drenada por `quote_protocol_fee`. |
+| 6 | `quote_mint` |   |   | |
+| 7 | `recipient_token_account` | W |   | ATA de `protocol_fee_owner` en `quote_mint`. |
+| 8 | `token_program` |   |   | El programa que posee el mint de cotización — SPL Token o Token-2022. |
+
+<Warning>
+  Aquí `quote_mint` va **antes** de `recipient_token_account` — al revés que en `ClaimCreatorFee`,
+  `ClaimPlatformFee` y `ClaimPlatformFeeFromVault`, que todas ponen el destinatario primero. Las
+  dos posiciones tienen tipos de Anchor distintos (`Mint` frente a `TokenAccount`), así que
+  intercambiarlas falla la deserialización en tiempo de ejecución y parece un error de cuenta
+  equivocada. `CollectMigrateFee` tiene el mismo orden que `CollectFee`.
+</Warning>
+
+**Efecto** — transfiere `pool_state.quote_protocol_fee` de `quote_vault` a `recipient_token_account`, luego pone a cero el contador. Invocable en cualquier momento después de la primera compra.
+
+## `CollectMigrateFee`
+
+Barrido administrativo de la tarifa de migración acumulada en la graduación. La misma forma de cuenta que `CollectFee` con `migrate_fee_owner` como el firmante (en lugar de `protocol_fee_owner`) y `pool_state.migrate_fee` como el contador drenado.
+
+## `ClaimCreatorFee`
+
+Barrido por creador de tarifas de creador acumuladas en **cada lanzamiento que el creador posee** que usa el mismo mint de cotización. Drena la bóveda de tarifa por creador, no la por pool.
+
+**Argumentos** — ninguno.
+
+**Cuentas**
+
+| # | Nombre | W | S | Notas |
+|---|--------|---|---|-------|
+| 1 | `creator` | W | S | El creador del pool. |
+| 2 | `fee_vault_authority` |   |   | PDA `[b"creator_fee_vault_auth_seed"]`. |
+| 3 | `creator_fee_vault` | W |   | PDA en semillas `[creator, quote_mint]`; la bóveda de creador agregada. |
+| 4 | `recipient_token_account` | W |   | `init_if_needed`; ATA de `creator` en `quote_mint`. |
+| 5 | `quote_mint` |   |   | |
+| 6 | `token_program` |   |   | |
+| 7 | `system_program` |   |   | Para creación de ATA si es necesario. |
+| 8 | `associated_token_program` |   |   | |
+
+**Efecto** — transfiere el saldo completo de `creator_fee_vault` a `recipient_token_account`. Revierte con una comprobación de requerimiento mayor que cero si la bóveda está vacía.
+
+## `ClaimPlatformFee`
+
+Barrido por plataforma que drena la bóveda de cotización de un lanzamiento directamente. Usa esto cuando una plataforma quiere reclamar su porción para un lanzamiento específico sin pasar por la bóveda de plataforma agregada.
+
+**Argumentos** — ninguno.
+
+**Cuentas**
+
+| # | Nombre | W | S | Notas |
+|---|--------|---|---|-------|
+| 1 | `platform_fee_wallet` | W | S | Debe ser igual a `platform_config.platform_fee_wallet`. |
+| 2 | `authority` |   |   | PDA `[b"vault_auth_seed"]`. |
+| 3 | `pool_state` | W |   | Drenada por `pool_state.platform_fee`. |
+| 4 | `platform_config` |   |   | Fuente de verdad para el firmante. |
+| 5 | `quote_vault` | W |   | Drenada. |
+| 6 | `recipient_token_account` | W |   | `init_if_needed`; ATA de `platform_fee_wallet`. |
+| 7 | `quote_mint` |   |   | |
+| 8 | `token_program` |   |   | |
+| 9 | `system_program` |   |   | |
+| 10 | `associated_token_program` |   |   | |
+
+**Efecto** — transfiere `pool_state.platform_fee` de `quote_vault` a `recipient_token_account`, pone a cero el contador.
+
+## `ClaimPlatformFeeFromVault`
+
+Barrido agregado por plataforma. Drena la bóveda de tarifa por mint de cotización de la plataforma que acumula tarifas de cada lanzamiento enrutado a través de la plataforma.
+
+**Argumentos** — ninguno.
+
+**Cuentas**
+
+| # | Nombre | W | S | Notas |
+|---|--------|---|---|-------|
+| 1 | `platform_fee_wallet` | W | S | Debe ser igual a `platform_config.platform_fee_wallet`. |
+| 2 | `fee_vault_authority` |   |   | PDA `[b"platform_fee_vault_auth_seed"]`. |
+| 3 | `platform_config` |   |   | |
+| 4 | `platform_fee_vault` | W |   | PDA en semillas `[platform_config, quote_mint]`. |
+| 5 | `recipient_token_account` | W |   | `init_if_needed`; ATA de `platform_fee_wallet`. |
+| 6 | `quote_mint` |   |   | |
+| 7 | `token_program` |   |   | |
+| 8 | `system_program` |   |   | |
+| 9 | `associated_token_program` |   |   | |
+
+**Efecto** — transfiere el saldo completo de `platform_fee_vault` a `recipient_token_account`. Revierte si la bóveda está vacía.
+
+## `CollectExcessLamports`
+
+Barrido administrativo de lamports sentados por encima del mínimo exento de renta en cuentas que LaunchLab controla. Añadido en la actualización 2026-09 para que el protocolo pueda reclamar el exceso de financiación que la [reducción de renta SIMD-0437](/docs/i18n/es/solana-fundamentals/rent-and-reclaimable-rent) deja en cuentas creadas antes de cada paso.
+
+Solo el exceso se mueve. Los saldos de tokens, datos de cuenta, propietarios, estado de curva y vesting no se tocan, y la instrucción es una no-op contra una cuenta ya en su mínimo — por lo que es seguro re-ejecutar después de cada paso de lanzamiento.
+
+**Argumentos** — ninguno.
+
+**Cuentas**
+
+| # | Nombre | W | S | Notas |
+|---|--------|---|---|-------|
+| 1 | `collect_lamports_wallet` | W | S | Destino para cada lamport barrido. Debe ser ya sea el administrador del programa LaunchLab o la cartera dedicada de recopilación de lamports — ver [`reference/program-addresses`](/docs/i18n/es/reference/program-addresses#excess-lamports-collection-wallets). Cualquier otro firmante falla con `InvalidOwner` (`6001`). |
+| 2 | `authority` |   |   | **Una** de las tres PDAs de autoridad de bóveda de LaunchLab (ver abajo). Firma los CPIs del programa de token para cada cuenta de token en esta llamada. |
+| 3 | `token_program` |   |   | SPL Token. |
+| 4 | `token_program_2022` |   |   | Token-2022. Ambos se requieren incondicionalmente; el programa elige por cuenta de origen. |
+| 5.. | `remaining_accounts` | W |   | `M` cuentas de origen a barrer, cualquier número, cualquier orden. |
+
+**Eligiendo `authority`**
+
+La cuenta se pasa sin verificar y se resuelve por el programa, que re-deriva las tres PDAs de autoridad de LaunchLab y coincide:
+
+| Semilla | Posee |
+|---|---|
+| `[b"vault_auth_seed"]` | Cada bóveda de pool base y cotización de lanzamiento |
+| `[b"platform_fee_vault_auth_seed"]` | Cada bóveda de tarifa de plataforma |
+| `[b"creator_fee_vault_auth_seed"]` | Cada bóveda de tarifa de creador |
+
+Una clave que no coincide con ninguna de las tres falla toda la instrucción con `InvalidOwner` (`6001`).
+
+<Warning>
+  **Agrupa tus cuentas de origen por autoridad.** Una llamada lleva una `authority`, y el programa de token requiere que el propietario real de la cuenta firme. Una cuenta de token propiedad de una de las tres PDAs diferente de la `authority` que pasaste hace que el CPI falle y se lleve toda la transacción con él. Barre bóvedas de pool, bóvedas de tarifa de plataforma y bóvedas de tarifa de creador en transacciones separadas.
+
+  Las PDAs propiedad del programa son la excepción — se debitan directamente, por lo que pueden viajar con cualquier autoridad.
+</Warning>
+
+**Cómo se maneja cada cuenta de origen**
+
+| Propietario de cuenta de origen | Manejo |
+|---|---|
+| SPL Token o Token-2022, cuenta de token no nativa | CPI `WithdrawExcessLamports` (discriminante del programa de token `38`), firmado por `authority`. |
+| SPL Token o Token-2022, **nativa** (wSOL) cuenta de token | `WithdrawExcessLamports` rechaza cuentas nativas. El programa hace CPI a `SyncNative`, mide cuánto creció la `amount` envuelta, `UnwrapLamports` (discriminante `45`) para exactamente ese delta, luego requiere que el saldo envuelto sea igual a su valor anterior a la sincronización — de lo contrario `LamportsCalculateError` (`6031`). Un lanzamiento cotizado en SOL por lo tanto mantiene su reserva de cotización completa. |
+| El programa LaunchLab mismo — `PoolState`, `GlobalConfig`, `PlatformConfig`, `VestingRecord`, `PlatformCurveRule`, `PlatformAllowConfig` | El programa debita la cuenta directamente hasta `rent.minimum_balance(data_len)`. |
+| Cualquier otra cosa | **Omitida silenciosamente.** Sin error, sin lamports movidos. |
+
+**Los mints base no pueden ser barridos.** `InitializeV2` e `InitializeWithToken2022` revocan `MintTokens` en el mint base en la misma instrucción que acuña el suministro, por lo que ninguna clave puede firmar un `WithdrawExcessLamports` para él — la renta del mint permanece donde está permanentemente.
+
+**Errores comunes** — `InvalidOwner` (`6001`, firmante incorrecto o una `authority` que no es ninguna de las tres PDAs), `LamportsCalculateError` (`6031`, el viaje de ida y vuelta de wSOL no llegó a cero), e `InsufficientFunds` de la ruta propiedad del programa cuando una cuenta tiene menos que su propio mínimo de renta.
+
+**Sin constructor de SDK.** `@raydium-io/raydium-sdk-v2` no envía un constructor para esta instrucción, ni tampoco el repositorio `raydium-sdk-V2-demo` — es una ruta administrativa. Codifícalo a mano, de la manera que el barrido del lado de la cartera en [`solana-fundamentals/rent-and-reclaimable-rent`](/docs/i18n/es/solana-fundamentals/rent-and-reclaimable-rent#building-the-instruction) hace para la instrucción del programa de token.
+
+
+## Instrucciones de vesting y configuración de plataforma
+
+Estas se documentan en páginas dedicadas porque cada una tiene su propio modelo de estado:
+
+- [`CreateVestingAccount`, `CreatePlatformVestingAccount`, `ClaimVestedToken`](/docs/i18n/es/products/launchlab/vesting)
+- [`CreatePlatformConfig`, `UpdatePlatformConfig`, `CreatePlatformAllowConfig`, `ClosePlatformAllowConfig`](/docs/i18n/es/products/launchlab/platform-config)
+- [`CreatePlatformCurveRule`, `UpdatePlatformCurveRule`, `RemovePlatformCurveRule`, `ClosePlatformCurveRule`](/docs/i18n/es/products/launchlab/curve-rules)
+- [`CreateConfig`, `UpdateConfig`](/docs/i18n/es/products/launchlab/global-config)
+
+## Matriz de cambio de estado
+
+| Instrucción | `status` | `real_base` | `real_quote` | Contadores de tarifa | Pool posterior al estado |
+|-------------|----------|-------------|--------------|--------------|------------------|
+| `Initialize{V2,WithToken2022}` | Funding | 0 | 0 | 0 | — |
+| `BuyExactIn(q_in)` | Funding | +∆ | +∆q_after_fee | `quote_protocol_fee += ∆`, `platform_fee += ∆` | — |
+| `SellExactIn(b_in)` | Funding | −∆ | −∆q_before_fee | (igual) | — |
+| Umbral alcanzado | → Migrate | — | — | — | — |
+| `MigrateToCpswap` / `MigrateToAmm` heredado | → Migrated | (congelado) | (congelado) | `migrate_fee` establecido | creado; LP de CPMM dividido en bloqueo de plataforma y quema |
+| `CollectExcessLamports` | — | — | — | — | — |
+| `CollectFee` / `CollectMigrateFee` | cualquiera | — | — | contador puesto a cero | — |
+| `ClaimCreatorFee` / `ClaimPlatformFee*` | cualquiera | — | — | drena bóveda | — |
+| `CreateVestingAccount` | Funding | — | — | — | aumenta `allocated_share_amount` |
+| `ClaimVestedToken` | Migrated | — | — | — | drena `base_vault` |
+
+## A dónde ir a continuación
+
+- [`products/launchlab/code-demos`](/docs/i18n/es/products/launchlab/code-demos) — ejemplos de TypeScript para cada instrucción.
+- [`products/launchlab/accounts`](/docs/i18n/es/products/launchlab/accounts) — forma de estado completo.
+- [`reference/error-codes`](/docs/i18n/es/reference/error-codes) — enumeración de errores de LaunchLab.
+
+Fuentes:
+
+- [Módulo `LaunchLab` del SDK de Raydium v2](https://github.com/raydium-io/raydium-sdk-V2)
+- Fuente del programa LaunchLab de Raydium

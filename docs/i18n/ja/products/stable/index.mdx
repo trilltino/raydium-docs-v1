@@ -1,0 +1,66 @@
+---
+title: "Stable AMM"
+description: "Raydium の独立したプログラムで、ルックアップテーブルから補間された価格曲線を使用します。ステーブルコイン ペアおよび既知の価格関係を持つその他のアセットのリクイディティを提供します。"
+---
+
+<Info>
+  **このページは AI による自動翻訳です。すべての内容は英語版を正とします。**
+
+  [英語版を表示 →](/docs/en/products/stable/index)
+</Info>
+
+## 概要
+
+Stable AMM は、既知で安定した価格関係を持つペア（主にステーブルコイン・ステーブルコイン ペア（USDC-USDT、USDH-USDC）および担保付きトークン ペア）向けに設計された **Raydium の独立したプログラム**（AMM v4 プログラムのモードではなく、独自のデプロイメント）です。定数積曲線の代わりに、各プールの `ModelDataInfo` アカウントに組み込まれた **(x, y, price) タプルのルックアップテーブル** を使用します。価格発見はテーブル内の補間を通じて行われ、小規模なスワップのスリッページを削減します。
+
+これは **純粋な AMM** です。すべてのリクイディティはプール自体のボールトに存在します。初期段階の OpenBook マーケットメイキング パスは長年休止状態にあり、[2026-06-22 アップグレード](/docs/i18n/ja/reference/changelog)で残存するマーケット コードが削除されました。AMM v4 と同じ `Fees` 構造とフィー モデルを共有しており、違いは純粋に **価格曲線** です。x·y=k の代わりに、事前に入力されたモデルを補間します。
+
+**プログラム ID：** [reference/program-addresses](/docs/i18n/ja/reference/program-addresses) を参照してください。
+
+**Token-2022：** サポートされていません。クラシック SPL トークンのみです。
+
+**リクイディティ：** 薄いです。ほとんどのユーザー向けインテグレーションは、すべての Raydium AMM 全体で最適な価格ルーティングのために [AMM Routing プログラム](/docs/i18n/ja/products/routing)を通じて Stable プールに到達します。SDK も Stable プールを直接サポートしています。プールは `ApiV3PoolInfoStandardItem` 上で `version: 5`（`pooltype: "StablePool"`）として表示され、標準的な `LiquidityModule`（`addLiquidity` / `removeLiquidity` / swap）は v5 を自動検出して適切な命令を発行します。[コード デモ](/docs/i18n/ja/products/stable/code-demos)を参照してください。
+
+## チャプター内容
+
+<CardGroup cols={2}>
+  <Card title="概要" icon="circle-info" href="/docs/i18n/ja/products/stable/overview">
+    独立したプログラムの理由、ルックアップテーブル モデル、AMM v4 および CPMM との比較。
+  </Card>
+  <Card title="アカウント" icon="database" href="/docs/i18n/ja/products/stable/accounts">
+    AmmInfo、ModelDataInfo、DataElement フィールド、ボールト レイアウト、フィー構造。
+  </Card>
+  <Card title="数学" icon="function" href="/docs/i18n/ja/products/stable/math">
+    補間がどのように価格を生成するか、プール資産会計、AMM v4 と同じフィー適用。
+  </Card>
+  <Card title="命令" icon="terminal" href="/docs/i18n/ja/products/stable/instructions">
+    呼び出し可能なセット — Deposit、Withdraw、SwapBaseIn、SwapBaseOut、WithdrawPnl — および 2026-06-22 アップグレードで削除された命令。
+  </Card>
+  <Card title="フィー" icon="percent" href="/docs/i18n/ja/products/stable/fees">
+    総トレード フィー 0.02%、0.0176% LP / 0.0024% プロトコルに分割。ファンド フィーなし、クリエーター フィーなし。
+  </Card>
+  <Card title="コード デモ" icon="code" href="/docs/i18n/ja/products/stable/code-demos">
+    Stable プールを検出し、SDK の `LiquidityModule`（v5 をネイティブに処理）を通じてスワップ / リクイディティ追加 / 削除を実行し、オフチェーン stable-curve ヘルパーを使用します。
+  </Card>
+</CardGroup>
+
+## このセクションを読むべき場合
+
+- ステーブルコイン またはアセット ペアを統合しており、最適な価格を持つ Stable AMM プールを見つけた場合。
+- ルーティング エンジンを構築しており、Stable プールをリクイディティ ソースとしてサポートする必要がある場合。
+- 既存の Stable プールでリクイディティを維持しており、デポジット / ウィズドロー フローを学習している場合。
+- ルックアップテーブルを通じて AMM 価格設定をプログラム可能にする方法に興味がある場合。
+
+## 主要な事実
+
+| 項目 | 値 |
+|--------|-------|
+| **Mainnet プログラム ID** | `5quBtoiQqxF9Jv6KYKctB59NT3gtJD2Y65kdnB1Uev3h` |
+| **Devnet プログラム ID** | `DRayDdXc1NZQ9C3hRWmoSf8zK4iapgMnjdNZWrfwsP8m` |
+| **曲線モデル** | 補間ルックアップテーブル（x·y=k ではない） |
+| **OpenBook 依存関係** | なし（マーケット パスは長年休止状態。デッド コードは 2026-06-22 で削除） |
+| **トレード フィー** | 0.02%（AMM v4 の 0.25% ではない） |
+| **LP のフィー シェア** | 0.0176%（フィーの 88%） |
+| **プロトコル のフィー シェア** | 0.0024%（フィーの 12%） |
+| **クリエーター フィー** | なし |
+| **ファンド フィー** | なし |

@@ -1,0 +1,262 @@
+---
+title: "Kurva ikatan (Bonding curves)"
+description: "Matematika di balik kurva penerbitan token — varian CPMM kuadratik, linear, dan virtual-reserves — derivasi untuk biaya / hasil / harga spot, dan matematika ambang kelulusan yang digunakan LaunchLab."
+---
+
+<Info>
+  **Halaman ini diterjemahkan secara otomatis oleh AI. Versi bahasa Inggris adalah acuan resmi.**
+
+  [Lihat versi bahasa Inggris →](/docs/en/algorithms/bonding-curves)
+</Info>
+
+## Apa itu bonding curve
+
+**Bonding curve** adalah fungsi harga deterministik `p(s)` yang menghubungkan harga token dengan jumlah yang saat ini beredar (`s` singkatan dari "supply sold"). Pembeli melakukan pembelian dengan mengirim collateral ke kontrak; kontrak mengeluarkan unit token baru dengan harga marginal yang ditentukan oleh kurva. Penjual mengembalikan unit token dan menerima pengembalian dana terintegrasi.
+
+Dua properti utama dibandingkan dengan pool CPMM:
+
+- **Tidak perlu counterparty.** Kontrak penerbit adalah market maker; likuiditas ada berdasarkan ketetapan.
+- **Harga monoton.** Harga naik dengan setiap net-buy dan turun dengan setiap net-sell.
+
+Bonding curve adalah mekanisme peluncuran standar ketika entitas penerbit tidak ingin pre-seed pool AMM dengan collateral.
+
+## Formula penetapan harga umum
+
+Untuk setiap fungsi harga kontinu `p(s)`:
+
+**Harga spot** pada supply `s`:
+
+```
+p(s) = the curve formula
+```
+
+**Biaya untuk membeli** supply dari `s_0` ke `s_1` (dengan `s_1 > s_0`):
+
+```
+cost(s_0, s_1) = ∫_{s_0}^{s_1} p(s) ds = P(s_1) − P(s_0)
+```
+
+di mana `P(s) = ∫ p(s) ds` adalah antiturunan kurva. Secara geometris, `cost` adalah area di bawah `p` antara `s_0` dan `s_1`.
+
+**Hasil dari penjualan** supply kembali dari `s_1` ke `s_0`:
+
+```
+proceeds(s_1, s_0) = cost(s_0, s_1)
+```
+
+(Simetri: membeli dan menjual di selang yang sama menukar collateral yang sama — terlepas dari biaya.)
+
+**Harga rata-rata** untuk pembelian:
+
+```
+avg = cost(s_0, s_1) / (s_1 − s_0)
+```
+
+## Keluarga kurva umum
+
+### Linear
+
+```
+p(s) = a + b · s
+```
+
+```
+P(s)            = a·s + (b/2)·s²
+cost(s_0, s_1)  = a·(s_1 − s_0) + (b/2)·(s_1² − s_0²)
+```
+
+Harga naik sebanding dengan supply. Digunakan untuk peluncuran "stabil" di mana penerbit menginginkan markup yang dapat diprediksi dan moderat selamanya.
+
+### Kuadratik
+
+```
+p(s) = k · s²                      // atau  k · (s / S_max)² untuk bentuk ternormalisasi
+```
+
+```
+// Antiderivative of the normalized form p(s) = k · (s / S_max)²
+P(s)            = (k / (3 · S_max²)) · s³
+cost(s_0, s_1)  = (k / (3 · S_max²)) · (s_1³ − s_0³)
+```
+
+(Untuk bentuk yang tidak dinormalisasi `p(s) = k · s²`, hilangkan `S_max²`: `P(s) = (k/3) · s³`. Pilih satu konvensi dan tetap gunakan konvensi itu — contoh terurai di bawah memakai bentuk yang dinormalisasi sepanjang pembahasan.)
+
+Harga naik secara kuadratik. Pembeli awal mendapatkan harga mendekati nol (wilayah mulai datar); pembeli akhir membayar premium yang lebih curam.
+
+<Note>
+  **LaunchLab tidak mengimplementasikan kurva *harga* kuadratik.** Ketiga tipe kurvanya adalah
+  `0 = ConstantProduct` (default), `1 = FixedPrice` dan `2 = LinearPrice`. Bentuk yang paling dekat
+  dengan bagian ini adalah `LinearPrice`, yang harganya `p(s) = a·s` sehingga *biaya*-nya bersifat
+  kuadratik. Bagian ini dipertahankan sebagai pembahasan umum tentang kurva polinomial.
+</Note>
+
+### Virtual-reserves CPMM (gaya Pump)
+
+Kurva adalah CPMM standar dengan reserve quote awal pura-pura `V_q`:
+
+```
+effective_y = V_q + collateral_received
+effective_x = S_max − s
+(effective_x) · (effective_y) = V_q · S_max      // invariant
+```
+
+Harga spot:
+
+```
+p(s) = effective_y / effective_x
+     = V_q · S_max / (S_max − s)² · ... (dapat diturunkan via diferensiasi implisit)
+```
+
+Biaya untuk bergerak dari `s_0` ke `s_1`:
+
+```
+cost(s_0, s_1) = V_q · S_max / (S_max − s_1) − V_q · S_max / (S_max − s_0)
+              = V_q · (s_1 − s_0) · S_max / ((S_max − s_0) · (S_max − s_1))
+```
+
+Varian ini memiliki properti elegan bahwa pada kelulusan (di mana `s = S_graduate`), harga marginal sama dengan harga pembukaan pool CPMM hilir yang disemai dengan reserve `(S_max − S_graduate, V_q + cost(0, S_graduate))`. Pengalihan lancar. LaunchLab mengekspos ini sebagai `curve_type = 0` (`ConstantProduct`) — tipe default, dan satu-satunya tipe yang memiliki config live saat ini.
+
+## Implementasi diskrit
+
+On-chain, `s` dan `cost` keduanya adalah bilangan bulat (satuan denominasi terkecil). Integral kontinu `cost(s_0, s_1)` dihitung langsung dari bentuk tertutup kapan pun ada (linear, kuadratik). Untuk kurva tanpa invers bentuk tertutup (kuadratik, diberikan `cost`, temukan `s_1`), iterasi Newton digunakan:
+
+```
+# Selesaikan kuadratik: (k/3)·s_1³ = (k/3)·s_0³ + cost
+# Inisialisasi dengan s_guess ≈ cbrt(3·cost/k + s_0³)
+for i in 0..MAX_ITER:
+    f    = (k/3)·s_guess³ − (k/3)·s_0³ − cost
+    f'   = k·s_guess²
+    step = f / f'
+    s_guess -= step
+    if |step| < precision_floor: break
+```
+
+<Note>
+  Ini adalah resep numerik umum, bukan implementasi LaunchLab. LaunchLab **tidak memiliki solver
+  Newton dan tidak memiliki error `NotConverged`** — tidak satu pun dari ketiga kurvanya
+  membutuhkannya. Kurva constant-product dapat diinvers dalam bentuk tertutup, kurva fixed-price
+  hanyalah sebuah pembagian, dan biaya kuadratik dari kurva linear-price diinvers dengan akar
+  kuadrat. Bahkan kasus harga kuadratik di atas memiliki bentuk tertutup eksak
+  `s₁ = ∛(s₀³ + 3·cost/k)`, yang justru dipakai snippet tersebut sebagai penginisialisasi.
+</Note>
+
+## Integrasi biaya
+
+Biaya diterapkan di atas biaya kurva, bukan di dalamnya. Pada pembelian:
+
+```
+cost_curve  = cost(base_sold, base_sold + base_out)
+fee         = ceil(cost_curve · buy_numerator / buy_denominator)
+quote_in    = cost_curve + fee
+```
+
+Pada penjualan:
+
+```
+proceeds_curve = cost(base_sold − base_in, base_sold)
+fee            = ceil(proceeds_curve · sell_numerator / sell_denominator)
+quote_out      = proceeds_curve − fee
+```
+
+Bagian LP dari biaya disimpan di `quote_vault` dan secara efektif membuat kurva lebih kaku untuk pembeli kemudian — reserve tumbuh tanpa mengeluarkan lebih banyak supply. Bagian protokol dan kreator dilacak dalam penghitung terpisah untuk penyapuan kemudian.
+
+## Ambang kelulusan
+
+Kurva "lulus" ketika telah menerima cukup collateral untuk seed pool AMM eksternal dengan harga yang cocok dengan harga kurva saat ini. Untuk kurva kuadratik dengan parameter `(k, S_max, S_graduate)`:
+
+```
+quote_to_graduate = cost(0, S_graduate) · (1 + buy_fee_rate)
+                  = (k / 3) · S_graduate³ · (1 + f_buy)
+```
+
+Setelah `quote_vault ≥ quote_to_graduate`, instruksi `Graduate` membuat pool CPMM dengan:
+
+```
+cpmm_base_reserve  = S_max − S_graduate        // unsold curve supply
+cpmm_quote_reserve = quote_vault − accrued_fee_counters
+cpmm_initial_price = cpmm_quote_reserve / cpmm_base_reserve
+```
+
+Untuk kurva virtual-reserves, dengan konstruksi:
+
+```
+cpmm_initial_price == p(S_graduate)           // exact equality
+```
+
+Untuk kurva kuadratik, kesetaraan ini **tidak** berlaku: harga rata-rata terintegrasi berada tepat di atas harga marginal, sehingga CPMM terbuka di atas `p(S_graduate)` dengan faktor tetap (lihat contoh terurai). Hanya kurva constant-product / virtual-reserves — kurva yang benar-benar dijalankan LaunchLab — yang kontinu secara harga pada saat pengalihan.
+
+## Impermanence vs pool CPMM
+
+Peluncuran bonding-curve murni memiliki **tidak ada impermanence** dalam pengertian Uniswap: tidak ada "sisi lain" pasar untuk menyeimbangkan kembali. Kurva mengeluarkan supply sesuai permintaan, dan satu-satunya "LP" adalah kontrak itu sendiri.
+
+Pasca-kelulusan, pool CPMM yang dihasilkan berperilaku seperti pool CPMM lainnya — jika LP tidak dibakar, mereka tunduk pada dinamika impermanent-loss biasa. Inilah mengapa kebijakan **burn** pasca-kelulusan dominan dalam peluncuran publik: ini membuat pool permanen dan menghilangkan setiap kejutan harga yang didorong oleh penarikan LP.
+
+## Contoh terselesaikan
+
+Kurva: kuadratik, `k = 40`, `S_max = 1e9`, `S_graduate = 0.8 · S_max = 8e8`. Biaya pembelian 1%.
+
+### Harga pada `s = 5e8`
+
+```
+p(5e8) = 40 · (5e8 / 1e9)² = 40 · 0.25 = 10
+```
+
+10 unit quote per unit base.
+
+### Biaya pembelian pertama 1e6 base
+
+```
+cost(0, 1e6) = (40 / (3 · (1e9)²)) · (1e6)³
+             = (40 / 3e18) · 1e18
+             ≈ 13.3          (smallest quote units)
+```
+
+Dengan biaya 1%:
+
+```
+quote_in = 13.3 · 1.01 ≈ 13.5
+```
+
+### Ambang kelulusan
+
+```
+cost(0, 8e8) = (40 / 3e18) · (8e8)³
+             = (40 / 3e18) · 5.12e26
+             ≈ 6.827e9      (≈ 6,827 units of a 6-decimal quote mint)
+quote_to_graduate ≈ 6.827e9 · 1.01 ≈ 6.895e9
+```
+
+### Harga pada kelulusan
+
+```
+p(8e8) = 40 · 0.64 = 25.6
+```
+
+### Reserve CPMM pasca-kelulusan
+
+```
+cpmm_base  = 1e9 − 8e8 = 2e8
+cpmm_quote ≈ 6.827e9   (less fee-counter deductions)
+cpmm_price ≈ 6.827e9 / 2e8 = 34.14 per base
+```
+
+<Warning>
+  Itu **bukan** `p(8e8) = 25.6` — nilainya tepat `4/3` kali angka tersebut. Untuk setiap kurva harga
+  kuadratik, rata-rata terintegrasinya adalah `p(s)/3 · s / s`, sehingga `cost(0,s)/s = p(s)/3 · ...`
+  menjadi `4/3 · p(s)` ketika supply yang tersisa adalah `1 − 0.8`. Karena itu pengalihan kuadratik
+  **tidak kontinu secara harga**. Hanya kurva constant-product / virtual-reserves yang memiliki
+  properti kesetaraan eksak yang dijelaskan di atas; peluncuran kuadratik menunjukkan lompatan pada
+  saat kelulusan.
+</Warning>
+
+## Pointer
+
+- [`/id/products/launchlab/bonding-curve`](/docs/i18n/id/products/launchlab/bonding-curve) — implementasi on-chain LaunchLab dari formula ini.
+- [`/id/products/launchlab/instructions`](/docs/i18n/id/products/launchlab/instructions) — spesifikasi level akun `Buy`, `Sell`, `Graduate`.
+- [`/id/algorithms/constant-product`](/docs/i18n/id/algorithms/constant-product) — apa yang dilakukan CPMM pasca-kelulusan dengan reserve.
+
+Sumber:
+
+- Kode sumber program Raydium LaunchLab (implementasi kurva kuadratik + virtual-reserves).
+- Bancor white paper (linear bonding curves, historis).
+- Postmortem publik Pump.fun (varian virtual-reserves).

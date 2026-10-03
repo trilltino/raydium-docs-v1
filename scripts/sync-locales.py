@@ -17,21 +17,19 @@ For each non-English locale ``L``:
 
 2. For every English page slug ``<path>``:
 
-   - If ``<L>/<path>.mdx`` (or ``.md``) exists on disk, the locale's
-     nav references ``<L>/<path>``.
+   - If ``docs/i18n/<L>/<path>.mdx`` (or ``.md``) exists on disk, the
+     locale's nav references ``docs/i18n/<L>/<path>``.
    - Otherwise the page is omitted from the locale's nav AND a redirect
-     ``"/<L>/<path>" -> "/<path>"`` is appended to the top-level
-     ``redirects`` array, so direct URL visits to the missing localized
-     page land on the English version instead of 404'ing.
+     ``"/docs/i18n/<L>/<path>" -> "/docs/en/<path>"`` is appended to the
+     top-level ``redirects`` array, so direct URL visits to the missing
+     localized page land on the English version instead of 404'ing.
 
 3. Empty groups and tabs (after pruning missing pages) are dropped from
    the locale's nav.
 
 The script is idempotent. On every run it strips any existing redirect
-whose source starts with ``/<locale>/`` (or equals ``/<locale>``) for
-any locale listed in ``LOCALE_CODES`` and rebuilds them deterministically;
-unrelated manual redirects (including the existing ``/en`` -> ``/`` rule
-for the legacy English path prefix) are preserved untouched.
+whose source starts with a known locale content prefix and rebuilds them
+deterministically; unrelated manual redirects are preserved untouched.
 
 Usage
 -----
@@ -54,6 +52,8 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCS_JSON = REPO_ROOT / "docs.json"
+EN_DOCS_PREFIX = "docs/en"
+I18N_DOCS_PREFIX = "docs/i18n"
 
 # Non-English locales that the sync script is responsible for. If you add a
 # new translation locale, add its code here AND make sure docs.json contains
@@ -94,21 +94,24 @@ def page_file_exists(slug: str) -> bool:
 # we reuse its label (the translator's work). Otherwise we fall back to the
 # English label.
 
-def _strip_locale_prefix(s: str, locale: str | None = None) -> str:
-    """Remove the leading "/<locale>/" or "<locale>/" from a path-like string.
+def _strip_content_prefix(s: str, locale: str | None = None) -> str:
+    """Remove the leading English or locale content prefix from a path-like string.
 
-    If ``locale`` is given, only that prefix is stripped; otherwise any of the
-    known LOCALE_CODES is tried. Always returns a path that starts at the
-    repo-root level (no leading slash).
+    If ``locale`` is given, only that locale prefix is stripped; otherwise any
+    known LOCALE_CODES prefix is tried. Always returns a path below the language
+    root, with no leading slash.
     """
     s = s.lstrip("/")
+    en_pfx = f"{EN_DOCS_PREFIX}/"
+    if s.startswith(en_pfx):
+        return s[len(en_pfx):]
     candidates = [locale] if locale else LOCALE_CODES
     for code in candidates:
         if not code:
             continue
-        pfx = f"{code}/"
-        if s.startswith(pfx):
-            return s[len(pfx):]
+        for pfx in (f"{I18N_DOCS_PREFIX}/{code}/", f"{code}/"):
+            if s.startswith(pfx):
+                return s[len(pfx):]
     return s
 
 
@@ -124,11 +127,11 @@ def _group_signature(group: dict, locale: str | None = None) -> str | None:
         src = (group.get("openapi") or {}).get("source", "")
         if not src:
             return None
-        return f"openapi:{_strip_locale_prefix(src, locale)}"
+        return f"openapi:{_strip_content_prefix(src, locale)}"
     pages = group.get("pages") or []
     for p in pages:
         if isinstance(p, str):
-            return f"page:{_strip_locale_prefix(p, locale)}"
+            return f"page:{_strip_content_prefix(p, locale)}"
         if isinstance(p, dict):
             inner = _group_signature(p, locale)
             if inner:
@@ -165,16 +168,14 @@ def localize_openapi(en_openapi: dict, locale: str) -> dict:
     """
     out = dict(en_openapi)
     src = en_openapi.get("source", "")
-    if src.startswith("/"):
-        # Replace leading "/" with "/<locale>/" only if not already locale-prefixed.
-        if not any(src.startswith(f"/{code}/") for code in LOCALE_CODES):
-            out["source"] = f"/{locale}{src}"
-    elif src and not any(src.startswith(f"{code}/") for code in LOCALE_CODES):
-        out["source"] = f"{locale}/{src}"
+    if src:
+        base = _strip_content_prefix(src)
+        out["source"] = f"/{I18N_DOCS_PREFIX}/{locale}/{base}" if src.startswith("/") else f"{I18N_DOCS_PREFIX}/{locale}/{base}"
 
     directory = en_openapi.get("directory", "")
-    if directory and not any(directory.startswith(f"{code}/") for code in LOCALE_CODES):
-        out["directory"] = f"{locale}/{directory}"
+    if directory:
+        base = _strip_content_prefix(directory)
+        out["directory"] = f"{I18N_DOCS_PREFIX}/{locale}/{base}"
 
     return out
 
@@ -229,7 +230,8 @@ def localize_pages(en_pages, locale_pages, locale, redirects):
     out: list = []
     for en_entry in en_pages:
         if isinstance(en_entry, str):
-            localized_slug = f"{locale}/{en_entry}"
+            base_slug = _strip_content_prefix(en_entry)
+            localized_slug = f"{I18N_DOCS_PREFIX}/{locale}/{base_slug}"
             if page_file_exists(localized_slug):
                 out.append(localized_slug)
             else:
@@ -289,11 +291,16 @@ def localize_tabs(en_tabs, locale_tabs, locale, redirects):
 
 
 def strip_locale_redirects(existing: list[dict]) -> list[dict]:
-    """Drop redirects whose source begins with /<known-locale>/ or equals /<known-locale>."""
+    """Drop redirects whose source begins with a known locale content prefix."""
     kept = []
     for r in existing:
         src = r.get("source", "")
-        if any(src == f"/{code}" or src.startswith(f"/{code}/") for code in LOCALE_CODES):
+        if any(
+            src == f"/{code}"
+            or src.startswith(f"/{code}/")
+            or src.startswith(f"/{I18N_DOCS_PREFIX}/{code}/")
+            for code in LOCALE_CODES
+        ):
             continue
         kept.append(r)
     return kept

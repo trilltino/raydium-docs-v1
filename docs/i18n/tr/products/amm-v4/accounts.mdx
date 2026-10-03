@@ -1,0 +1,257 @@
+---
+title: "AMM v4 hesapları"
+description: "Bir AMM v4 havuzunun tam hesap envanteri — AmmInfo, TargetOrders, OpenOrders, vault'lar, LP mint, authority — ve havuzun bağlı olduğu OpenBook hesapları."
+---
+
+<Info>
+  **Bu sayfa yapay zekâ tarafından otomatik olarak çevrilmiştir. İngilizce sürüm esas alınır.**
+
+  [İngilizce sürümü görüntüle →](/docs/en/products/amm-v4/accounts)
+</Info>
+
+<Info>
+  2026-07 güncellemesi itibarıyla, AMM v4'ün OpenBook / Serum bağımlılığı **kaldırılmıştır** — hiçbir instruction artık OpenBook durumunu okumaz veya yazmaz. Aşağıdaki market hesapları yalnızca eski v1 instruction düzenlerinde konumsal yer tutucu olarak (kabul edilir ancak yoksayılır) ve `AmmInfo` üzerinde referans alanları olarak tutulur. V2 swap giriş noktalarını kullanın; bunlar bu hesapları tamamen atlar. Bu sayfa, eski işlemleri okumak için hesapları "havuz tarafından sahip olunan" ve "OpenBook (eski)" bölümlerine ayırır.
+</Info>
+
+## Envanter
+
+Bir AMM v4 havuzu, oluşturulduğunda `AmmInfo` üzerinde bir bağlı market kaydeder. Tam resim:
+
+| Kategori | Hesap | Sahibi | Rol |
+|----------|-------|--------|-----|
+| Havuz | `AmmInfo` | AMM v4 programı | Havuz durumu: tahakkuk eden ücretler, durum, vault'lara referanslar (ve eski alanlar olarak market). |
+| Havuz | `amm_authority` | AMM v4 programı | Program tarafından sahip olunan PDA, vault hareketlerini imzalar. Tüm AMM v4 havuzları arasında paylaşılır. |
+| Havuz | `amm_open_orders` | OpenBook | Eski `OpenOrders` referansı. Mevcut program bunu hiçbir zaman oluşturmaz veya okumaz; her yeni havuzda `AmmInfo.open_orders = Pubkey::default()` yazar. Yalnızca OpenBook kaldırılmasından önce oluşturulan havuzlar gerçek bir değer taşır. v1 düzenlerinde hâlâ konumsal olarak geçirilir. |
+| Havuz | `amm_target_orders` | AMM v4 programı | Eski target-orders hesabı. `WithdrawPnl` tarafından hala referans alınır (hesap #10 olarak) ancak grid oluşturulmaz. |
+| Havuz | `pool_coin_token_account` | SPL Token | Havuzun coin tarafı vault'u (`amm_authority`'nin ATA'sı). |
+| Havuz | `pool_pc_token_account` | SPL Token | Havuzun pc tarafı vault'u. |
+| Havuz | `lp_mint` | SPL Token | Fungible LP mint'i. |
+| Eski (OpenBook) | `serum_market` | OpenBook | Bağlı market. v1 düzenlerinde geçirilir ancak artık doğrulanmaz veya kullanılmaz. |
+| Eski | `serum_bids`, `serum_asks` | OpenBook | Alış/satış kuyrukları. Yoksayılır. |
+| Eski | `serum_event_queue` | OpenBook | Bekleyen olaylar. Yoksayılır. |
+| Eski | `serum_coin_vault`, `serum_pc_vault` | SPL Token | Market düzeyinde vault'lar. Yoksayılır. |
+| Eski | `serum_vault_signer` | OpenBook | Market düzeyinde PDA. Yoksayılır. |
+
+Not: "serum" ön eki, geriye dönük uyumluluk için AMM v4'ün IDL ve alan adlarında tutulur. Bu hesaplar OpenBook kaldırılmasından sonra artık işlevsel değildir.
+
+## `AmmInfo`
+
+Havuzun kök durum hesabı. Büyüktür (≈ 752 bayt) çünkü hem havuz hem de OpenBook referanslarını satır içinde taşır.
+
+```rust
+// programs/amm/src/state.rs (kısaltılmış; alan sırası / adları IDL'yi takip eder)
+pub struct AmmInfo {
+    pub status: u64,           // bitmask: swap/deposit/withdraw/crank etkin
+    pub nonce:  u64,           // amm_authority türetmek için kullanılan bump
+    pub order_num: u64,
+    pub depth: u64,
+    pub coin_decimals: u64,
+    pub pc_decimals:   u64,
+    pub state:         u64,    // iç durum makinesi
+    pub reset_flag:    u64,
+    pub min_size:      u64,
+    pub vol_max_cut_ratio: u64,
+    pub amount_wave: u64,
+    pub coin_lot_size: u64,    // eski (OpenBook lot boyutu); şimdi 0 olarak başlatılır
+    pub pc_lot_size:   u64,    // eski; şimdi 0 olarak başlatılır
+    pub min_price_multiplier: u64,
+    pub max_price_multiplier: u64,
+    pub sys_decimal_value: u64,
+
+    pub fees: Fees,            // işlem/protokol/fon ücret oranları
+    pub state_data: StateData,
+
+    // Havuz tarafından sahip olunan hesaplar:
+    pub coin_vault: Pubkey,
+    pub pc_vault:   Pubkey,
+    pub coin_vault_mint: Pubkey,
+    pub pc_vault_mint:   Pubkey,
+    pub lp_mint:  Pubkey,
+    pub open_orders: Pubkey,   // havuzun OpenBook'taki OpenOrders'ı
+    pub market: Pubkey,        // OpenBook market'i
+    pub market_program: Pubkey, // OpenBook program ID'si
+    pub target_orders: Pubkey,
+    pub padding1: [u64; 8],     // reserved — NOT withdraw_queue / lp_vault
+    pub amm_owner: Pubkey,      // admin (multisig)
+    pub lp_amount: u64,         // the pool's internal LP total; see the note below
+    pub client_order_id: u64,
+    pub recent_epoch: u64,
+    pub padding2: u64,
+}
+
+pub struct Fees {
+    pub min_separate_numerator:   u64,     // 5
+    pub min_separate_denominator: u64,     // 10_000
+    pub trade_fee_numerator:      u64,     // 25  → OpenBook entegrasyonu tarafından kullanılır
+    pub trade_fee_denominator:    u64,     // 10_000
+    pub pnl_numerator:            u64,     // 12  → protokolün swap ücretinin payı
+    pub pnl_denominator:          u64,     // 100 → yani 12/100 = ücretin %12'si, = hacmin %0.03'ü
+    pub swap_fee_numerator:       u64,     // 25  → %0.25 brüt swap ücreti
+    pub swap_fee_denominator:     u64,     // 10_000
+}
+
+pub struct StateData {
+    pub need_take_pnl_coin: u64,        // hala güncellenir — tahakkuk eden protokol ücreti (coin tarafı)
+    pub need_take_pnl_pc:   u64,        // hala güncellenir — tahakkuk eden protokol ücreti (pc tarafı)
+    pub total_pnl_pc:   u64,            // DEPRECATED — artık güncellenmez
+    pub total_pnl_coin: u64,            // DEPRECATED — artık güncellenmez
+    pub pool_open_time: u64,            // hala kullanılır — havuz açılış zaman damgası
+    pub padding: [u64; 2],              // ayrılmış
+    pub orderbook_to_init_time: u64,    // DEPRECATED — artık güncellenmez
+    pub swap_coin_in_amount: u128,      // DEPRECATED — hacim sayaçları donduruldu
+    pub swap_pc_out_amount:  u128,      // DEPRECATED
+    pub swap_acc_pc_fee:    u64,        // DEPRECATED
+    pub swap_pc_in_amount:  u128,       // DEPRECATED
+    pub swap_coin_out_amount: u128,     // DEPRECATED
+    pub swap_acc_coin_fee:  u64,        // DEPRECATED
+}
+```
+
+<Note>
+  Struct **düzeni değişmemiştir** (bayt uyumlu) bu nedenle mevcut deserializer'lar çalışmaya devam eder, ancak OpenBook kaldırılmasından sonra yukarıda `DEPRECATED` olarak işaretlenen alanlar **artık yazılmaz** — `swap_*` hacim sayaçları son değerlerinde dondurulur. Hacim analitikleri için bu alanlar yerine işlem günlüklerini kullanın. Yalnızca `need_take_pnl_*` ve `pool_open_time` aktif olarak korunur.
+</Note>
+
+Entegratör tarafından görülen alanlar:
+
+- **`coin_vault`**, **`pc_vault`** — havuzun SPL Token vault'ları. `coin`, Serum/OpenBook kuralına göre `token_0`'dır (taban), `pc` ise `token_1`'dir (alıntı).
+- **`coin_decimals`**, **`pc_decimals`** — mint'lerle eşleşir.
+- **`open_orders`**, **`target_orders`**, **`market`** — eski referans alanları. `AmmInfo` üzerinde hala mevcuttur ve v1 instruction düzenlerinde konumsal olarak hala geçirilir, ancak program artık bunları okumaz veya doğrulamaz. V2 swap giriş noktaları bunları atlar.
+- **`fees.swap_fee_numerator / swap_fee_denominator`** — birleştirilmiş işlem ücreti. Varsayılan `25 / 10_000 = 0.25%`.
+- **`status`** — işlemleri kapı açan tek bir numaralandırılmış `u64` durumudur, bitmask **değildir**. `param = 0` (`Status`) ile `SetParams` aracılığıyla admin tarafından ayarlanabilir. Aşağıdaki [Durum](#status) bölümüne bakın.
+- **`lp_amount`** — havuzun dahili LP toplamı. `lp_mint.supply` ile **eşit değildir**: tam olarak bir bütün LP token'ı (`10^coin_decimals` taban birimi) kadar daha yüksektir, çünkü bu miktar init sırasında sayılır ama hiçbir zaman mint'lenmez. Programdaki tüm orantısal matematik `lp_amount` kullanır; siz de onu kullanın.
+- **`amm_owner`** — oluşturma sırasında yaratıcıdan değil, programın hardcode edilmiş admin anahtarından yazılır.
+- **`state_data.need_take_pnl_*`** — brüt tahakkuk eden ücretler ile taranmış olanlar arasındaki delta. `TakePnl` bunları sıfırlar.
+
+## OpenBook bağlantısı
+
+<Note>
+  **Kaldırılmıştır.** OpenBook / Serum bağımlılığı programdan silinmiştir (2026-07 güncellemesi). Bu bölümde açıklanan hesaplar artık doğrulanmaz veya kullanılmaz. `AmmInfo` üzerinde referans alanları ve eski v1 instruction düzenlerinde konumsal yer tutucuları olarak kalırlar. **V2 swap giriş noktalarını** ([`SwapBaseInV2` / `SwapBaseOutV2`](/docs/i18n/tr/products/amm-v4/instructions)) kullanın; bunlar bu hesapları tamamen atlar.
+</Note>
+
+Eski **v1** `SwapBaseIn` / `SwapBaseOut`, `Deposit` veya `Withdraw` instruction'ını çağırdığınızda, hesap **sayısı** eski düzenle eşleşmelidir (market hesapları tarihsel konumlarını işgal eder), ancak **içerikleri artık kontrol edilmez** — bunlara karşı CPI verilmez. Yeni kod, bu hesapları hiç almayan V2 swap varyantlarını kullanmalıdır.
+
+```ts
+const market = ...;  // OpenBook market PublicKey
+
+// OpenBook'un market hesabında ortaya çıkardığı alanlar:
+const marketDecoded = OpenBookMarket.decode(marketAccountData);
+const {
+  bids:           serumBids,
+  asks:           serumAsks,
+  eventQueue:     serumEventQueue,
+  requestQueue:   serumRequestQueue,
+  baseVault:      serumCoinVault,
+  quoteVault:     serumPcVault,
+  vaultSignerNonce,
+} = marketDecoded;
+
+const serumVaultSigner = PublicKey.createProgramAddressSync(
+  [market.toBuffer(), u64ToBytes(vaultSignerNonce)],
+  OPENBOOK_PROGRAM_ID,
+);
+```
+
+AMM'nin `amm_open_orders`'ı, bu market'te havuzun limit-order durumunu tutan OpenBook tarafından sahip olunan bir hesaptır: aktif emirler, kapatılan bakiyeler, referrer'lar vb. `amm_target_orders` AMM tarafındandır: AMM'nin *amaçlanan* grid'ini (her order slot'u için fiyat/boyut) tutar, böylece program şu anda ne kadar yayınlandığını ucuza karşılaştırabilir ve farkı yerleştirebilir / iptal edebilir.
+
+## Authority PDA'ları
+
+Tüm AMM v4 programı için tam olarak bir `amm_authority` PDA vardır. Tohumu önemsizdir (`["amm authority"]`) ve bump'ı her `AmmInfo` üzerinde depolanır. Bu authority, tüm AMM v4 havuzları için tüm token hareketlerini imzalar.
+
+```ts
+const AMM_V4_PROGRAM_ID = new PublicKey(
+  "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+);
+const [ammAuthority] = PublicKey.findProgramAddressSync(
+  [Buffer.from("amm authority")],
+  AMM_V4_PROGRAM_ID,
+);
+```
+
+İkinci, havuz kapsamlı bir authority yoktur: bu tek PDA, programın imzaladığı her şeyi kapsar. Bump değeri mainnet'te `254`'tür ve her `AmmInfo` üzerinde `nonce` olarak yansıtılır; `WithdrawExcessLamports` bunu, söz konusu nonce hardcode edilmiş hâlde yeniden türetir.
+
+## Vault'lar
+
+Havuzun SPL Token vault'ları, `owner`'ı `amm_authority` olan standart token hesaplarıdır. ATA değil — adresleri, `Initialize2` sırasında `[AMM_V4_PROGRAM_ID, market, "coin_vault_associated_seed"]` ve `[AMM_V4_PROGRAM_ID, market, "pc_vault_associated_seed"]` tohumlarından türetilen PDA'lardır. Mint bir tohum değildir, `amm_id` de değildir. Adresler `AmmInfo` üzerinde depolanır; türetme tek seferlik bir merak konusudur.
+
+Token-2022 **desteklenmez**. Program, tüm vault hareketleri için SPL Token'ın program ID'sini hardcode eder. Bir AMM v4 havuzunu Token-2022 mint'ine bağlamaya çalışmak `Initialize2` sırasında `InvalidSplTokenProgram` ile başarısız olur.
+
+## LP mint
+
+`amm_authority`'nin authority'si olan klasik bir SPL Token mint'i. Toplam arz, havuzun LP sahipliğini izler; LP'yi yakma, her iki vault'tan orantılı olarak token'ları döndürür.
+
+Durum içinde bir ayna **vardır**: `AmmInfo.lp_amount`. Bu, mint'in arzına eşit değildir — tam olarak bir bütün LP token'ı (`10^coin_decimals` taban birimi) kadar daha yüksektir, çünkü bu miktar init sırasında sayılır ama hiçbir zaman mint'lenmez. Programdaki her orantısal hesaplama `lp_amount`'a böler; bu nedenle mint'in zincir üzerindeki arzı yerine bu alanı kullanın.
+
+## Durum
+
+`AmmInfo.status`, tek bir numaralandırılmış `u64` durumudur, bitmask **değildir**. Eşitlik için test edin — `status & 1` testi yapan bir istemci her canlı havuzu yanlış sınıflandırır, çünkü normal işlem durumu `6`'dır ve bu değerin 0. biti set edilmiştir.
+
+| Değer | `AmmStatus` | Swap | Yatırma | Çekme |
+|-------|-------------|------|---------|----------|
+| 0 | `Uninitialized` | hayır | hayır | hayır |
+| 1 | `Initialized` | evet | evet | evet |
+| 2 | `Disabled` | hayır | hayır | hayır |
+| 3 | `WithdrawOnly` | hayır | hayır | evet |
+| 4 | `LiquidityOnly` | hayır | evet | evet |
+| 5 | `OrderBookOnly` | hayır | evet | evet |
+| 6 | `SwapOnly` | evet | evet | evet |
+| 7 | `WaitingTrade` | evet, `pool_open_time` geçtikten sonra | evet | evet |
+
+`Initialize2`, `open_time` gelecekteyse `7`, aksi hâlde `6` yazar; `7` durumundaki bir havuz, `state_data.pool_open_time` anında veya sonrasındaki ilk swap'ta kendisini `6`'ya çevirir. `0..=7` aralığı dışındaki bir değer `AmmStatus::from_u64`'ün panik yapmasına neden olur.
+
+Raydium multisig'i durumu `param = 0` (`Status`) ile `SetParams` aracılığıyla ayarlar; yalnızca `1`–`7` değerleri kabul edilir. (`AdminCancelOrders` kaldırılmıştır.)
+
+## Gözlem / oracle
+
+**AMM v4'ün adanmış gözlem hesabı yoktur** ve OpenBook kaldırıldığından bu yana bundan türetilebilecek bir emir defteri durumu da yoktur. Program desteğiyle bir Raydium TWAP'ına ihtiyacınız varsa CPMM veya CLMM kullanın — her ikisi de bir `ObservationState` halka tamponu tutar. Aksi hâlde swap loglarını zincir dışında indeksleyin.
+
+## Bir havuzun hesaplarını sıfırdan türetme
+
+AMM v4'ün havuz hesapları, bağlı market üzerine anahtarlanmış düz PDA'lardır — tohumlanmış keypair'ler değil, çift başına PDA'lar da değil. Hepsi `AMM_V4_PROGRAM_ID` altında aynı üç tohumlu `[AMM_V4_PROGRAM_ID, market, <label>]` şeklini kullanır:
+
+| Hesap | `<label>` |
+|---------|-----------|
+| `amm_id` (`AmmInfo`) | `"amm_associated_seed"` |
+| `amm_target_orders` | `"target_associated_seed"` |
+| `lp_mint` | `"lp_mint_associated_seed"` |
+| `pool_coin_token_account` | `"coin_vault_associated_seed"` |
+| `pool_pc_token_account` | `"pc_vault_associated_seed"` |
+
+```ts
+const [ammId] = PublicKey.findProgramAddressSync(
+  [
+    AMM_V4_PROGRAM_ID.toBuffer(),
+    marketPubkey.toBuffer(),
+    Buffer.from("amm_associated_seed"),
+  ],
+  AMM_V4_PROGRAM_ID,
+);
+```
+
+Bağlı market tek değişken tohumdur; bu nedenle bir market tam olarak bir AMM v4 havuzuna karşılık gelir. SDK ve API bunları önceden hesaplar; `raydium-sdk-v2`'nin `Liquidity.getAssociatedPoolKeys` bölümüne bakın.
+
+Uygulamada, entegratörler havuzun tam hesap setini `GET https://api-v3.raydium.io/pools/info/ids?ids=<POOL_ID>` veya SDK'dan okurlar. El ile türetme nadiren gereklidir.
+
+## Yaşam döngüsü hızlı referansı
+
+| Olay | Oluşturulan Hesaplar | Yok Edilen Hesaplar |
+|-------|------------------|---------------------|
+| `Initialize2` | `amm_info`, `amm_target_orders`, her iki vault, `lp_mint` ve yaratıcının LP ATA'sı | — |
+| `Deposit` | — (kullanıcı LP ATA'sı oluşturabilir) | — |
+| `Withdraw` | — | — |
+| `SwapBaseIn` / `SwapBaseOut` (v1 / V2) | — (kullanıcı ATA'sı oluşturabilir) | — |
+| `WithdrawPnl` | — | — |
+
+Havuzlar ve hesapları süresiz olarak kalır. Likidite tamamen çekilse bile, `AmmInfo` kalır.
+
+## Nerede ne okuyacağınız
+
+- **Matematik ve ücret aritmetiği**: [`products/amm-v4/math`](/docs/i18n/tr/products/amm-v4/math).
+- **Ücret bölünmesi ve CPMM/CLMM ile nasıl karşılaştırıldığı**: [`products/amm-v4/fees`](/docs/i18n/tr/products/amm-v4/fees).
+- **Instruction hesap listeleri**: [`products/amm-v4/instructions`](/docs/i18n/tr/products/amm-v4/instructions).
+- **OpenBook hesap türetmesi**: OpenBook program kaynağı ([`github.com/openbook-dex/program`](https://github.com/openbook-dex/program)) — düzyazı dokümantasyon değil, bir Rust monorepo'su.
+
+Kaynaklar:
+
+- [Raydium AMM programı — `raydium-io/raydium-amm`](https://github.com/raydium-io/raydium-amm)
+- [`reference/program-addresses`](/docs/i18n/tr/reference/program-addresses) kanonik program ID'leri için
+- Karşı taraf hesapları için OpenBook / Serum protokolü

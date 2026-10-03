@@ -1,0 +1,55 @@
+---
+title: "AMM v4"
+description: "Sabit-ürün AMM. Başlangıçta OpenBook ile likiditeyi paylaşan hibrit bir tasarımdı; OpenBook bağımlılığı daha sonra programdan kaldırılmıştır."
+---
+
+<Info>
+  **Bu sayfa yapay zekâ tarafından otomatik olarak çevrilmiştir. İngilizce sürüm esas alınır.**
+
+  [İngilizce sürümü görüntüle →](/docs/en/products/amm-v4/index)
+</Info>
+
+<Warning>
+  **AMM v4'ün OpenBook / Serum bağımlılığı kaldırılmıştır (2026-07 program güncellemesi).** Tüm swaplar yalnızca AMM yolunda yürütülür. Order-book CPI'ları ve pazar yapıcılığı talimatları (`MonitorStep`, `MigrateToOpenBook`, `WithdrawSrm` vb.) **programdan kaldırılmıştır** ve çağrıldığında geri döner. v1 `SwapBaseIn` / `SwapBaseOut`, `Deposit` ve `Withdraw` talimatları geriye dönük uyumluluk için eski hesap düzenlerini korur — pazar hesapları hala konumsal olarak kabul edilir ancak **artık doğrulanmaz veya kullanılmaz**. Yeni entegrasyonlar `SwapBaseInV2` / `SwapBaseOutV2` giriş noktalarını kullanmalıdır. [2026-07-22 değişiklik günlüğü girişine](/docs/i18n/tr/reference/changelog/2026-07-22-amm-v4-openbook-removal) bakın.
+</Warning>
+
+## Nedir
+
+AMM v4, Raydium'un birinci nesil havuzudur. Sabit-ürün değişmezini (xy=k) korur. Havuz başlangıçta **hibrit AMM** olarak tasarlanmıştır: eğrinin yanı sıra, havuz likiditi order-book alıcılarına görünür olacak şekilde bağlı bir OpenBook pazarına Fibonacci aralıklı bir limit order ızgarası gönderirdi. **Bu OpenBook entegrasyonu daha sonra programdan kaldırılmıştır** (yukarıdaki uyarıya bakın); bugün AMM v4 saf bir sabit-ürün AMM'dir. Zincir üstü `AmmInfo` hesapları düzen uyumluluğu için `market` / `open_orders` referans alanlarını korur, ancak program artık bunları okumaz veya işlem yapmaz.
+
+Birçok eski çift için hala en yüksek likiditeye sahip ürün olmakla birlikte, **yeni havuzlar için artık önerilmez** — yeni dağıtımlar için [CPMM](/docs/i18n/tr/products/cpmm) bölümüne bakın.
+
+**Program ID:** [reference/program-addresses](/docs/i18n/tr/reference/program-addresses) bölümüne bakın.
+
+**Token-2022:** desteklenmez. AMM v4 havuzları yalnızca klasik SPL tokenlerini kabul eder.
+
+## Bölüm içeriği
+
+<CardGroup cols={2}>
+  <Card title="Genel Bakış" icon="circle-info" href="/docs/i18n/tr/products/amm-v4/overview">
+    Kavramsal model: AMM v4'ün sabit-ürün eğrisini OpenBook pazarına nasıl bağladığı ve tasarımın neden var olduğu.
+  </Card>
+  <Card title="Hesaplar" icon="database" href="/docs/i18n/tr/products/amm-v4/accounts">
+    AmmInfo, TargetOrders, OpenOrders, LP mint, token kasaları, pazar kasa imzalayıcısı. Tohumlar, alan düzenleri, değişmezler.
+  </Card>
+  <Card title="Matematik" icon="function" href="/docs/i18n/tr/products/amm-v4/math">
+    xy=k değişmezi, fiyat hesaplaması. Rezerv formülü artık yalnızca kasa tabanlıdır; OpenBook limit-order ızgarası matematiği tarihsel bağlam olarak korunur.
+  </Card>
+  <Card title="Talimatlar" icon="terminal" href="/docs/i18n/tr/products/amm-v4/instructions">
+    Initialize2, Deposit, Withdraw, SwapBaseIn / V2, SwapBaseOut / V2, SetParams, WithdrawPnl. (MonitorStep gibi order-book talimatları kaldırılmıştır.)
+  </Card>
+  <Card title="Ücretler" icon="percent" href="/docs/i18n/tr/products/amm-v4/fees">
+    LP ücreti, protokol ücreti, işlem ücreti bölünmesi. Order-book doldurmaları için tarihsel PnL işleme (emekli).
+  </Card>
+  <Card title="Kod örnekleri" icon="code" href="/docs/i18n/tr/products/amm-v4/code-demos">
+    TypeScript (raydium-sdk-v2) ve Rust CPI örnekleri deposit, withdraw ve swap için.
+  </Card>
+</CardGroup>
+
+## Ne zaman okumalısınız
+
+- Mevcut AMM v4 havuzlarını denetliyor veya bunlara karşı entegre ediyorsunuz.
+- V4 likiditeğini desteklemesi gereken bir yönlendirici oluşturuyorsunuz.
+- v4'ten CPMM'ye geçiş planlıyorsunuz — ayrıca [user-flows/migrate-amm-v4-to-cpmm](/docs/i18n/tr/user-flows/migrate-amm-v4-to-cpmm) bölümüne bakın.
+
+**Yeni** bir havuz oluşturuyorsanız, bunun yerine [CPMM](/docs/i18n/tr/products/cpmm) bölümünü okuyun.

@@ -1,0 +1,111 @@
+---
+title: "Taxas do AMM v4"
+description: "A taxa de negociação de 0,25%, sua divisão entre LP/protocolo, geração de PnL a partir de preenchimentos do OpenBook e como o admin coleta as taxas de protocolo acumuladas."
+---
+
+<Info>
+  **Esta página foi traduzida automaticamente por IA. A versão em inglês é a fonte oficial.**
+
+  [Ver versão em inglês →](/docs/en/products/amm-v4/fees)
+</Info>
+
+## O único nível publicado
+
+Diferentemente do CPMM e CLMM, o AMM v4 **não possui uma conta `AmmConfig`**. As taxas são armazenadas diretamente na struct `AmmInfo.fees` de cada pool e são fixas na criação do pool. Os padrões que cobrem essencialmente todos os pools AMM v4 ativos:
+
+| Campo on-chain | Padrão | Significado |
+|---|---|---|
+| `swap_fee_numerator / swap_fee_denominator` | `25 / 10_000` | **Taxa bruta de negociação em swaps pelo caminho AMM: 0,25% do volume de entrada.** |
+| `trade_fee_numerator / trade_fee_denominator` | `25 / 10_000` | Vestigial após a remoção do OpenBook (historicamente usado para precificação de ordens limitadas). Mesmo `0,25%` que `swap_fee` por padrão. |
+| `pnl_numerator / pnl_denominator` | `12 / 100` | **Participação do protocolo na taxa de swap: 12%** — ou seja, `0,25% × 12% = 0,03%` do volume. Acumula nos contadores `need_take_pnl_*`. |
+| `min_separate_numerator / min_separate_denominator` | `5 / 10_000` | Piso de precisão interna usado pela lógica de arredondamento da divisão de taxas. |
+
+Note que `pnl_numerator / pnl_denominator` é uma fração **da taxa de swap**, não do volume de negociação — uma leitura comum incorreta. A participação do LP é o complemento (`88%` da taxa = `0,22%` do volume) e é implícita; não há um numerador separado de "participação do LP".
+
+Um pequeno número de pools iniciais foi criado com numeradores diferentes; sempre leia `AmmInfo.fees` antes de citar.
+
+Não há **taxa de fundo** e **taxa de criador**: estas são invenções do CPMM/CLMM que não existiam no modelo de taxa original do AMM v4.
+
+## Como a divisão é calculada
+
+Em cada swap, o pool cobra a taxa bruta de negociação do valor de entrada e depois aloca:
+
+```
+gross_fee   = ceil(amount_in * swap_fee_numerator / swap_fee_denominator)        // 0.25% of amount_in
+pnl_portion = gross_fee * pnl_numerator / pnl_denominator                        // 12% of gross_fee
+lp_portion  = gross_fee − pnl_portion                                            // 88% of gross_fee
+```
+
+- `lp_portion` permanece no vault e contribui para o próximo `k`. Os LPs a capturam resgatando tokens LP posteriormente.
+- `pnl_portion` incrementa `AmmInfo.state_data.need_take_pnl_coin` ou `need_take_pnl_pc` dependendo de qual lado é a entrada do swap.
+
+O mesmo truque de preservação de invariante do CPMM: o valor de PnL fica fisicamente no vault, mas é subtraído das reservas usadas na curva, então `TakePnl` move tokens sem deslocar o preço.
+
+## PnL do OpenBook (histórico)
+
+<Note>
+  **Removido.** A integração do OpenBook foi removida do programa, portanto o *segundo* fluxo de PnL descrito nesta seção não é mais gerado. Os contadores `total_pnl_{coin,pc}` agora são campos descontinuados — carregam valores históricos congelados e nunca são atualizados. O caminho de taxa de protocolo de 0,03% (acima) não é afetado e ainda está ativo.
+</Note>
+
+Historicamente, o AMM v4 tinha um *segundo* fluxo de receita semelhante a taxa: quando suas ordens limitadas no OpenBook eram preenchidas, o pool podia estar no lado tomador do preenchimento e ganhar ou pagar o spread maker/taker do mercado. Esses eventos de PnL eram liquidados nos vaults do pool durante `MonitorStep` e o programa os creditava em `state_data.total_pnl_{coin,pc}` como contadores informativos.
+
+- Quando a grade postada do pool era calibrada corretamente em torno do preço da curva, os preenchimentos do OpenBook tendiam a ser **positivos em taxa** para o pool — o AMM estava efetivamente fazendo market-making no OpenBook e ganhando rebates de maker.
+- Quando o OpenBook pausava ou a fila de eventos se enchia, o pool podia ficar com ordens obsoletas que eram preenchidas a preços desfavoráveis, produzindo PnL negativo. Esse acoplamento operacional foi uma das motivações para se afastar do design híbrido.
+
+Esse PnL do OpenBook **não era** o mesmo que a taxa de protocolo de 0,03%. O PnL do OpenBook inflava as reservas do pool diretamente (beneficiando LPs + protocolo proporcionalmente à divisão de taxa), enquanto a taxa de protocolo de 0,03% era marcada especificamente para coleta pelo admin. Com o lado do OpenBook desativado, a única acumulação de taxa hoje é a de 0,25% em swaps AMM e sua divisão de 22/3.
+
+## Coleta
+
+O admin (multisig Raydium) chama `WithdrawPnl` para coletar `need_take_pnl_*` nas contas "proprietário de PnL" no nível do pool configuradas no `AmmConfig` do programa (um config diferente, com escopo de programa — não o AmmConfig estilo CPMM por pool). A coleta:
+
+1. Transfere `need_take_pnl_coin` / `need_take_pnl_pc` dos vaults do pool para o destino de PnL.
+2. Zera os contadores.
+
+Não há mais uma etapa de liquidação do OpenBook. Se o saldo do vault for insuficiente para cobrir o PnL acumulado, a instrução agora retorna `TakePnlError` diretamente. A operação não move a curva — os LPs não devem ver nenhuma mudança de preço em uma chamada `WithdrawPnl`. Note que o layout da conta `WithdrawPnl` mudou na atualização de 2026-07 (veja [instruções](/docs/i18n/pt/products/amm-v4/instructions#withdrawpnl-/-takepnl)).
+
+## Resgate de taxa de LP
+
+Não há instrução dedicada "coletar taxas de LP". As taxas de LP acumulam nos vaults e inflam `k` ao longo do tempo; os LPs as realizam queimando tokens LP via `Withdraw`. O valor de um token LP cresce monotonicamente conforme `(coin_reserve_effective, pc_reserve_effective)` crescem.
+
+## Visualização: para onde vai 1.000 USDC de volume
+
+Em um swap pesado em USDC de \$1.000 contra um pool com parâmetros padrão:
+
+```
+Gross trade fee (0.25%):   $2.50
+  LP share   (0.22%):       $2.20   → stays in pool, raises k
+  PnL share  (0.03%):       $0.30   → need_take_pnl_pc, swept by TakePnl
+Remainder sent to user:   $997.50   (minus curve-driven price impact)
+```
+
+Compare com CPMM `AmmConfig[0]` (nível de 0,25%, sem taxa de criador): LP recebe \$2,10, protocolo \$0,30, fundo \$0,10. O CPMM introduz a linha de fundo ao cortá-la do que seria a participação do LP no nível equivalente do AMM v4.
+
+## Tabela de comparação
+
+| | AMM v4 | CPMM `index=0` | CLMM `index=2` |
+|---|---|---|---|
+| Taxa de negociação | 0,25% | 0,25% | 0,25% |
+| LP | 0,22% | 0,21% | Varia por emissões |
+| Protocolo | 0,03% | 0,03% | Por nível |
+| Fundo | N/A | 0,01% | Por nível |
+| Criador (opcional) | N/A | 0 por padrão | N/A |
+| Onde as taxas ficam | Pool vault + need_take_pnl_* | Pool vault + protocol_fees_* + fund_fees_* | Global + por-tick + por-posição |
+
+Matriz completa em [`reference/fee-comparison`](/docs/i18n/pt/reference/fee-comparison).
+
+## Notas para integradores
+
+- **Cotação.** Busque `AmmInfo` via SDK ou `api-v3.raydium.io/pools/info/ids`. As reservas agora são apenas vault, então você pode cotar diretamente contra os saldos do vault — apenas lembre-se de subtrair `need_take_pnl_*` (PnL acumulado é mantido no vault mas excluído da curva).
+- **Parâmetros de taxa obsoletos.** Em princípio `SetParams` poderia mudar `swap_fee_numerator`, mas na prática o multisig Raydium não mudou os padrões para nenhum pool ativo. Ainda assim, sempre leia do estado on-chain em vez de codificar.
+- **Sem recompensas.** O AMM v4 não suporta emissões de recompensas no pool. Farms do ecossistema legado (Farm v3 / v5 / v6) são o equivalente da camada de staking — veja [`products/farm-staking`](/docs/i18n/pt/products/farm-staking).
+
+## Próximos passos
+
+- [`products/amm-v4/math`](/docs/i18n/pt/products/amm-v4/math) — a derivação da taxa de negociação dentro da curva.
+- [`products/amm-v4/instructions`](/docs/i18n/pt/products/amm-v4/instructions) — listas de contas `WithdrawPnl` / `SetParams`.
+- [`reference/fee-comparison`](/docs/i18n/pt/reference/fee-comparison) — matriz lado a lado.
+
+Fontes:
+
+- [Programa Raydium AMM — `raydium-io/raydium-amm`](https://github.com/raydium-io/raydium-amm)
+- Campos de numerador/denominador de taxa AMM v4 on-chain (verificados contra contas `AmmInfo` na mainnet).

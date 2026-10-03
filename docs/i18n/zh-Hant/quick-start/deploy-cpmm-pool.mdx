@@ -1,0 +1,152 @@
+---
+title: "部署 CPMM 池"
+description: "即插即用的 Node 指令碼，建立新的 CPMM 池。透過環境變數設定代幣和初始流動性金額。"
+---
+
+<Info>
+  **本頁內容由 AI 自動翻譯，所有內容以英文版本為準。**
+
+  [查看英文版 →](/docs/en/quick-start/deploy-cpmm-pool)
+</Info>
+
+<Info>
+  **這個指令碼的功能。** 為你指定的兩個代幣建立全新的 CPMM 池，選擇 0.25% 費用等級，以初始金額隱含的價格注入初始流動性，並列印新池的 ID 和交易簽名。
+</Info>
+
+## 設定
+
+確保你已閱讀 [快速開始先決條件](/docs/i18n/zh-Hant/quick-start)，並已安裝 `RPC_URL`、`KEYPAIR` 和相關依賴。
+
+你還需要 **用兩種代幣的初始金額為錢包注資**，加上足夠的 SOL 來支付一次性的池建立費用和帳戶租金（主網上總共約 0.19 SOL — 參見 [`reference/fee-comparison`](/docs/i18n/zh-Hant/reference/fee-comparison#creation-costs) 了解租金/費用明細，或 [`ray/protocol-fees`](/docs/i18n/zh-Hant/ray/protocol-fees#pool-creation-fees) 只查看費用）。
+
+**在 devnet 上執行。** 僅將 `cluster` 改為 `"devnet"` 還不夠。此指令碼固定了兩個不遵循 `cluster` 的具名匯入：`programId: CREATE_CPMM_POOL_PROGRAM` 和 `poolFeeAccount: CREATE_CPMM_POOL_FEE_ACC`，兩者都是主網常數。改為從 SDK 匯入 `DEVNET_PROGRAM_ID` 並使用 `DEVNET_PROGRAM_ID.CREATE_CPMM_POOL_PROGRAM` 和 `DEVNET_PROGRAM_ID.CREATE_CPMM_POOL_FEE_ACC` — 這與 [CLMM 指令碼](/docs/i18n/zh-Hant/quick-start/deploy-clmm-pool) 使用的模式相同。
+
+## 指令碼
+
+另存為 `create-cpmm.mjs`：
+
+```ts create-cpmm.mjs icon="js"
+import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import {
+  Raydium,
+  TxVersion,
+  CREATE_CPMM_POOL_PROGRAM,
+  CREATE_CPMM_POOL_FEE_ACC,
+} from "@raydium-io/raydium-sdk-v2";
+import BN from "bn.js";
+import fs from "node:fs";
+
+// ── Config from env ──────────────────────────────────────────────
+const RPC_URL  = process.env.RPC_URL  ?? "https://api.mainnet-beta.solana.com";
+const KEYPAIR  = process.env.KEYPAIR  ?? `${process.env.HOME}/.config/solana/id.json`;
+const MINT_A   = process.env.MINT_A;   // required, base58
+const MINT_B   = process.env.MINT_B;   // required, base58
+const AMOUNT_A = process.env.AMOUNT_A; // required, integer raw units
+const AMOUNT_B = process.env.AMOUNT_B; // required, integer raw units
+
+if (!MINT_A || !MINT_B || !AMOUNT_A || !AMOUNT_B) {
+  console.error("Set MINT_A, MINT_B, AMOUNT_A, AMOUNT_B env vars.");
+  process.exit(1);
+}
+
+// ── Setup ────────────────────────────────────────────────────────
+const connection = new Connection(RPC_URL, "confirmed");
+const owner = Keypair.fromSecretKey(
+  new Uint8Array(JSON.parse(fs.readFileSync(KEYPAIR, "utf8"))),
+);
+const raydium = await Raydium.load({
+  owner,
+  connection,
+  cluster: "mainnet",
+  disableFeatureCheck: true,
+  blockhashCommitment: "finalized",
+});
+
+// ── Pick the 0.25% fee tier ─────────────────────────────────────
+const feeConfigs = await raydium.api.getCpmmConfigs();
+const feeConfig  = feeConfigs.find((c) => c.index === 0);
+if (!feeConfig) throw new Error("0.25% fee tier not found in CPMM configs.");
+
+// ── Resolve mint metadata (Token-2022-aware) ────────────────────
+const mintA = await raydium.token.getTokenInfo(new PublicKey(MINT_A));
+const mintB = await raydium.token.getTokenInfo(new PublicKey(MINT_B));
+
+// ── Build and execute ───────────────────────────────────────────
+const { execute, extInfo } = await raydium.cpmm.createPool({
+  programId:       CREATE_CPMM_POOL_PROGRAM,
+  poolFeeAccount:  CREATE_CPMM_POOL_FEE_ACC,
+  mintA,
+  mintB,
+  mintAAmount:     new BN(AMOUNT_A),
+  mintBAmount:     new BN(AMOUNT_B),
+  startTime:       new BN(0), // open immediately
+  feeConfig,
+  associatedOnly:  false,
+  ownerInfo:       { useSOLBalance: true },
+  txVersion:       TxVersion.V0,
+  computeBudgetConfig: {
+    units: 600_000,
+    microLamports: 100_000,
+  },
+});
+
+const { txId } = await execute({ sendAndConfirm: true });
+
+console.log(`Pool ID:  ${extInfo.address.poolId.toBase58()}`);
+console.log(`LP mint:  ${extInfo.address.lpMint.toBase58()}`);
+console.log(`Vault A:  ${extInfo.address.vaultA.toBase58()}`);
+console.log(`Vault B:  ${extInfo.address.vaultB.toBase58()}`);
+console.log(`Tx:       https://solscan.io/tx/${txId}`);
+```
+
+## 執行
+
+範例：建立 SOL/USDC 池，初始金額為 1 SOL 和 160 USDC：
+
+```bash icon="terminal"
+export MINT_A="So11111111111111111111111111111111111111112"   # wSOL
+export MINT_B="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"   # USDC
+export AMOUNT_A="1000000000"   # 1 SOL (9 decimals)
+export AMOUNT_B="160000000"    # 160 USDC (6 decimals)
+
+node create-cpmm.mjs
+```
+
+預期輸出：
+
+```text
+Pool ID:  HgC5...3kXb
+LP mint:  4ZAS...9rkV
+Vault A:  J9Mu...mP2k
+Vault B:  AaJq...8wxx
+Tx:       https://solscan.io/tx/5dQ...
+```
+
+## 剛才發生了什麼
+
+1. **`getCpmmConfigs`** 從 `api-v3.raydium.io` 拉取即時費用等級列表，並選擇索引 0（0.25% 等級 — 參見 [`reference/fee-comparison`](/docs/i18n/zh-Hant/reference/fee-comparison) 了解完整集合）。
+2. **`getTokenInfo`** 解析每個代幣的元資料，包括擁有它的代幣程式。CPMM 接受 SPL Token 和 Token-2022 代幣；SDK 會自動路由。
+3. **`createPool`** 建立一筆交易，該交易會：
+   - 將代幣排序為規範順序，
+   - 推導池 PDA、金庫、LP 代幣和授權，
+   - 向 `CREATE_CPMM_POOL_FEE_ACC` 支付一次性 `create_pool_fee`，
+   - 如果缺少，建立呼叫者的 ATA，
+   - 用 `AMOUNT_A` 和 `AMOUNT_B` 注入金庫。
+4. **初始價格** 由初始金額比率設定：小數調整後 `price = AMOUNT_B / AMOUNT_A`。仔細選擇這個 — 機器人會在池開放後的幾秒內套利任何錯誤定價。
+5. **`startTime: new BN(0)`** 立即開放交易。若要在向公眾開放前暫存流動性，設定未來的 Unix 時間戳。
+
+## 常見錯誤
+
+- **`pool already exists`** — 此代幣對在此費用等級已存在池。建立前先查詢。
+- **`insufficient funds`** — 你的錢包沒有足夠的 `MINT_A`、`MINT_B` 或 SOL（用於建立池費用 + 租金）。
+- **`Token-2022 extension not supported`** — 你的其中一個代幣使用 CPMM 不接受的擴展。參見 [`reference/token-2022-support`](/docs/i18n/zh-Hant/reference/token-2022-support)。
+
+## 部署後
+
+你可以立即針對新池進行交換 — [從 CLI 交換](/docs/i18n/zh-Hant/quick-start/swap-from-cli) 指令碼直接接受你的新 `POOL_ID`。聚合器（Jupiter 等）將在幾分鐘內索引新池。
+
+## 下一步
+
+- [`products/cpmm/overview`](/docs/i18n/zh-Hant/products/cpmm/overview) — CPMM 是什麼以及何時選擇它。
+- [`user-flows/create-cpmm-pool`](/docs/i18n/zh-Hant/user-flows/create-cpmm-pool) — 相同流程，帶有螢幕截圖，透過 Raydium UI。
+- [`user-flows/choosing-a-pool-type`](/docs/i18n/zh-Hant/user-flows/choosing-a-pool-type) — 你應該改用 CLMM 嗎？

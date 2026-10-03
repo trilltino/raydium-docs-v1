@@ -1,0 +1,224 @@
+---
+title: "Stable AMM hesapları"
+description: "AmmInfo, ModelDataInfo, DataElement, Fees ve vault düzeni. Bir Stable AMM havuzunun (bağımsız, saf-AMM Raydium programı) tam hesap envanteri."
+---
+
+<Info>
+  **Bu sayfa yapay zekâ tarafından otomatik olarak çevrilmiştir. İngilizce sürüm esas alınır.**
+
+  [İngilizce sürümü görüntüle →](/docs/en/products/stable/accounts)
+</Info>
+
+<Info>
+  Stable AMM kendi programıdır; havuz tarafı hesap yapısı AMM v4'e benzer (AmmInfo, vault'lar, yetki), ve ayrıca arama tablosunu depolayan bir `ModelDataInfo` hesabına sahiptir. Bu sayfa her ikisini de kapsar.
+</Info>
+
+## Envanter
+
+<Note>
+  **Saf AMM.** Stable AMM tüm likiditeyi kendi vault'larında tutar ve OpenBook'a bağlı değildir. Yaşamının erken döneminde bir OpenBook pazar yapıcılığı yolu taşıyordu, ancak bu yol yıllardır hareketsiz kalmıştır ve [2026-06-22 yükseltmesi](/docs/i18n/tr/reference/changelog) kalan kodu kaldırmıştır. Aşağıdaki `serum_*` pazar hesapları ve `amm_open_orders` bu nedenle **eski**: geriye dönük uyumluluk için eski düzen işlemlerinde hala görünebilirler, ancak program bunları doğrulamaz veya okumaz ve yeni düzen talimatları bunları tamamen çıkarır.
+</Note>
+
+Aktif envanter artık tamamen havuz tarafıdır:
+
+| Kategori | Hesap | Sahibi | Rol |
+|----------|---------|-------|------|
+| Havuz | `AmmInfo` | Stable programı | Havuz durumu, vault'lar ve model-veri hesabına referanslar. |
+| Havuz | `amm_authority` | Stable programı | Vault hareketlerini imzalayan programa ait PDA. Tüm Stable AMM havuzları arasında paylaşılır. |
+| Havuz | `amm_target_orders` | Stable programı | Havuz tarafı ızgara hesabı (düzenlerde tutulur; artık OpenBook siparişlerini yönlendirmez). |
+| Havuz | `pool_coin_token_account` | SPL Token | Havuzun coin tarafı vault'u. |
+| Havuz | `pool_pc_token_account` | SPL Token | Havuzun pc tarafı vault'u. |
+| Havuz | `lp_mint` | SPL Token | Fungible LP mint'i. |
+| Model | **`model_data_account`** | Stable programı | **Arama tablosu: 50.000 × DataElement.** |
+| Eski | `amm_open_orders` | OpenBook | Havuzun eski OpenBook `OpenOrders` hesabı. **Kullanılmıyor.** |
+| Eski | `serum_market` | OpenBook | OpenBook pazarı. **Kullanılmıyor.** |
+| Eski | `serum_bids`, `serum_asks` | OpenBook | Alış/satış kuyrukları. **Kullanılmıyor.** |
+| Eski | `serum_event_queue` | OpenBook | Olay kuyruğu. **Kullanılmıyor.** |
+| Eski | `serum_coin_vault`, `serum_pc_vault` | SPL Token | OpenBook pazar düzeyi vault'ları. **Kullanılmıyor.** |
+| Eski | `serum_vault_signer` | OpenBook | Pazar düzeyi vault imzalayıcısı. **Kullanılmıyor.** |
+
+## `AmmInfo`
+
+Kök durum hesabı. Düzen AMM v4'e neredeyse özdeştir — havuz parametreleri, ondalıklar, ücretler, vault/mint referansları — bir ekleme ile: arama tablosuna işaret eden bir `model_data_key` alanı.
+
+```rust
+// raydium-stable/program/src/state.rs (kısaltılmış)
+pub struct AmmInfo {
+    pub account_type: u64,              // = 0 (AmmAccount)
+    pub status: u64,                    // bitmask: swap/deposit/withdraw/crank etkin
+    pub nonce: u64,                     // amm_authority için bump
+    pub order_num: u64,
+    pub depth: u64,
+    pub coin_decimals: u64,
+    pub pc_decimals: u64,
+    pub state: u64,                     // durum makinesi (IdleState, vb.)
+    pub reset_flag: u64,
+    pub min_size: u64,
+    pub vol_max_cut_ratio: u64,
+    pub amount_wave: u64,
+    pub coin_lot_size: u64,             // OpenBook'u yansıtır
+    pub pc_lot_size: u64,
+    pub min_price_multiplier: u64,
+    pub max_price_multiplier: u64,
+    pub sys_decimal_value: u64,
+    pub abort_trade_factor: u64,
+    pub price_tick_multiplier: u64,
+    pub price_tick: u64,
+    
+    pub fees: Fees,                     // aşağıya bakın
+    pub out_put: OutPutData,            // PnL, swap'lar, ceza tutarları
+    
+    pub coin_vault: Pubkey,
+    pub pc_vault: Pubkey,
+    pub coin_mint: Pubkey,
+    pub pc_mint: Pubkey,
+    pub lp_mint: Pubkey,
+    pub model_data_key: Pubkey,         // ← ARAMA TABLOSU
+    pub open_orders: Pubkey,            // eski: OpenBook OpenOrders (ayrıştırmadan sonra kullanılmıyor)
+    pub serum_market: Pubkey,           // eski: ayrıştırmadan sonra kullanılmıyor
+    pub serum_program: Pubkey,          // eski: ayrıştırmadan sonra kullanılmıyor
+    pub target_orders: Pubkey,
+    pub amm_admin: Pubkey,              // yönetici anahtarı
+    pub client_order_id: u64,
+    pub lp_amount: u64,                 // LP arzı
+    pub lp_net: u64,                    // LP değer metriği
+    pub padding: [u64; 61],
+}
+
+pub struct Fees {
+    pub min_separate_numerator: u64,
+    pub min_separate_denominator: u64,
+    pub trade_fee_numerator: u64,       // 0 (eski OpenBook alanı, kullanılmıyor)
+    pub trade_fee_denominator: u64,     // 10_000
+    pub pnl_numerator: u64,             // 12
+    pub pnl_denominator: u64,           // 100 → ücretin %12'si = hacmin %0,0024'ü
+    pub swap_fee_numerator: u64,        // 2
+    pub swap_fee_denominator: u64,      // 10_000 → %0,02
+}
+
+pub struct OutPutData {
+    pub need_take_pnl_coin: u64,        // tahakkuk eden protokol ücreti (coin)
+    pub need_take_pnl_pc: u64,          // tahakkuk eden protokol ücreti (pc)
+    pub total_pnl_pc: u64,
+    pub total_pnl_coin: u64,
+    pub pool_open_time: u64,
+    pub punish_pc_amount: u64,
+    pub punish_coin_amount: u64,
+    pub orderbook_to_init_time: u64,
+    pub swap_coin_in_amount: u128,
+    pub swap_pc_out_amount: u128,
+    pub swap_pc_in_amount: u128,
+    pub swap_coin_out_amount: u128,
+    pub swap_pc_fee: u64,
+    pub swap_coin_fee: u64,
+}
+```
+
+Entegratör tarafından karşılaşılan anahtar alanlar:
+
+- **`model_data_key`** — arama tablosunun adresi. Her talimata geçirilmelidir.
+- **`fees`** — AMM v4 ile özdeş *yapı*, farklı *değerler*: `swap_fee = 2 / 10_000` (%0,02), `pnl = 12 / 100`, `trade_fee = 0`. Bkz. [`products/stable/fees`](/docs/i18n/tr/products/stable/fees).
+- **`coin_vault`**, **`pc_vault`** — havuzların vault'ları.
+- **`status`** — swap/deposit/withdraw/crank'ı kontrol eden bitmask.
+- **`out_put.need_take_pnl_*`** — `WithdrawPnl` tarafından temizlenir.
+
+## `ModelDataInfo`
+
+Arama tablosu. Fiyat/miktar noktalarının büyük bir seyrek dizisi.
+
+```rust
+// raydium-stable/program/src/state.rs
+pub const ELEMENT_SIZE: usize = 50000;
+
+pub struct DataElement {
+    pub x: u64,         // tablo X (örn., coin miktarı)
+    pub y: u64,         // tablo Y (örn., pc miktarı)
+    pub price: u64,     // (x, y)'deki fiyat
+}
+
+pub struct ModelDataInfo {
+    pub account_type: u64,              // = 2 (ModleDataAccount)
+    pub status: u64,                    // Initialized veya Uninitialized
+    pub multiplier: u64,                // x, y için ölçek faktörü (örn., 10^6)
+    pub valid_data_count: u64,          // kaç eleman doldurulmuş
+    pub elements: [DataElement; 50000], // tablo kendisi
+}
+```
+
+**Yaşam döngüsü:**
+
+Bu tabloları oluşturan kurulum talimatları — `InitModelData` (hesabı oluşturdu) ve `UpdateModelData` (elemanları doldurdu, `valid_data_count` ayarladı) — **2026-06-22 yükseltmesinde kaldırıldı**. Mevcut havuzlardaki tablolar artık **sabitlenmiştir**. Çalışma zamanında, kalan çağrılabilir talimatlar hala bunları tüketir:
+
+- **Swap / deposit / withdraw**, `elements[0..valid_data_count]` içinde ikili arama ve enterpolasyon yapan arama işlevlerini çağırır.
+
+## `DataElement`
+
+Tablodaki atomik giriş. İkili aramanın çalışması için sıralanmış olmalıdır (x artan, y azalan, fiyat artan).
+
+```rust
+pub struct DataElement {
+    pub x: u64,         // X koordinatı (örn., token_a bakiyesi, çarpan tarafından ölçeklenmiş)
+    pub y: u64,         // Y koordinatı (örn., token_b bakiyesi, çarpan tarafından ölçeklenmiş)
+    pub price: u64,     // fiyat (ölçeklenmiş biçimde x/y, çarpan tarafından ölçeklenmiş)
+}
+```
+
+Tabloyu doldururken, yönetici bunları önceden ölçeklenmiş olarak belirtir. Program sıra düzenini zincir üzerinde doğrulamaz (hız için), bu nedenle yanlış sıralama yanlış tekliflere neden olur.
+
+## Yetki ve vault'lar
+
+AMM v4 ile aynı:
+
+- **`amm_authority`**, `["amm authority"]` tohumu ile türetilen tek bir programa geniş PDA'dır. Tüm havuz vault'larına sahiptir ve hareketlerini imzalar.
+- **Vault'lar**, sahibi `amm_authority` olan SPL Token hesaplarıdır, ATA değildir.
+
+Token-2022 **desteklenmez**.
+
+## Durum bitmask'ı
+
+AMM v4 ile özdeştir. Swap/deposit/withdraw/crank'ın etkin olup olmadığını kontrol eder.
+
+## Ücret ve PnL izlemesi
+
+`out_put` yapısı şunları izler:
+
+- **`need_take_pnl_coin`**, **`need_take_pnl_pc`** — tahakkuk eden ancak henüz temizlenmemiş protokol ücretleri. `WithdrawPnl` bunları çıkarır.
+- **`swap_coin_in_amount`**, `swap_pc_in_amount`, vb. — analitik sayaçları.
+
+**Havuz varlığı hesaplaması (ayrıştırmadan sonra).** Artık OpenBook açık siparişleri olarak hiçbir fon emanet edilmediğinden, havuzun toplam varlıkları artık tamamen vault'lardan hesaplanır:
+
+```
+Eski: toplam varlıklar = vault bakiyeleri + açık sipariş fonları (native_coin_total / native_pc_total) − bekleyen PnL (need_take_pnl)
+Yeni: toplam varlıklar = vault bakiyeleri − bekleyen PnL (need_take_pnl)
+```
+
+OpenOrders bakiyelerinden havuz değerini yeniden oluşturan indeksleyiciler ve alıntı kodu bu terimi bırakmalıdır.
+
+## Hesap boyutu
+
+**`ModelDataInfo` büyüktür** (~1,2 MB, 50.000 eleman × eleman başına 24 bayt olduğundan). Bu nedenle bir Stable havuzu oluşturmak açık kira ve hesap ön tahsisini gerektirir. Raydium SDK'sı ve araçları bunu şeffaf bir şekilde işler; entegratörler nadiren manuel olarak tahsis etmek zorunda kalırlar.
+
+## Hesapları sıfırdan türetme
+
+AMM v4 gibi, Stable AMM **tohumlanmış anahtarlar** kullanır (saf PDA'lar değil). Kanonik havuz kimliği şu şekilde türetilir:
+
+```
+ammId = createWithSeed(
+  owner: ammAuthority,
+  seed: marketPubkey.toBase58().slice(0, 32),
+  programId: STABLE_PROGRAM_ID,
+)
+```
+
+Vault'lar, LP mint'i, hedef siparişleri vb. için benzer şekilde. Uygulamada, önceden hesaplanmış adresleri getirmek için SDK veya API'yi kullanın.
+
+## Nerede ne okuyacağınız
+
+- **Talimat hesap listeleri**: [`products/stable/instructions`](/docs/i18n/tr/products/stable/instructions).
+- **Enterpolasyon tabloyu nasıl kullanır**: [`products/stable/math`](/docs/i18n/tr/products/stable/math).
+- **Ücret yapısı ve WithdrawPnl**: [`products/stable/fees`](/docs/i18n/tr/products/stable/fees).
+- **2026-06-22 OpenBook ayrıştırması**: [`reference/changelog`](/docs/i18n/tr/reference/changelog).
+
+Kaynaklar:
+
+- [`reference/program-addresses`](/docs/i18n/tr/reference/program-addresses)

@@ -1,0 +1,72 @@
+---
+title: "Phí tạo ra LaunchLab"
+description: "Cách phí tạo ra tích lũy trước khi hoàn tất và thông qua nhà tạo pool CPMM sau khi hoàn tất, riêng biệt với LP bị khóa do nền tảng sở hữu."
+---
+
+<Info>
+  **Trang này được dịch tự động bằng AI. Phiên bản tiếng Anh là bản chính thức.**
+
+  [Xem bản tiếng Anh →](/docs/en/products/launchlab/creator-fees)
+</Info>
+
+<Info>
+  Doanh thu tạo ra LaunchLab có thể đến từ hai bộ đếm phí: kho phí tạo ra đường cong liên kết trước khi hoàn tất và phí tạo ra CPMM sau khi hoàn tất. Trước bản nâng cấp 2026-08-17, `creator_scale` cũng tạo ra Khóa Phí LP do tạo ra sở hữu. Các lần di chuyển được thực hiện sau bản nâng cấp sẽ gán phần LP bị khóa đó cho nền tảng thay thế.
+</Info>
+
+## Trước di chuyển: tích lũy phí trực tiếp
+
+Trong khi token giao dịch trên đường cong liên kết, mỗi lần mua và bán có thể tính phí thành phần tạo ra. Nó tích lũy trong một kho phí tạo ra cho mỗi tạo ra, cho mỗi quote-mint.
+
+- Phí được tính bằng token quote.
+- `PlatformConfig.creator_fee_rate` đặt tỷ lệ.
+- Tạo ra có thể yêu cầu thông qua `ClaimCreatorFee` trước hoặc sau khi hoàn tất.
+- Hoàn tất dừng tích lũy đường cong liên kết mới nhưng không xóa số dư chưa yêu cầu.
+
+## Sau di chuyển: phí tạo ra CPMM
+
+Mỗi lần phát hành mới hoàn tất thành CPMM. `AmmConfig.creator_fee_rate` và `PoolState.creator_fee_on` của CPMM được chọn xác định xem phí tạo ra có tích lũy trên các swap CPMM hay không.
+
+Nhà tạo pool CPMM là:
+
+- tạo ra phát hành gốc khi `PlatformConfig.platform_cp_creator` là pubkey mặc định; hoặc
+- `platform_cp_creator` được cấu hình khác.
+
+CPMM creator được ghi lại sở hữu các bộ đếm phí tạo ra. Họ có thể sử dụng hướng dẫn bộ sưu tập được ký bởi tạo ra, và bất kỳ người trả tiền nào cũng có thể kích hoạt đường dẫn không cần phép bị ràng buộc đích trả cho các ATA chính tắc của tạo ra. Xem [`products/cpmm/fees`](/docs/i18n/vi/products/cpmm/fees).
+
+## LP bị khóa là quyền nền tảng riêng biệt
+
+Khi di chuyển CPMM, LaunchLab vẫn xác thực:
+
+```text
+platform_scale + creator_scale + burn_scale = 1_000_000
+```
+
+Trước bản nâng cấp 2026-08-17, LaunchLab đã khóa `creator_scale` riêng biệt và đúc Khóa Phí tương ứng cho tạo ra token. Đối với các lần di chuyển được thực hiện sau bản nâng cấp, nó kết hợp `platform_scale + creator_scale`. Nếu phần kết hợp khác không, chương trình LP-Lock tạo một NFT Khóa Phí cho `platform_nft_wallet`. Phần còn lại `burn_scale` bị đốt.
+
+Trường `creator_scale` được giữ lại do đó không phải là dòng doanh thu tạo ra cho các lần di chuyển được thực hiện theo chương trình được cập nhật. Nó góp phần vào số lượng LP bị khóa của nền tảng. Đối với các pool lịch sử, hãy đọc Khóa Phí thực tế và các bản ghi thanh khoản bị khóa thay vì suy luận quyền sở hữu từ quy tắc hiện tại.
+
+Các Khóa Phí được tạo bởi các lần di chuyển hoàn tất trước bản nâng cấp không được gán lại hoặc sửa đổi. Một lần phát hành được tạo trước bản nâng cấp nhưng di chuyển sau đó sử dụng phân phối do nền tảng sở hữu mới.
+
+## Đường dẫn yêu cầu
+
+| Doanh thu | Người hưởi lợi | Đường dẫn yêu cầu |
+|---|---|---|
+| Phí tạo ra đường cong liên kết | Tạo ra phát hành gốc | LaunchLab `ClaimCreatorFee` |
+| Phí tạo ra CPMM | CPMM `pool_creator` | Bộ sưu tập được ký bởi tạo ra CPMM hoặc không cần phép |
+| Phí giao dịch LP bị khóa, di chuyển trước bản nâng cấp | Chủ sở hữu hiện tại của Khóa Phí tạo ra hoặc nền tảng được tạo tại lần di chuyển đó | Luồng thu hoạch LP-Lock / Burn & Earn |
+| Phí giao dịch LP bị khóa, di chuyển được cập nhật | Chủ sở hữu hiện tại của Khóa Phí nền tảng | Luồng thu hoạch LP-Lock / Burn & Earn |
+
+## Danh sách kiểm tra tích hợp
+
+- Đọc `platform_cp_creator` để xác định người hưởi lợi phí tạo ra CPMM sau khi hoàn tất.
+- Đối với các lần di chuyển được cập nhật, không hiển thị `creator_scale` dưới dạng phần trăm Khóa Phí tạo ra. Đối với các lần di chuyển lịch sử, hãy đọc bản ghi Khóa Phí thực tế.
+- Theo dõi kho đường cong liên kết và các bộ đếm phí tạo ra CPMM riêng biệt.
+- Coi Khóa Phí nền tảng là quyền phí LP, không phải thông tin xác thực phí tạo ra CPMM.
+- Làm mới IDL được triển khai trước khi bật trình tạo di chuyển được cập nhật.
+
+## Con trỏ
+
+- [`products/launchlab/platform-config`](/docs/i18n/vi/products/launchlab/platform-config) — các trường tỷ lệ và tạo ra của bản ghi.
+- [`products/launchlab/tips-and-gotchas/lp-fee-distribution`](/docs/i18n/vi/products/launchlab/tips-and-gotchas/lp-fee-distribution) — phân chia LP chính xác.
+- [`products/cpmm/fees`](/docs/i18n/vi/products/cpmm/fees) — tích lũy và bộ sưu tập phí tạo ra CPMM.
+- [`user-flows/burn-and-earn`](/docs/i18n/vi/user-flows/burn-and-earn) — cơ chế Khóa Phí.

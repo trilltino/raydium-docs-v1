@@ -1,0 +1,161 @@
+---
+title: "CLMM APR Tahmini"
+description: "Raydium'un CLMM havuzlarında gösterdiği APR rakamlarını, bir pozisyon açmadan önce varsayımsal bir aralık için kendi APR'nizi nasıl tahmin edeceğinizi ve izleyen APR'yi yanıltıcı yapan sınır durumlarını öğrenin."
+---
+
+<Info>
+  **Bu sayfa yapay zekâ tarafından otomatik olarak çevrilmiştir. İngilizce sürüm esas alınır.**
+
+  [İngilizce sürümü görüntüle →](/docs/en/algorithms/clmm-apr)
+</Info>
+
+<Info>
+  Raydium arayüzünde bir CLMM havuzu için gösterilen **APR**, son 24 saat boyunca **aralıkta olan likidite**'nin gerçekleşen ücret APR'sidir ve bir yıla yayılır. Bu, **sizin pozisyonunuzun** kazanacağı APR değildir — bu, sizin aralığınıza, aralıkta geçirdiğiniz süreye ve ticaret penceresinde aktif olan likiditenin sizin payınıza bağlıdır.
+</Info>
+
+## Temel formül
+
+Bir CLMM havuzu için Raydium'da gösterilen günlük ücret APR'si şu şekilde hesaplanır:
+
+```
+apr_24h = (fees_24h / tvl_in_range_24h) · 365
+```
+
+Nerede:
+
+- `fees_24h` son 24 saat içinde tahakkuk eden LP tarafı swap ücretlerinin toplamıdır (USD cinsinden).
+- `tvl_in_range_24h`, zaman penceresinde **aralıkta olan** likiditenin zaman ağırlıklı ortalama USD değeridir.
+
+Payda CLMM APR'sini CPMM APR'sinden ayıran şeydir. CPMM her dolar her zaman katkı sağladığı için toplam havuz TVL'sini kullanır. CLMM sadece aralıkta olan alt kümesini kullanır, çünkü aralık dışındaki dolarlar hiçbir şey kazanmaz.
+
+## Sizin APR'niz gerçekte ne olacak
+
+Başlık APR'si havuzun bir istatistiğidir, pozisyonunuzun değil. Sizin APR'niz dört çarpana bağlıdır:
+
+```
+your_APR = headline_APR
+         · (your_in_range_fraction / pool_in_range_fraction)     # yoğunluk bonusu
+         · time_in_range                                          # aralık disiplini
+         · (1 − transfer_fee_haircut)                             # token-2022 vergisi
+         · compounding_factor                                     # otomatik yeniden dağıtırsanız
+```
+
+- **Yoğunluk bonusu.** Aralığınız havuz geneli ortalamasından daha dar ise, her aktif tick'te ortalamanın kat kat daha fazla likiditeniz vardır. Daha dar = daha büyük bonus (ve orantılı olarak daha büyük IL amplifikasyonu).
+- **Aralıkta geçirilen zaman.** Sadece zamanın %40'ında aralıkta iseniz, 0.40 ile çarpın.
+- **Transfer ücreti kesintisi.** Transfer ücretleri içeren Token-2022 para birimleri için, her ücret tahsilatı kendisi bazis puanlarını kaybeden bir transfer aracılığıyla gerçekleşir.
+- **Bileşikleme.** Haftada bir `collectFee` yapıp aynı aralığa yeniden dağıtırsanız, etkin APR kabaca `(1 + daily_APR)^365 − 1`'dir. Bileşikleme olmadan doğrusaldır.
+
+### Çalışılmış örnek
+
+Diyelim ki bir SOL/USDC CLMM havuzunda:
+
+- 24s hacmi: \$120M
+- Ücret seviyesi: 0.05% (ücretlerin **84%**'ü LP payıdır — her mainnet CLMM `AmmConfig`'i `protocol_fee_rate = 12%` artı `fund_fee_rate = 4%` taşır)
+- Toplam TVL: \$40M
+- Aralıkta TVL: \$18M (havuzun %45'i şu anda aralıktadır)
+
+```
+fees_24h = 120M · 0.0005 · 0.84 = $50,400
+apr_24h  = (50,400 / 18,000,000) · 365 = 102%
+```
+
+Raydium arayüzü havuz için **102% APR** gösterir. (Bu örnek sayıları somut tutmak için derin, yüksek hacimli bir havuz kullanır; tipik CLMM havuzları %10 ile %50 arasında APR gösterir ve düşük hacimli havuzlar %10'un çok altındadır.)
+
+Şimdi bir pozisyon açmayı düşünüyorsunuz:
+
+- Sizin aralığınız: ortalamanın 2 katı yoğunluğu yapacak kadar dar.
+- Beklenen aralıkta kalma süresi: %70 (haftalık kontrol edeceksiniz).
+- Token-2022 ücreti yok. Otomatik bileşikleme yok.
+
+```
+your_APR ≈ 102% · 2 · 0.70 = 143%
+```
+
+Bu bir tahmin, bir garanti değil. Gerçekleşen hacim bir haftada yarıya veya iki katına çıkabilir.
+
+## İzleyen APR neden gecikmeli bir sinyal
+
+CLMM APR, CPMM APR'sine göre **hızlı** hareket eder, çünkü aralıkta olan TVL paydası hızlı hareket eder:
+
+- Büyük bir fiyat hareketı, pozisyonların kısmını aralık dışına iter ve paydayı küçültür. Aniden kalan aralıkta TVL'niz "daha yüksek APR" gibi görünür — ama sadece rakipler ayrıldığı için ve genellikle hacim de düştüğü için.
+- Bir havuz yeni ATH'ye ulaştığında, çoğu pozisyon daha düşük fiyatlar için kalibre edildiği ve sadece birkaç agresif LP aralıkta kaldığı için bir saat için geçici olarak 500–1000% APR gösterebilir.
+- Pazar sakinleştikten sonra LP'ler yeniden dengelenir ve APR ortalamaya dönüş yapıyor.
+
+Temel kurallar:
+
+- **24 saatin altındaki APR'yi yok sayın.** Çok fazla gürültü.
+- **7g ve 30g pencerelerini tercih edin.** Raydium ikisini de [`GET /pools/info/ids`](/docs/i18n/tr/sdk-api/rest-api) aracılığıyla sunar — alanlar `week.apr` ve `month.apr`.
+- **Anlamlı sermaye koyulmadan önce** belirli aralığınızı geçmiş hacim ve fiyat verilerine karşı geri test edin.
+
+## Matematik nasıl çalışıyor (tek-tick adımı)
+
+Tek bir tick içinde CLMM, o tick'te aktif olan likidite miktarı `L` üzerinde CPMM gibi davranır. Ücretler `fee_growth_global_X` ve `fee_growth_global_Y`'de likidite birimi başına tahakkuk eder. Tick aralıklarına `[i_lo, i_hi]` yayılan ve likidite `Lₚ` olan bir pozisyon için:
+
+```
+fees_earned_X = Lₚ · (fee_growth_inside_X(i_lo, i_hi, now) − fee_growth_inside_X(i_lo, i_hi, t_open))
+fees_earned_Y = Lₚ · (fee_growth_inside_Y(i_lo, i_hi, now) − fee_growth_inside_Y(i_lo, i_hi, t_open))
+```
+
+Burada `fee_growth_inside`, `i_lo` altındaki ve `i_hi` üstündeki ücret artışını küresel biriktirici'den çıkarır. Ayrıntılar [`algorithms/clmm-math`](/docs/i18n/tr/algorithms/clmm-math)'te.
+
+Prospektif bir aralık için gelecek bir dönem için *beklenen* ücretleri hesaplamak için şunu tahmin edin:
+
+```
+expected_fees_per_day = Σ_ticks_in_range (volume_at_tick · fee_rate · your_share_at_tick)
+```
+
+Raydium'un SDK'sı bu tahmin için `PoolUtils.estimateAprsForPriceRangeMultiplier` ve `PoolUtils.estimateAprsForPriceRangeDelta` fonksiyonlarını ortaya koyar.
+
+## SDK yardımcısı
+
+```ts
+import { Raydium, PoolUtils } from "@raydium-io/raydium-sdk-v2";
+
+const raydium = await Raydium.load({ owner, connection });
+// getPoolInfoFromRpc takes a positional base58 string on the CLMM module.
+const pool = await raydium.clmm.getPoolInfoFromRpc(POOL_ID);
+
+// Synchronous, and it reads the volume/fee stats off poolInfo[aprType].
+const apr = PoolUtils.estimateAprsForPriceRangeMultiplier({
+  poolInfo: pool.poolInfo,
+  aprType: "day",                 // "day" | "week" | "month"
+  positionTickLowerIndex: -100,   // sizin amaçlanan aralığınız
+  positionTickUpperIndex:  100,
+});
+
+console.log(`Expected APR: ${apr.feeApr}% fee-only; rewards: ${apr.rewardsApr.join(", ")}`);
+```
+
+Yardımcı `{ feeApr, rewardsApr[], apr }` döndürür — `rewardsApr` her ödül akışı için ayrı ayrı verilir, `apr` ise toplamdır. `raydium.clmm.estimatedApr` diye bir yöntem yoktur. `estimateAprsForPriceRangeDelta`, açık tick'ler yerine spot fiyat etrafında ± bir delta ile parametrelenmiş aynı hesaplamadır.
+
+## Farm APR nereye uyar
+
+Raydium CLMM havuzlarına Farm v6 emisyonları eklenebilir. Farm ödülleri swap ücretlerinden bağımsız bir **ödül mint**'inde (sık sık RAY veya ortak token) ödenir. Raydium arayüzü tipik olarak şunu gösterir:
+
+```
+Total APR = Fee APR + Farm APR [$X, Y, Z ödül mintleri'nde]
+```
+
+Farm APR benzer şekilde hesaplanır ancak ödül emisyon programı ve ödül mint'inin mevcut USD fiyatı kullanılarak. Ücret APR'sinden farklı olarak volatiliteye bağlı değildir — sabit bir programa sahiptir.
+
+Farm emisyon matematiği için [`products/farm-staking/overview`](/docs/i18n/tr/products/farm-staking/overview)'a bakın.
+
+## Yaygın hatalar
+
+- **"APR otomatik olarak bileşiklendirilir."** Hayır. Ücretler talep edilmelidir — CLMM'de bağımsız bir toplama komutu bulunmadığından sıfır likiditeli bir `DecreaseLiquidity` aracılığıyla — ardından manuel olarak yeniden dağıtılmalıdır. Raydium, CLMM ücretlerini otomatik olarak bileşiklendirmez.
+- **"Benim APR'im = başlık APR'si."** Yalnızca yoğunluğunuz ortalama, aralıkta kalma süreniz %100 ve aynı kadansla bileşiklendiriyorsanız. Üçü de genellikle yanlıştır.
+- **"Daha yüksek ücret katmanı = daha yüksek APR."** Yalnızca hacim daha yüksek ücrete dayanabilirse. %1'de bir çift %50 APR gösterebilir ancak hacmin 1/10'unu yapar; 120% × 0.1 = 12% ile net olarak 0.25%'te elde edilenden daha azdır.
+- **"Aralık dışı pozisyonların riski sıfırdır."** Ücret gelirleri sıfırdır ancak mevcut token bileşimi üzerinde tam IL taşırlar — pozisyon artık "hangi taraf kaldıysa onun %100'ü"dür.
+
+## İşaretçiler
+
+- [`algorithms/clmm-math`](/docs/i18n/tr/algorithms/clmm-math) — ücret artışı biriktirici'nin tam türetilmesi.
+- [`algorithms/impermanent-loss`](/docs/i18n/tr/algorithms/impermanent-loss) — LP denkleminin kayıp tarafı.
+- [`user-flows/choosing-a-pool-type`](/docs/i18n/tr/user-flows/choosing-a-pool-type) — bu APR tahminini kullanan karar çerçevesi.
+- [`sdk-api/rest-api`](/docs/i18n/tr/sdk-api/rest-api) — canlı hacim / APR uç noktaları.
+
+Kaynaklar:
+
+- Raydium SDK v2 `PoolUtils.estimateAprsForPriceRangeMultiplier` / `estimateAprsForPriceRangeDelta` uygulamaları.
+- Raydium arayüzü havuz sayfası (canlı APR alanları).
+- Uniswap V3 ücret artışı türetilmesi.

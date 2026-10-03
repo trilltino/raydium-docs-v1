@@ -1,0 +1,224 @@
+---
+title: "Stable AMM 계정"
+description: "AmmInfo, ModelDataInfo, DataElement, Fees, 그리고 vault 레이아웃. Stable AMM 풀(독립형 순수 AMM Raydium 프로그램)의 전체 계정 인벤토리."
+---
+
+<Info>
+  **이 페이지는 AI 자동 번역입니다. 모든 내용은 영문판을 기준으로 합니다.**
+
+  [영문판 보기 →](/docs/en/products/stable/accounts)
+</Info>
+
+<Info>
+  Stable AMM은 자체 프로그램이며, 풀 측 계정 구조는 AMM v4(AmmInfo, vault, authority)와 유사하고, 조회 테이블을 저장하는 `ModelDataInfo` 계정을 추가로 가지고 있습니다. 이 페이지는 둘 다 다룹니다.
+</Info>
+
+## 인벤토리
+
+<Note>
+  **순수 AMM.** Stable AMM은 모든 유동성을 자체 vault에 보유하며 OpenBook에 의존하지 않습니다. 초기에는 OpenBook 마켓 메이킹 경로를 가지고 있었지만, 그 경로는 수년간 휴면 상태였으며, [2026-06-22 업그레이드](/docs/i18n/ko/reference/changelog)에서 남은 코드를 제거했습니다. 따라서 아래의 `serum_*` 마켓 계정과 `amm_open_orders`는 **레거시**입니다. 하위 호환성을 위해 이전 레이아웃 트랜잭션에서 여전히 나타날 수 있지만, 프로그램은 이들을 검증하거나 읽지 않으며, 새 레이아웃 명령어는 이들을 완전히 생략합니다.
+</Note>
+
+활성 인벤토리는 이제 완전히 풀 측입니다:
+
+| 카테고리 | 계정 | 소유자 | 역할 |
+|----------|---------|-------|------|
+| Pool | `AmmInfo` | Stable 프로그램 | 풀 상태, vault 및 모델 데이터 계정에 대한 참조. |
+| Pool | `amm_authority` | Stable 프로그램 | vault 이동에 서명하는 프로그램 소유 PDA. 모든 Stable AMM 풀에서 공유됩니다. |
+| Pool | `amm_target_orders` | Stable 프로그램 | 풀 측 그리드 계정(레이아웃에 유지됨, 더 이상 OpenBook 주문을 구동하지 않음). |
+| Pool | `pool_coin_token_account` | SPL Token | 풀의 코인 측 vault. |
+| Pool | `pool_pc_token_account` | SPL Token | 풀의 pc 측 vault. |
+| Pool | `lp_mint` | SPL Token | 대체 가능한 LP 민트. |
+| Model | **`model_data_account`** | Stable 프로그램 | **조회 테이블: 50,000 × DataElement.** |
+| Legacy | `amm_open_orders` | OpenBook | 풀의 이전 OpenBook `OpenOrders` 계정. **사용되지 않음.** |
+| Legacy | `serum_market` | OpenBook | OpenBook 마켓. **사용되지 않음.** |
+| Legacy | `serum_bids`, `serum_asks` | OpenBook | 매수/매도 큐. **사용되지 않음.** |
+| Legacy | `serum_event_queue` | OpenBook | 이벤트 큐. **사용되지 않음.** |
+| Legacy | `serum_coin_vault`, `serum_pc_vault` | SPL Token | OpenBook 마켓 수준 vault. **사용되지 않음.** |
+| Legacy | `serum_vault_signer` | OpenBook | 마켓 수준 vault 서명자. **사용되지 않음.** |
+
+## `AmmInfo`
+
+루트 상태 계정. 레이아웃은 AMM v4와 거의 동일합니다 — 풀 파라미터, 소수점, 수수료, vault/민트 참조 — 한 가지 추가 사항이 있습니다: 조회 테이블을 가리키는 `model_data_key` 필드.
+
+```rust
+// raydium-stable/program/src/state.rs (abridged)
+pub struct AmmInfo {
+    pub account_type: u64,              // = 0 (AmmAccount)
+    pub status: u64,                    // bitmask: swap/deposit/withdraw/crank enabled
+    pub nonce: u64,                     // bump for amm_authority
+    pub order_num: u64,
+    pub depth: u64,
+    pub coin_decimals: u64,
+    pub pc_decimals: u64,
+    pub state: u64,                     // state machine (IdleState, etc.)
+    pub reset_flag: u64,
+    pub min_size: u64,
+    pub vol_max_cut_ratio: u64,
+    pub amount_wave: u64,
+    pub coin_lot_size: u64,             // mirrors OpenBook
+    pub pc_lot_size: u64,
+    pub min_price_multiplier: u64,
+    pub max_price_multiplier: u64,
+    pub sys_decimal_value: u64,
+    pub abort_trade_factor: u64,
+    pub price_tick_multiplier: u64,
+    pub price_tick: u64,
+    
+    pub fees: Fees,                     // see below
+    pub out_put: OutPutData,            // PnL, swaps, punish amounts
+    
+    pub coin_vault: Pubkey,
+    pub pc_vault: Pubkey,
+    pub coin_mint: Pubkey,
+    pub pc_mint: Pubkey,
+    pub lp_mint: Pubkey,
+    pub model_data_key: Pubkey,         // ← THE LOOKUP TABLE
+    pub open_orders: Pubkey,            // legacy: OpenBook OpenOrders (unused post-decoupling)
+    pub serum_market: Pubkey,           // legacy: unused post-decoupling
+    pub serum_program: Pubkey,          // legacy: unused post-decoupling
+    pub target_orders: Pubkey,
+    pub amm_admin: Pubkey,              // admin key
+    pub client_order_id: u64,
+    pub lp_amount: u64,                 // LP supply
+    pub lp_net: u64,                    // LP value metric
+    pub padding: [u64; 61],
+}
+
+pub struct Fees {
+    pub min_separate_numerator: u64,
+    pub min_separate_denominator: u64,
+    pub trade_fee_numerator: u64,       // 0 (legacy OpenBook field, unused)
+    pub trade_fee_denominator: u64,     // 10_000
+    pub pnl_numerator: u64,             // 12
+    pub pnl_denominator: u64,           // 100 → 12% of fee = 0.0024% of volume
+    pub swap_fee_numerator: u64,        // 2
+    pub swap_fee_denominator: u64,      // 10_000 → 0.02%
+}
+
+pub struct OutPutData {
+    pub need_take_pnl_coin: u64,        // accrued protocol fee (coin)
+    pub need_take_pnl_pc: u64,          // accrued protocol fee (pc)
+    pub total_pnl_pc: u64,
+    pub total_pnl_coin: u64,
+    pub pool_open_time: u64,
+    pub punish_pc_amount: u64,
+    pub punish_coin_amount: u64,
+    pub orderbook_to_init_time: u64,
+    pub swap_coin_in_amount: u128,
+    pub swap_pc_out_amount: u128,
+    pub swap_pc_in_amount: u128,
+    pub swap_coin_out_amount: u128,
+    pub swap_pc_fee: u64,
+    pub swap_coin_fee: u64,
+}
+```
+
+통합자 대면 주요 필드:
+
+- **`model_data_key`** — 조회 테이블의 주소. 모든 명령어에 전달되어야 합니다.
+- **`fees`** — AMM v4와 *구조*는 동일하지만 *값*이 다릅니다: `swap_fee = 2 / 10_000` (0.02%), `pnl = 12 / 100`, `trade_fee = 0`. [`products/stable/fees`](/docs/i18n/ko/products/stable/fees)를 참조하세요.
+- **`coin_vault`**, **`pc_vault`** — 풀의 vault.
+- **`status`** — swap/deposit/withdraw/crank를 제어하는 비트마스크.
+- **`out_put.need_take_pnl_*`** — `WithdrawPnl`에 의해 스윕됩니다.
+
+## `ModelDataInfo`
+
+조회 테이블. 가격/수량 포인트의 큰 희소 배열입니다.
+
+```rust
+// raydium-stable/program/src/state.rs
+pub const ELEMENT_SIZE: usize = 50000;
+
+pub struct DataElement {
+    pub x: u64,         // table X (e.g., coin amount)
+    pub y: u64,         // table Y (e.g., pc amount)
+    pub price: u64,     // price at (x, y)
+}
+
+pub struct ModelDataInfo {
+    pub account_type: u64,              // = 2 (ModleDataAccount)
+    pub status: u64,                    // Initialized or Uninitialized
+    pub multiplier: u64,                // scale factor for x, y (e.g., 10^6)
+    pub valid_data_count: u64,          // how many elements are populated
+    pub elements: [DataElement; 50000], // the table itself
+}
+```
+
+**생명주기:**
+
+이 테이블을 구축한 설정 명령어 — `InitModelData`(계정 생성) 및 `UpdateModelData`(요소 채우기, `valid_data_count` 설정) — 는 **2026-06-22 업그레이드에서 제거**되었습니다. 기존 풀의 테이블은 이제 **고정**되어 있습니다. 런타임에 남은 호출 가능한 명령어는 여전히 이들을 사용합니다:
+
+- **스왑 / 입금 / 출금**은 `elements[0..valid_data_count]` 내에서 이진 검색 및 보간하는 조회 함수를 호출합니다.
+
+## `DataElement`
+
+테이블의 원자 항목. 이진 검색이 작동하려면 정렬되어야 합니다(x 오름차순, y 내림차순, 가격 오름차순).
+
+```rust
+pub struct DataElement {
+    pub x: u64,         // X coordinate (e.g., token_a balance, scaled by multiplier)
+    pub y: u64,         // Y coordinate (e.g., token_b balance, scaled by multiplier)
+    pub price: u64,     // price (x/y in scaled form, scaled by multiplier)
+}
+```
+
+테이블을 채울 때 관리자는 이들을 미리 스케일된 상태로 지정합니다. 프로그램은 속도를 위해 온체인에서 정렬 순서를 검증하지 않으므로, 잘못된 정렬은 부정확한 견적을 초래합니다.
+
+## Authority 및 vault
+
+AMM v4와 동일합니다:
+
+- **`amm_authority`**는 시드 `["amm authority"]`로 파생된 단일 프로그램 전체 PDA입니다. 모든 풀 vault를 소유하고 이동에 서명합니다.
+- **Vault**는 소유자가 `amm_authority`인 SPL Token 계정이며, ATA가 아닙니다.
+
+Token-2022는 **지원되지 않습니다**.
+
+## 상태 비트마스크
+
+AMM v4와 동일합니다. swap/deposit/withdraw/crank 활성화 여부를 제어합니다.
+
+## 수수료 및 PnL 추적
+
+`out_put` 구조는 다음을 추적합니다:
+
+- **`need_take_pnl_coin`**, **`need_take_pnl_pc`** — 누적되었지만 아직 스윕되지 않은 프로토콜 수수료. `WithdrawPnl`이 이들을 이동합니다.
+- **`swap_coin_in_amount`**, `swap_pc_in_amount` 등 — 분석 카운터.
+
+**풀 자산 계산(분리 후).** OpenBook 오픈 주문으로 더 이상 자금이 에스크로우되지 않으므로, 풀의 총 자산은 이제 vault에서만 계산됩니다:
+
+```
+Old: total assets = vault balances + open-order funds (native_coin_total / native_pc_total) − pending PnL (need_take_pnl)
+New: total assets = vault balances − pending PnL (need_take_pnl)
+```
+
+OpenOrders 잔액에서 풀 가치를 재구성한 인덱서 및 견적 코드는 해당 항목을 제거해야 합니다.
+
+## 계정 크기
+
+**`ModelDataInfo`는 큽니다**(약 1.2 MB, 50,000개 요소 × 요소당 24바이트이므로). 이것이 Stable 풀을 생성할 때 명시적 렌트 및 계정 사전 할당이 필요한 이유입니다. Raydium SDK 및 도구는 이를 투명하게 처리합니다. 통합자는 거의 수동으로 할당할 필요가 없습니다.
+
+## 처음부터 계정 파생
+
+AMM v4와 마찬가지로 Stable AMM은 **시드 키**(순수 PDA가 아님)를 사용합니다. 정규 풀 ID는 다음을 통해 파생됩니다:
+
+```
+ammId = createWithSeed(
+  owner: ammAuthority,
+  seed: marketPubkey.toBase58().slice(0, 32),
+  programId: STABLE_PROGRAM_ID,
+)
+```
+
+vault, LP 민트, 대상 주문 등도 마찬가지입니다. 실제로는 SDK 또는 API를 사용하여 사전 계산된 주소를 가져옵니다.
+
+## 어디서 무엇을 읽을지
+
+- **명령어 계정 목록**: [`products/stable/instructions`](/docs/i18n/ko/products/stable/instructions).
+- **보간이 테이블을 사용하는 방법**: [`products/stable/math`](/docs/i18n/ko/products/stable/math).
+- **수수료 구조 및 WithdrawPnl**: [`products/stable/fees`](/docs/i18n/ko/products/stable/fees).
+- **2026-06-22 OpenBook 분리**: [`reference/changelog`](/docs/i18n/ko/reference/changelog).
+
+출처:
+
+- [`reference/program-addresses`](/docs/i18n/ko/reference/program-addresses)

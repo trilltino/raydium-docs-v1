@@ -1,0 +1,303 @@
+---
+title: "Launch a token (LaunchLab)"
+description: "End-to-end token launch through LaunchLab: curve choice, initial configuration, monitoring pre-graduation bonding-curve activity, and verifying the graduated CPMM pool."
+---
+
+<Info>
+  LaunchLab is Raydium's primary-market launch venue. A project deposits its token supply into a bonding curve; buyers trade against the curve using SOL (or another quote mint); when a graduation threshold is reached, the curve's assets migrate automatically to a CPMM pool, and the token becomes freely tradable. This page walks through the whole flow from the project's side.
+</Info>
+
+## What you need
+
+- **Token mint** — the token you want to sell. Must be freshly minted with:
+  - Full supply minted to your wallet (so you can deposit into the curve).
+  - Mint authority revoked before launch (otherwise the curve price can be gamed by new mints).
+- **Metadata** — name, symbol, image, social links. Metaplex metadata or similar.
+- **Wallet** — ~1 SOL for creation rent + vault funding + priority fees (graduation itself is paid by the graduator, not you).
+- **Decision on**:
+  - Curve type (quadratic vs virtual-reserves CPMM).
+  - Graduation threshold.
+  - LP disposal policy (Burn / Lock / ToCreator).
+  - Initial price and cap.
+
+## Curve choice
+
+LaunchLab supports two curve families:
+
+### Quadratic (`curve_type = 0`)
+
+Price grows quadratically with supply sold. Classic "fair launch" feel — early buyers get a price advantage, late buyers pay more, price accelerates smoothly.
+
+```
+price(s) = a * s^2 + b * s + c
+```
+
+where `s` is supply sold. Typically `a > 0` (convex). The spread between initial and graduation prices is deterministic given `a, b, c` and the cap.
+
+Best for: novelty launches, memes, community-driven projects.
+
+### Virtual-reserves CPMM (`curve_type = 1`)
+
+Emulates a constant-product AMM using *virtual* reserves — the curve behaves like a CPMM with `x * y = k` but the pool starts off seeded with synthetic tokens that are never withdrawn.
+
+```
+price = virtual_quote_reserve / virtual_base_reserve
+```
+
+As buyers purchase, `virtual_base_reserve` decreases and `virtual_quote_reserve` increases — the curve looks identical to what the post-graduation CPMM will look like. Smoother handoff.
+
+Best for: launches that want predictable post-graduation price continuity.
+
+## UI walkthrough
+
+On [raydium.io/launchpad/create](https://raydium.io/launchpad/create):
+
+1. **Token.** Paste mint address. UI fetches metadata and displays it.
+2. **Curve type.** Pick quadratic or virtual-CPMM; UI shows a price chart preview for each.
+3. **Graduation threshold.** Default: the curve ends after all of `total_base_supply` has been sold. Alternative: end at a specific `graduation_quote_amount` (e.g. 85 SOL).
+4. **Quote mint.** SOL (default), USDC, or any other mint. SOL is standard.
+5. **LP disposal policy:**
+   - **Burn** — LP tokens sent to an unusable address on graduation. Creator can't pull liquidity; users trust the pool forever.
+   - **Lock** — LP tokens sent to a time-locked escrow for `lock_duration`.
+   - **ToCreator** — LP tokens sent to the creator. Most flexible, least trust-minimizing.
+
+   Most respected launches use Burn.
+
+6. **Review.** UI summarizes: expected price range, initial raise if curve sells out, graduation CPMM configuration.
+7. **Sign.** One transaction creates the launch state + base vault + quote vault, transfers `total_base_supply` from your wallet to the base vault.
+
+## Programmatic walkthrough
+
+The curve shape, the quote mint, the raise target and the LP-disposal policy are **not** arguments — they come from the `GlobalConfig` you bind to and from the `PlatformConfig` your launch runs under. What you pass is the mint's identity, the config to bind, and optionally a first buy:
+
+```ts
+import {
+  Raydium,
+  TxVersion,
+  LAUNCHPAD_PROGRAM,
+  LaunchpadConfig,
+  getPdaLaunchpadConfigId,
+} from "@raydium-io/raydium-sdk-v2";
+import { Keypair, PublicKey } from "@solana/web3.js";
+import { NATIVE_MINT } from "@solana/spl-token";
+import BN from "bn.js";
+
+const raydium = await Raydium.load({ connection, owner, cluster: "mainnet" });
+const programId = LAUNCHPAD_PROGRAM;
+
+// You generate the base mint's keypair and sign with it.
+const pair  = Keypair.generate();
+const mintA = pair.publicKey;
+
+// Bind a config: (quote mint, curve_type, index). This is what fixes the curve
+// shape, the quote mint and the raise target.
+const configId   = getPdaLaunchpadConfigId(programId, NATIVE_MINT, 0, 0).publicKey;
+const configData = await raydium.connection.getAccountInfo(configId);
+const configInfo = LaunchpadConfig.decode(configData!.data);
+const mintBInfo  = await raydium.token.getTokenInfo(configInfo.mintB);
+
+const { execute, extInfo } = await raydium.launchpad.createLaunchpad({
+  programId,
+  mintA,
+  decimals: 6,
+  name:   "My New Token",
+  symbol: "MYNEW",                    // 10 characters or fewer
+  uri:    "https://example.com/metadata.json",
+  migrateType: "amm",                 // "amm" | "cpmm"
+
+  configId,
+  configInfo,
+  mintBDecimals: mintBInfo.decimals,
+  mintBProgram:  new PublicKey(mintBInfo.programId),
+
+  createOnly: true,                   // true = create the mint without a first buy
+  buyAmount:  new BN(1000),
+  slippage:   new BN(100),            // 100 = 1%
+
+  extraSigners: [pair],               // the base-mint keypair must sign
+  txVersion: TxVersion.V0,
+  computeBudgetConfig: { units: 400_000, microLamports: 50_000 },
+});
+
+// createLaunchpad returns several transactions - run them in order.
+const { txIds } = await execute({ sequentially: true });
+console.log("Pool ID:", extInfo.address.poolId.toBase58());
+console.log("Base mint:", mintA.toBase58());
+```
+
+`raydium.api.fetchLaunchConfigs()` lists the available configs with their default supply, sell amount and raise target, so you can show the user what a given config implies before they sign. Full annotated version, including the Token-2022 variant: [`products/launchlab/code-demos`](/docs/en/products/launchlab/code-demos#create-a-launch).
+
+## Pre-graduation monitoring
+
+Track activity via the API:
+
+LaunchLab has its own API hosts, separate from `api-v3.raydium.io`:
+
+```ts
+// Mint-level info, keyed by base mint (comma-separated for a batch).
+const r = await fetch(
+  `https://launch-mint-v1.raydium.io/get/by/mints?ids=${mintA.toBase58()}`,
+).then((r) => r.json());
+console.log(r.data.rows[0]);
+
+// Also available: /main/configs (config list) on the same host, and
+// https://launch-history-v1.raydium.io/kline and /trade for price and fills.
+```
+
+Or read the on-chain state directly. The pool id is a PDA of `(programId, mintA, mintB)`:
+
+```ts
+import { getPdaLaunchpadPoolId, Curve } from "@raydium-io/raydium-sdk-v2";
+
+const poolId = getPdaLaunchpadPoolId(programId, mintA, NATIVE_MINT).publicKey;
+const poolInfo = await raydium.launchpad.getRpcPoolInfo({ poolId });
+
+console.log({
+  status:      poolInfo.status,
+  baseSold:    poolInfo.realA.toString(),
+  totalSellA:  poolInfo.totalSellA.toString(),
+  quoteRaised: poolInfo.realB.toString(),
+  raiseTarget: poolInfo.totalFundRaisingB.toString(),
+});
+```
+
+Progress is best expressed in **price** terms rather than as a fraction of the raise, because the curve is non-linear. The demo repo's [`getFinishRate.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/getFinishRate.ts) does it with `Curve.getPrice`, `Curve.getPoolEndPriceReal` and `Curve.getPoolInitPriceByPool`:
+
+```
+finishRate = (currentPrice − initPrice) / (endPrice − initPrice)   // clamped to 1
+```
+
+### Metrics to watch
+
+- **Sell-through rate**: percentage of base sold. Graduation threshold is typically at 80–100% sold.
+- **Current price**: derived from the curve at the current `baseSold`.
+- **Unique buyers**: count of distinct payers via indexer.
+- **Buy-vs-sell ratio**: early launches see heavy buy pressure that slows.
+
+If sell-through is `<10%` after 24 hours, consider whether marketing is adequate. LaunchLab doesn't rescue under-hyped launches.
+
+## Graduation
+
+Graduation is a separate transaction, and it is **not** callable by anyone: `MigrateToCpswap` and the legacy `MigrateToAmm` each require their signer to match a wallet recorded on the binding `GlobalConfig` (`migrate_to_cpswap_wallet` / `migrate_to_amm_wallet`), and any other signer gets `InvalidOwner`. There is no bounty. Those wallets are run by Raydium's graduation crank, which lands the migration within seconds of the threshold being crossed. No action required from you as creator beyond the initial setup.
+
+### What graduation does
+
+1. Reads the vault balances.
+2. Closes the curve (no more buys/sells against it).
+3. Creates a new CPMM pool with the vault balances as initial liquidity.
+4. Mints initial LP tokens based on the vault balances.
+5. Disposes of the LP tokens per the configured policy (Burn / Lock / ToCreator).
+
+After graduation, the CPMM pool is live and trades through normal Raydium routing.
+
+### Monitoring for graduation
+
+Watch `status` on the pool state and switch your UI over when it changes:
+
+```ts
+const before = (await raydium.launchpad.getRpcPoolInfo({ poolId })).status;
+
+setInterval(async () => {
+  const p = await raydium.launchpad.getRpcPoolInfo({ poolId });
+  if (p.status !== before) console.log("migrated - switch to the CPMM pool page");
+}, 10_000);
+```
+
+The graduated pool's address is the CPMM PDA for `(cpswap config, token0, token1)`, so you can derive it rather than waiting for it to be reported. For an indexer, subscribe over gRPC instead of polling — see [`products/launchlab/code-demos`](/docs/en/products/launchlab/code-demos#watch-configs-and-pools-over-grpc).
+
+There is no "manual graduation" path for a creator or a third party. If a launch has crossed its threshold and has not migrated, that is an operational matter for the migration wallet, not something you can force from a client.
+
+## Post-graduation
+
+### Verify the CPMM pool
+
+```ts
+const pool = await raydium.cpmm.getPoolInfoFromRpc({ poolId: cpmmPoolId });
+console.log("CPMM price:", pool.poolInfo.price);
+console.log("CPMM TVL:  ", pool.poolInfo.tvl);
+```
+
+The CPMM pool should have (approximately):
+
+- Base token balance: `total_base_supply - baseSold` + curve remnant.
+- Quote token balance: `quoteRaised - graduationFee`.
+- Price: matches last curve price.
+
+### Verify LP disposal
+
+- **Burn**: LP mint's supply shows sent to 1nc1nerator11111111111111111111111111111111 or similar.
+- **Lock**: LP tokens in the escrow PDA with unlock timestamp.
+- **ToCreator**: LP tokens in the creator's wallet.
+
+### Collect creator fees
+
+If you configured a creator-fee share, call periodically:
+
+The builder is `claimCreatorFee`, and it is keyed by the **quote mint** rather than by a launch — one call sweeps your accrued creator fees in that mint:
+
+```ts
+import { NATIVE_MINT } from "@solana/spl-token";
+
+await raydium.launchpad.claimCreatorFee({
+  programId,
+  mintB: NATIVE_MINT,      // the quote mint to claim in
+  txVersion: TxVersion.V0,
+});
+```
+
+Use `claimMultipleCreatorFee` to batch across mints. Fees accrue from curve trades pre-graduation, and post-graduation from the CPMM pool's creator-fee path when the platform's `platform_cp_creator` leaves you as the recorded pool creator — see [`products/launchlab/platform-config`](/docs/en/products/launchlab/platform-config).
+
+## Announcement checklist
+
+Post-graduation announcement should include:
+
+- [ ] Graduation transaction hash.
+- [ ] New CPMM pool ID.
+- [ ] LP disposal proof (burn tx / lock tx / creator wallet).
+- [ ] Aggregator coverage ETA (wallets typically index within 5 minutes).
+- [ ] Token contract verification (match mint address across announcement channels).
+
+## Pitfalls
+
+### 1. Mint authority not revoked
+
+If `baseMint.mintAuthority` is still a key you control, you can mint new supply and sell into your own curve. Launches that haven't revoked are commonly flagged as high-risk or unverified by aggregators and listing sites. Revoke before launching.
+
+### 2. Wrong curve parameters
+
+Quadratic curves with `a` too high make early tokens free (price ≈ 0) and later tokens absurd. Curves with `a` too low make the curve almost linear (lose the "bonding" feel). Test parameters on devnet first.
+
+### 3. Graduation threshold too high
+
+If graduation requires more capital than realistic demand, the curve never graduates and buyers are stuck with tokens they can only sell back to the curve (at worse prices). Pick a threshold you can actually hit.
+
+### 4. Quote mint scams
+
+If your quote mint is a custom token (not SOL/USDC), users won't trust it. Stick to SOL or USDC for quote.
+
+### 5. Forgot to fund base vault
+
+The SDK transfers `totalBaseSupply` from your wallet on creation. If your wallet doesn't have it, the tx reverts. Confirm balance before signing.
+
+### 6. LP disposal = Burn is irreversible
+
+Once LP is sent to 1nc1nerator, nobody can pull liquidity, *including you*. This is the point — trust-minimization. Don't pick Burn if you're not sure.
+
+### 7. Post-graduation CPMM fee tier
+
+The graduated pool uses LaunchLab's default CPMM config (0.25%). If you wanted 1% or 0.01%, you need to create a second CPMM pool yourself post-graduation and migrate liquidity — clumsy, and fragmenting. Accept the default, or launch via direct CPMM creation instead of LaunchLab.
+
+## Pointers
+
+- [`products/launchlab/overview`](/docs/en/products/launchlab/overview) — LaunchLab concept and lifecycle.
+- [`products/launchlab/bonding-curve`](/docs/en/products/launchlab/bonding-curve) — curve math in detail.
+- [`products/launchlab/instructions`](/docs/en/products/launchlab/instructions) — full instruction reference.
+- [`products/launchlab/vesting`](/docs/en/products/launchlab/vesting) — vesting schedule mechanics.
+- [`algorithms/bonding-curves`](/docs/en/algorithms/bonding-curves) — general bonding-curve math.
+- [`user-flows/creating-a-launchlab-token`](/docs/en/user-flows/creating-a-launchlab-token) — UI walkthrough for token creators (JustSendit and LaunchLab modes).
+- [`user-flows/how-creator-fees-work`](/docs/en/user-flows/how-creator-fees-work) — pre- and post-migration creator fee overview.
+
+Sources:
+
+- Raydium SDK v2 `launchpad` module.
+- Launch status via `api-v3.raydium.io` endpoints.

@@ -1,0 +1,144 @@
+---
+title: "التدقيقات الأمنية"
+description: "سجل التدقيقات لكل برنامج Raydium — الشركة المدققة والنطاق والتاريخ ورابط التقرير — بالإضافة إلى تتبع حالة الإصلاحات والتعليقات على ما تغطيه التدقيقات وما لا تغطيه."
+---
+
+<Info>
+  **هذه الصفحة مُترجَمة آليًا بواسطة الذكاء الاصطناعي. النسخة الإنجليزية هي المرجع المعتمد.**
+
+  [عرض النسخة الإنجليزية →](/docs/en/security/audits)
+</Info>
+
+<Info>
+  تكتشف التدقيقات بعض فئات الأخطاء (أنماط الهجوم المعروفة، أخطاء التحكم في الوصول، تجاوز الأعداد الصحيحة) وتفتقد أخرى (عيوب التصميم الاقتصادي، التلاعب بنظرية اللعبة، أخطاء التكامل مع البرامج الأخرى). برامج Raydium تخضع لعدة جولات من التدقيقات؛ تسرد هذه الصفحة التدقيقات وتناقش ما تحققه كل تدقيق فعليًا.
+</Info>
+
+## جدول التدقيقات حسب البرنامج
+
+| البرنامج | المدقق | التاريخ | التقرير |
+|---------|--------|--------|--------|
+| Order-book AMM | [Kudelski Security](https://kudelskisecurity.com/) | Q2 2021 | [عرض](https://github.com/raydium-io/raydium-docs/blob/master/audit/Kudelski%20Q2%202021/Raydium_Audit.pdf) |
+| Concentrated liquidity (CLMM) | [OtterSec](https://osec.io/) | Q3 2022 | [عرض](https://github.com/raydium-io/raydium-docs/blob/master/audit/OtterSec%20Q3%202022/Raydium%20concentrated%20liquidity%20%28CLMM%29%20program.pdf) |
+| Updated order-book AMM | [OtterSec](https://osec.io/) | Q3 2022 | [عرض](https://github.com/raydium-io/raydium-docs/blob/master/audit/OtterSec%20Q3%202022/Raydium%20updated%20order-book%20AMM%20program.pdf) |
+| Staking | [OtterSec](https://osec.io/) | Q3 2022 | [عرض](https://github.com/raydium-io/raydium-docs/blob/master/audit/OtterSec%20Q3%202022/Raydium%20staking%20program.pdf) |
+| Order-book AMM & OpenBook migration | [MadShield, now OShield](https://www.oshield.io/) | Q2 2023 | [عرض](https://github.com/raydium-io/raydium-docs/blob/master/audit/MadSheild%20Q2%202023/Raydium%20updated%20orderbook%20AMM%20program%20%26%20OpenBook%20migration.pdf) |
+| Constant-product AMM (CPMM) | [MadShield, now OShield](https://www.oshield.io/) | Q1 2024 | [عرض](https://github.com/raydium-io/raydium-docs/blob/master/audit/MadShield%20Q1%202024/raydium-cp-swap-v-1.0.0.pdf) |
+| Burn & Earn (liquidity locker) | [Halborn](https://www.halborn.com/) | Q4 2024 | [عرض](https://github.com/raydium-io/raydium-docs/blob/master/audit/Halborn%20Q4%202024/raydium_liquidity_locking.pdf) |
+| LaunchLab | [Halborn](https://www.halborn.com/) | Q2 2025 | [عرض](https://github.com/raydium-io/raydium-docs/blob/master/audit/Halborn%20Q2%202025/raydium_launch.pdf) |
+| CPMM (update) | [Sec3](https://www.sec3.dev/) | Q3 2025 | [عرض](https://github.com/raydium-io/raydium-docs/blob/master/audit/Sec3%20Q3%202025/raydium_cp_swap_pr55.pdf) |
+| CLMM update — Limit Order, Dynamic Fee, Single Asset Fee | [Sec3](https://www.sec3.dev/) | Q2 2026 | [عرض](https://github.com/raydium-io/raydium-docs/blob/master/audit/Sec3%20Q2%202026/raydium_clmm_limitorder_dynamicfee.pdf) |
+
+تُودع التقارير باسم المدقق وقت المراجعة. **أعادت MadShield تسمية نفسها إلى OShield** (`madshield.xyz` يعيد التوجيه إلى `oshield.io`)، لذا فإن صفي MadShield أعلاه وموقع OShield هما نفس الشركة.
+
+قام أعضاء من فريق [Neodyme](https://neodyme.io/) أيضًا بإجراء مراجعات شاملة من خلال اتفاقيات برنامج الثغرات الأمنية.
+
+جميع تقارير التدقيق لبرامج Raydium مرآة تحت [`github.com/raydium-io/raydium-docs/audit/`](https://github.com/raydium-io/raydium-docs/tree/master/audit). ينشر كل مدقق أيضًا على موقعه الخاص.
+
+## ما تغطيه التدقيقات
+
+يغطي التدقيق النموذجي لـ Raydium (~3–6 أسابيع، مدققان):
+
+- **التحكم في الوصول** — هل تم حماية كل عملية مميزة بشكل صحيح؟
+- **العمليات الحسابية** — تجاوزات، نقصان، اتجاه التقريب، دقة النقطة الثابتة.
+- **التحقق من الحسابات** — هل لكل حساب المالك والـ mint والسلطة الصحيحة؟
+- **أنماط تشبه إعادة الدخول** — هل يتم تحديث الحالة قبل أم بعد CPI؟
+- **اشتقاق PDA** — هل البذور متسقة في جميع المواقع؟
+- **رموز الأخطاء والرسائل** — هل تعود شروط الخطأ بنظافة؟
+- **جودة الكود** — Rust الاصطلاحي، الكود الميت، الفروع التي لا يمكن الوصول إليها.
+
+## ما لا تغطيه التدقيقات
+
+- **نظرية اللعبة الاقتصادية** — على سبيل المثال، "إذا كان بإمكاني إنشاء 1000 مجموعة مجانًا، هل يمكنني إزعاج الموجه؟"
+- **MEV / الترتيب** — هجمات الساندويتش، الاستباق عبر تواطؤ المدقق.
+- **البنية التحتية خارج السلسلة** — موثوقية RPC، صحة الفهرس، الواجهة الأمامية.
+- **التكاملات مع البرامج الأخرى** — الأخطاء التي تظهر فقط عند التكوين مع عقود الإقراض أو الخيارات أو المجمعات المحددة.
+- **السلوكيات الناشئة بمرور الوقت** — ماذا يحدث بعد 10 ملايين موضع؟ تنظر التدقيقات إلى حالات الاختبار الصغيرة.
+
+هذا هو السبب في أن التدقيق ≠ ضمان الأمان. تكمل Raydium التدقيقات ببرامج الثغرات الأمنية والمراقبة والهندسة الدفاعية.
+
+## حالة حل النتائج
+
+ينتج عن كل تدقيق قائمة نتائج (حرجة / عالية / متوسطة / منخفضة / معلوماتية)، مع عدد الخطورة وحالة كل نتيجة (مصححة / معترف بها / لن يتم الإصلاح). لا يتم تكرار تفاصيل كل نتيجة هنا — اقرأ كل تقرير مباشرة عبر الجدول أعلاه.
+
+## إعادة التدقيق بعد التغييرات الكبيرة
+
+عندما يطلق برنامج ترقية كبيرة (تعليمة جديدة، حقل حساب جديد، دعم امتداد جديد)، تكلف Raydium إعادة تدقيق. مراجعة Sec3 Q3 2025 لـ CPMM ومراجعة Sec3 Q2 2026 لـ CLMM (Limit Order, Dynamic Fee, Single Asset Fee) المدرجة في الجدول أعلاه هما إعادة تدقيق من هذا النوع.
+
+نطاق إعادة التدقيق أضيق (فقط الفرق)، لكنها تدقيق حقيقي — وليس مجرد مراجعة كود. يتم إلحاق التقارير الخاصة بإعادة التدقيق بتقرير التدقيق الأساسي.
+
+## التحقق على السلسلة
+
+يجب أن يطابق بصمة البرنامج المنشور بصمة الكود المدقق. يمكن لأي شخص التحقق:
+
+```bash
+# Pull the deployed program bytecode.
+solana program dump <PROGRAM_ID> program.so
+
+# Build the repo at the audited commit.
+git clone https://github.com/raydium-io/raydium-cp-swap
+cd raydium-cp-swap
+git checkout <audited_commit_hash>
+anchor build --verifiable
+
+# Compare.
+sha256sum program.so target/deploy/raydium_cp_swap.so
+```
+
+تنتج عمليات بناء Anchor القابلة للتحقق من الصحة بايتكود حتمي؛ يجب أن تطابق البصمات بالضبط. إذا لم تطابق، فإن البرنامج المنشور ليس البرنامج المدقق — قم بالتصعيد.
+
+تنشر Raydium البصمات المتوقعة لكل نشر في قسم إصدارات المستودع.
+
+## كيفية قراءة تقرير التدقيق
+
+دليل قصير للمدققين غير المتخصصين:
+
+1. **انتقل إلى ملخص النتائج** — جدول عدد الخطورة. إذا كان عدد "الحرجة" > 0 ورأيت حالة "مفتوحة"، فابحث بعمق.
+2. **اقرأ وصف كل نتيجة وحالتها.** "مصححة في الالتزام XYZ" تعني تم حلها؛ "معترف بها" تعني أن الفريق قبل المخاطرة؛ "مصححة جزئيًا" تستحق نظرة أقرب.
+3. **امسح قسم النطاق.** إذا لم يغطِ التدقيق التعليمة أو الحساب الذي تهتم به، فإن غياب النتائج هناك ليس دليلاً على الأمان.
+4. **اقرأ بسرعة قسم توصيات المدقق.** غالبًا ما يكون أكثر فائدة من النتائج — يسلط الضوء على ملاحظات "لم نتمكن من إثبات هذا رسميًا لكننا قلقون".
+
+## تكامل برنامج الثغرات الأمنية
+
+تعمل التدقيقات قبل النشر؛ تعمل برامج الثغرات الأمنية بشكل مستمر بعد النشر. يغطي برنامج Raydium للثغرات الأمنية ([`security/disclosure`](/docs/i18n/ar/security/disclosure)) كل ما تغطيه التدقيقات بالإضافة إلى:
+
+- الهجمات الاقتصادية التي لا تغطيها التدقيقات.
+- الأخطاء الموجودة في التكاملات الجديدة.
+- أخطاء التنفيذ في SDKs والمكونات خارج السلسلة.
+
+عادة ما يتم دفع نتيجة whitehat في برنامج الثغرات الأمنية بشكل أسرع من انتظار دورة التدقيق التالية؛ الحوافز متوافقة للكشف السريع. البرنامج النشط مستضاف على Immunefi: [immunefi.com/bug-bounty/raydium/information](https://immunefi.com/bug-bounty/raydium/information/).
+
+## الحوادث التاريخية
+
+شهدت برامج Raydium حادثتين بارزتين في العالم الحقيقي:
+
+### استغلال سلطة المجموعة (ديسمبر 2022)
+
+**ما:** تم اختراق مفتاح خاص لسلطة مجموعة AMM v4، مما سمح للمهاجم بتصريف عدة مجموعات.
+
+**النطاق:** إدارة المفاتيح التشغيلية، وليس خطأ برنامج. لم يكن التدقيق قد أشار إلى الكود لأن الكود كان صحيحًا؛ كانت عملية إدارة المفاتيح هي الفشل.
+
+**الإصلاح:** هجرة Multisig (تم نقل جميع أدوار السلطة إلى Squads multisig)؛ ضوابط تشغيلية إضافية.
+
+**الدرس:** التدقيقات لا تغطي إدارة المفاتيح. انظر [`security/admin-and-multisig`](/docs/i18n/ar/security/admin-and-multisig).
+
+### تجميد تكامل OpenBook (يناير 2023)
+
+**ما:** تحديث برنامج OpenBook غيّر دلالات الحساب؛ لم تتمكن crank MonitorStep الخاصة بـ AMM v4 من تسوية PnL حتى شحن تصحيح AMM v4.
+
+**النطاق:** خطأ تكامل — لم يكن أي برنامج خاطئًا بمعزل عن الآخر.
+
+**الإصلاح:** تصحيح AMM v4 ونشر منسق.
+
+**الدرس:** تدقيقات البرنامج A لا تكتشف الأخطاء في تكامل البرنامج A مع البرنامج B. الأداة الصحيحة هي اختبار التكامل + الطرح المرحلي.
+
+## المؤشرات
+
+- [`security/admin-and-multisig`](/docs/i18n/ar/security/admin-and-multisig) — هيكل السلطة.
+- [`security/attack-vectors`](/docs/i18n/ar/security/attack-vectors) — أنماط الهجوم المعروفة.
+- [`security/disclosure`](/docs/i18n/ar/security/disclosure) — سياسة برنامج الثغرات الأمنية.
+
+المصادر:
+
+- مستودعات المصدر حسب البرنامج: [`raydium-amm`](https://github.com/raydium-io/raydium-amm), [`raydium-clmm`](https://github.com/raydium-io/raydium-clmm), [`raydium-cp-swap`](https://github.com/raydium-io/raydium-cp-swap).
+- مرآة تقرير التدقيق: [`raydium-docs/audit`](https://github.com/raydium-io/raydium-docs/tree/master/audit).
+- برنامج الثغرات الأمنية: [Immunefi — Raydium](https://immunefi.com/bug-bounty/raydium/information/).

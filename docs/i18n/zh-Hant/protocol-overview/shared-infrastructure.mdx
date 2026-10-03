@@ -1,0 +1,188 @@
+---
+title: "共享基礎設施"
+description: "Raydium 每個程式共享的基本元素——權限 PDA、AmmConfig 帳戶、協議/基金/創作者費用分配、觀察帳戶和公開 REST API 表面——定義一次，讓各產品章節可以回溯參考。"
+---
+
+<Info>
+  **本頁內容由 AI 自動翻譯，所有內容以英文版本為準。**
+
+  [查看英文版 →](/docs/en/protocol-overview/shared-infrastructure)
+</Info>
+
+<Info>
+  Raydium 的產品程式是獨立的程式碼庫，但它們是根據一套共享的約定設計的。本頁是這些約定的規範參考。各產品章節描述這些約定如何在其帳戶中被*實例化*；本頁描述的是約定本身。
+</Info>
+
+## 這裡「共享」的含義
+
+程式碼庫中有三種共享方式：
+
+- **約定共享。** 每個程式都使用相同的 PDA 推導模式、相同的費用分配形狀和相同的觀察帳戶概念——但每個都在自己的程式中用自己的種子實現它們。
+- **帳戶共享。** 少數帳戶在許多池中*字面上*是相同的記錄（CPMM 中的全局權限 PDA、AmmConfig 帳戶）。
+- **鏈下共享。** 一個 REST API 和一個 TypeScript SDK 為所有四個程式提供服務。集成商與一個 HTTP 主機和一個 NPM 套件互動，無論他們最終調用哪個程式。
+
+下面的五個基本元素涵蓋了跨越程式邊界的所有內容。
+
+## 1. 權限 PDA
+
+每個 Raydium 程式都有一個 PDA 擁有其代幣金庫。使用者永遠不會直接持有金庫權限——權限 PDA 是唯一可以移出資金的簽署者，且只有在有效的程式指令告訴它時才會簽署。
+
+模式在各產品中相同；種子不同：
+
+| 程式 | 權限 PDA 種子 | 備註 |
+|---------|---------------------|-------|
+| **AMM v4** | `[b"amm authority"]` | **由所有 AMM v4 池共享的單一 PDA。** 它的 bump 鏡像在每個 `AmmInfo` 的 `nonce` 上。 |
+| **CPMM** | `[b"vault_and_lp_mint_auth_seed"]` | **由所有 CPMM 池共享的單一 PDA。** 沒有池特定的種子。 |
+| **CLMM** | *（無 — `pool_state` 本身就是金庫權限）* | 每個池。金庫是位於 `[b"pool_vault", pool_state, mint]` 的 PDA，由 `pool_state` 擁有並為其簽署。CLMM 沒有全域金庫權限 PDA。 |
+| **Farm v3 / v5 / v6** | `[farmId]` | 每個農場。PDA 擁有該農場的質押 + 獎勵金庫。 |
+| **LaunchLab** | `[b"vault_auth_seed"]` | **由所有啟動共享的單一 PDA。** 另外兩個全域 PDA `[b"platform_fee_vault_auth_seed"]` 和 `[b"creator_fee_vault_auth_seed"]` 擁有彙總的費用金庫。 |
+
+這帶來了幾個後果：
+
+- 對於 AMM v4、CPMM 和 LaunchLab，權限 PDA 是**全局帳戶** — 該類型的每個池或啟動都使用它。如果你正在 CPI 進入 CPMM，你只需要一次，而不是每個池。
+- CLMM 是例外：它根本沒有權限 PDA。每個金庫是以池和鑄幣為種子的 PDA，並由池帳戶為其簽署。
+- 對於每個農場的權限，你從農場 ID 推導 PDA。SDK 在 `getPoolKeys` / `getFarmKeys` 中執行此操作；如果你直接集成，你使用 `findProgramAddressSync` 推導。
+- **金庫所有權無法更改。** 一旦代幣帳戶以權限 PDA 作為所有者創建，只有該 PDA — 由程式調用 — 可以轉出。沒有管理員覆蓋。
+
+有關每個程式的確切種子和 ATA 佈局，請參閱 [`products/cpmm/accounts`](/docs/i18n/zh-Hant/products/cpmm/accounts)、[`products/clmm/accounts`](/docs/i18n/zh-Hant/products/clmm/accounts)、[`products/amm-v4/accounts`](/docs/i18n/zh-Hant/products/amm-v4/accounts)、[`products/farm-staking/accounts`](/docs/i18n/zh-Hant/products/farm-staking/accounts)、[`products/launchlab/accounts`](/docs/i18n/zh-Hant/products/launchlab/accounts)。
+
+## 2. 管理員和設定帳戶
+
+CPMM 和 CLMM 共享一個稱為 **`AmmConfig`** 的設定帳戶模式：一個小的全局帳戶，由 `u16` 索引，持有適用於整個*費用層級*的費率和管理員目的地。池在創建時綁定到設定，永遠不會重新綁定。
+
+```rust
+// CPMM AmmConfig（簡化——CLMM 版本在結構上相似）
+pub struct AmmConfig {
+    pub bump: u8,
+    pub disable_create_pool: bool,        // 在此層級中禁止新池創建
+    pub index: u16,                       // 層級索引
+    pub trade_fee_rate: u64,              // 交易中進入費用的部分
+    pub protocol_fee_rate: u64,           // 交易費用中進入協議的部分
+    pub fund_fee_rate: u64,               // 交易費用中進入基金的部分
+    pub create_pool_fee: u64,             // 每個池創建的一次性費用
+    pub protocol_owner: Pubkey,           // CollectProtocolFee 的簽署者
+    pub fund_owner: Pubkey,               // CollectFundFee 的簽署者
+    pub padding: [u64; 16],
+}
+```
+
+**遵循的規則：**
+
+- **費用層級是全局的。** 當一個池說「這是一個 0.25% 的池」時，它意味著它綁定到 AmmConfig，其 `trade_fee_rate` 在創建時為 0.25%。沒有每個池的費率覆蓋。
+- **設定可以更改但池不跟隨。** 如果設定權限編輯 AmmConfig，綁定到該設定的每個現有池立即獲取新費率。這是一個功能，不是一個錯誤；這是協議級經濟變化如何在沒有每個池遷移的情況下傳播的方式。
+- **`disable_create_pool` 是棄用槓桿。** 當費用層級被日落時，協議多簽設置此標誌——現有池繼續工作但沒有新池可以選擇該層級。
+- **`protocol_owner` / `fund_owner`** 是費用收集調用的*簽署者*。將它們設置為多簽是什麼限制費用提取。它們不是費用本身的目的地地址；那是同一帳戶上的 `protocol_fee_destination` / `fund_fee_destination`。
+
+AMM v4 沒有 `AmmConfig`——其費用參數是每個池的，在創建時硬編碼。Farm 和 LaunchLab 有自己的等效物（`FarmConfig`、`LaunchConfig`），在各自的章節中涵蓋。
+
+誰可以更改什麼的完整表格在 [`security/admin-and-multisig`](/docs/i18n/zh-Hant/security/admin-and-multisig) 中。當前面向用戶的費用分配在 [`ray/protocol-fees`](/docs/i18n/zh-Hant/ray/protocol-fees) 中。
+
+## 3. 協議/基金/創作者費用分配
+
+每個 CPMM 和 CLMM 交換費用在輸出時分配到最多四個目的地：
+
+```
+                         total swap fee
+                              │
+              ┌───────────────┼───────────────┬──────────────┐
+              ▼               ▼               ▼              ▼
+        LP pool side     Protocol         Fund         Creator
+        (raises k)       treasury         multisig     (LaunchLab pools)
+```
+
+機制上：
+
+1. **交易費用累積到池中。** 費用從交換的輸入端移除，*扣費後*的金額是常數乘積數學看到的。這就是「LP 賺取費用」的含義——`k` 上升，隱含的每個 LP 代幣價值也上升。
+2. **協議/基金/創作者部分從該 LP 端累積中扣除到每個池的計數器帳戶中。** 它們位於池狀態（`protocol_fees_token{0,1}`、`fund_fees_token{0,1}` 等）上，直到有人調用相應的收集指令。它們在那之前不會離開池的金庫；從交換的角度來看，它們仍然「在池中」。
+3. **收集將它們移出。** 協議和基金路徑需要來自 `AmmConfig` 的各自 `protocol_owner` / `fund_owner` 簽署者。CPMM 創作者費用使用創作者簽署的 `CollectCreatorFee` 路徑或 `CollectCreatorFeePermissionless`，任何支付者都可以觸發，但它將目的地固定為創作者的規範 ATA。
+
+幾個承重的觀察：
+
+- **分割百分比是交易費用的，不是交易的。** 一個 0.25% 的交易費用，有 12% 的協議份額意味著協議獲得 `0.25% × 12% = 0.03%` 的交易——不是交易的 12%。
+- **創作者費用只存在於 LaunchLab 畢業的池上。** 標準 CPMM/CLMM 池有三向分割（LP/協議/基金）。LaunchLab 添加第四個槽位，路由到啟動代幣的人，在 `Initialize` 時配置且不可變。
+- **AMM v4 只分割兩種方式**，每個池硬編碼：LP 和協議。沒有基金槽位，沒有創作者槽位。
+- **基金 vs 協議**——兩者都是協議庫目的地，但它們有不同的簽署者和不同的預期用途。`protocol` 歷史上資助運營；`fund` 是長期庫。兩者之間的分割本身是可調的。
+
+具體費率在 [`reference/fee-comparison`](/docs/i18n/zh-Hant/reference/fee-comparison) 和 [`ray/protocol-fees`](/docs/i18n/zh-Hant/ray/protocol-fees) 中。
+
+## 4. 觀察帳戶（TWAP 環形緩衝區）
+
+CPMM 和 CLMM 都為每個池維護一個**觀察帳戶**——一個固定大小的 `(timestamp, cumulative_price)` 樣本環形緩衝區，其他合約可以使用它來推導抗操縱的 TWAP。
+
+```rust
+// CPMM ObservationState（簡化）
+pub struct ObservationState {
+    pub initialized: bool,
+    pub observation_index: u16,            // 下一個要覆蓋的槽位
+    pub pool_id: Pubkey,
+    pub observations: [Observation; OBSERVATION_NUM],
+    pub padding: [u64; 4],
+}
+
+pub struct Observation {
+    pub block_timestamp: u64,
+    pub cumulative_token_0_price_x32: u128,  // 自初始化以來 (price × dt) 的總和
+    pub cumulative_token_1_price_x32: u128,
+}
+```
+
+它如何工作：
+
+- **每次交換都調用 `update_observation`。** 程式讀取當前價格，乘以自上一次觀察以來經過的秒數，並將其添加到累積計數器中。新條目覆蓋最舊的槽位（環形緩衝區風格）。
+- **窗口上的 TWAP** = `(cumul[end] − cumul[start]) / (timestamp[end] − timestamp[start])`。消費者選擇兩個觀察值括住所需的窗口並進行除法。
+- **Raydium 本身不使用 TWAP 進行定價。** AMM 數學直接讀取現貨儲備。觀察是外部性——Raydium 支付寫入成本，以便其他合約可以讀取。
+- **AMM v4 沒有觀察帳戶。** 它比 ObservationState 設計更舊；想要 v4 TWAP 的集成商必須從日誌歷史中離線計算一個。
+
+佈局詳情和索引數學在 [`products/cpmm/accounts`](/docs/i18n/zh-Hant/products/cpmm/accounts) 和 [`products/clmm/accounts`](/docs/i18n/zh-Hant/products/clmm/accounts) 中。
+
+## 5. REST API + SDK + IDL
+
+鏈下表面是每個產品使用的單一三元組：
+
+- **REST API** — `https://api-v3.raydium.io`。所有鏈上狀態的讀取為主的索引視圖加上報價引擎。一個主機，一個模式。
+- **TypeScript SDK** — NPM 上的 `@raydium-io/raydium-sdk-v2`。為每個程式構建和簽署交易。與 API 交談以獲取報價/元數據，與 Solana RPC 交談以進行簽前狀態刷新。
+- **IDL 註冊表** — 每個已發佈程式的 Anchor IDL 位於 [`raydium-idl`](https://github.com/raydium-io/raydium-idl) 倉庫中（每個程式一個 JSON：CPMM、CLMM、LaunchLab）。TypeScript SDK 在內部使用這些 IDL；下游 Rust/Python 客戶端從相同的檔案重新生成。
+
+它們之間的邊界很清晰：
+
+| 部分 | 讀取自 | 寫入到 | 陳舊容限 |
+|-------|-----------|-----------|-----------------|
+| REST API | 索引器（解析鏈日誌） | —（對集成商為只讀） | 幾秒 |
+| SDK | API + RPC | 構建交易；不廣播 | 無——必須在簽前重新獲取狀態 |
+| IDL | 程式源 | — | 按程式升級版本化 |
+
+一個常見的錯誤是直接將 REST API 輸出提供給交易。不要——在你簽署的槽位中從 Solana RPC 重新獲取相關的池/位置狀態。SDK 為第一方流程自動執行此操作；如果你繞過 SDK，你必須自己執行。
+
+完整參考在 [`sdk-api/`](/docs/i18n/zh-Hant/sdk-api) 中，IDL 表面特別在 [`sdk-api/anchor-idl`](/docs/i18n/zh-Hant/sdk-api/anchor-idl) 中。
+
+## 6. 索引器和價格源
+
+REST API 由 Raydium 自己的索引器提供，該索引器訂閱來自 Solana RPC 艦隊的程式日誌，並將非規範化記錄寫入 SQL 存儲。對集成商的兩個後果：
+
+- **索引器是唯一「知道」跨程式狀態的東西。** 將 CPMM 池映射到其 CLMM 對應物、計算跨程式版本的 24 小時交易量、拾取與 LP 鑄幣相關的農場——所有這些都是索引器工作。程式本身不執行此操作。
+- **索引器停機是 API 停機。** 如果 API 返回陳舊或空數據，索引器是嫌疑人。鏈上狀態不受影響；具有自己的 RPC 和 SDK 的集成商可以繼續交易。
+
+價格源是一個單獨的問題。API 在大多數池響應上發佈 `priceUsd` 欄位；這是從索引器對池儲備的視圖快照和引用價格報價（USDC 池作為常見樞紐）離線計算的。它對 UI 足夠好；使用它作為鏈上預言機是不安全的。為此使用觀察 TWAP。
+
+## 什麼不共享
+
+值得明確列出，因為新讀者經常假設比存在的更多共享：
+
+- **程式不相互調用。** CPMM 交換永遠不會 CPI 進入 CLMM 或 AMM v4。唯一組合多個 AMM 的程式是 AMM 路由程式——而那個本身很薄，只是按順序向每個 AMM 發出 CPI。
+- **跨程式沒有共享升級權限。** 每個鏈上程式都有自己的程式升級密鑰（3/4 多簽加 24 小時時間鎖）。它們沒有鏈接。
+- **農場和 AMM 之間沒有共享狀態。** 農場不知道它質押的 LP 來自 CPMM 池、CLMM 位置 NFT 鑄幣還是無關的 SPL 代幣。農場程式將質押鑄幣視為不透明。
+- **沒有預言機依賴。** 定價是鏈上儲備。沒有 Pyth/Switchboard 後備；AMM 在清算前不檢查預言機。
+
+## 指針
+
+- [`protocol-overview/architecture`](/docs/i18n/zh-Hant/protocol-overview/architecture) — 顯示這些部分如何組合的規範圖。
+- [`protocol-overview/versions-and-migration`](/docs/i18n/zh-Hant/protocol-overview/versions-and-migration) — 約定如何在程式版本中演變。
+- [`security/admin-and-multisig`](/docs/i18n/zh-Hant/security/admin-and-multisig) — 誰控制 AmmConfigs 後面的密鑰。
+- [`reference/fee-comparison`](/docs/i18n/zh-Hant/reference/fee-comparison) — 每個產品的費率矩陣。
+- [`reference/program-addresses`](/docs/i18n/zh-Hant/reference/program-addresses) — 規範程式 ID。
+
+來源：
+
+- [Raydium SDK v2](https://github.com/raydium-io/raydium-sdk-V2) — PDA 種子、帳戶佈局和 IDL 定義的真實來源。
+- [Raydium IDL 註冊表](https://github.com/raydium-io/raydium-idl) — Anchor IDL。
+- 上面內聯引用的每個產品帳戶頁面。

@@ -1,0 +1,258 @@
+---
+title: "LaunchLab PlatformConfig"
+description: "Per-platform configuration that customizes branding, fee splits, NFT migration shares, vesting allocation, and the launch-parameter rules for any launch routed through that platform."
+---
+
+<Info>
+  `PlatformConfig` is the **platform-level** overlay that sits on top of [`GlobalConfig`](/docs/en/products/launchlab/global-config). Where `GlobalConfig` defines the protocol-wide rules ("trade fee is 1%, supply must be at least 10M, only this wallet can graduate"), `PlatformConfig` is what each launch platform — pump.fun, Raydium's own UI, third-party launchpads — uses to add their fee, claim their slice of post-graduation LP, restrict which launch parameters their launches can pick, and surface their branding (name, website, image) on-chain.
+</Info>
+
+## What it is
+
+A `PlatformConfig` account owns five cross-cutting concerns for a platform:
+
+1. **Branding** — name, website, image link, all stored inline so any explorer or aggregator can display the platform that launched a token.
+2. **Platform fee** — an extra trade fee (`fee_rate`) on top of the protocol's `trade_fee_rate`. Accrues to the platform's `platform_fee_wallet`. Capped at 500 bps (`50000`) on both the create and the update path, raised from 100 bps (`10000`) on 2026-08-26 — see [Rate caps](#rate-caps).
+3. **LP migration split** — three stored integers (`platform_scale`, `creator_scale`, `burn_scale`) that sum to `1_000_000`. Before the 2026-08-17 upgrade, the creator scale produced a separate creator Fee Key. Migrations executed after the upgrade combine the first two into one platform-owned locked-LP share; the remainder is burned.
+4. **Launch-parameter rules** — an opt-in restriction (`restrict_curve_param`) that requires a launch to satisfy the [`PlatformCurveRule`](/docs/en/products/launchlab/curve-rules) account of the `GlobalConfig` it selected. Rules support value bands, alternative tiers, and token-type gating; they live in their own accounts, not on `PlatformConfig`.
+5. **Global-config allowlist** — an opt-in restriction that requires a platform-created `PlatformAllowConfig` for the selected `GlobalConfig`.
+
+PDA derivation:
+
+```ts
+const [platformConfigPda] = PublicKey.findProgramAddressSync(
+  [
+    Buffer.from("platform_config"),
+    platformAdmin.toBuffer(),       // platform's owning pubkey
+  ],
+  LAUNCHLAB_PROGRAM_ID,
+);
+```
+
+(See `create_platform_config` in the source for the canonical seed list.)
+
+## Layout
+
+```rust
+// states/platform_config.rs
+pub const PLATFORM_CONFIG_SEED: &str = "platform_config";
+pub const NAME_SIZE: usize = 64;
+pub const WEB_SIZE:  usize = 256;
+pub const IMG_SIZE:  usize = 256;
+pub const MAX_CREATOR_FEE_RATE: u64 = 5000;       // 50 bps (denominator 1_000_000)
+pub const MAX_TRANSFER_FEE_RATE: u16 = 500;       // 5%   (denominator 10_000)
+
+#[account]
+pub struct PlatformConfig {
+    pub epoch:                       u64,
+    pub platform_fee_wallet:         Pubkey,            // signs ClaimPlatformFee
+    pub platform_nft_wallet:         Pubkey,            // receives the platform NFT slice at CPMM graduation
+    pub platform_scale:              u64,               // share of LP minted to platform NFT
+    pub creator_scale:               u64,               // creator share before upgrade; added to platform share afterward
+    pub burn_scale:                  u64,               // share of LP burned permanently
+    pub fee_rate:                    u64,               // platform's trade fee (1/1_000_000)
+    pub name:                        [u8; 64],          // utf-8 padded with zeros
+    pub web:                         [u8; 256],
+    pub img:                         [u8; 256],
+    pub cpswap_config:               Pubkey,            // CPMM AmmConfig that the post-grad pool will bind to
+    pub creator_fee_rate:            u64,               // creator-side fee taken pre-graduation
+    pub transfer_fee_extension_auth: Pubkey,            // for Token-2022 launches: withdraw-withheld authority from mint creation, fee-config authority from graduation
+    pub platform_vesting_wallet:     Pubkey,
+    pub platform_vesting_scale:      u64,               // platform's slice of total_locked_amount
+    pub platform_cp_creator:         Pubkey,            // optional creator-of-record on the post-graduation CPMM pool
+    pub restrict_global_config:      u8,                // 0 = unrestricted, 1 = require allow PDA
+    pub restrict_curve_param:        u8,                // 0 = unrestricted, 1 = enforce the PlatformCurveRule
+    pub curve_rule_manager:          Pubkey,            // hot wallet allowed to manage rule accounts
+    pub padding:                     [u8; 78],
+}
+```
+
+The account is a fixed 944 bytes. It held a trailing `Vec<PlatformCurveParam>` until the 2026-08-31 release moved launch parameters into [`PlatformCurveRule`](/docs/en/products/launchlab/curve-rules) accounts; `restrict_curve_param`, `curve_rule_manager`, and the 4 bytes that vec's length prefix occupied all come out of the padding, so the byte count and every earlier field offset are unchanged. See [the changelog entry](/docs/en/reference/changelog/2026-08-31-launchlab-platform-curve-rules) for what decoders must change.
+
+`platform_scale + creator_scale + burn_scale` must equal `1_000_000`, **and `creator_scale` must be exactly `0`** — the program asserts `require_eq!(creator_scale, 0)` on both `CreatePlatformConfig` and the `MigrateNftInfo` update path, so a settable split is really just `platform_scale + burn_scale = 1_000_000`. The field survives only so pre-2026-08-17 configs still decode; on those, whatever `creator_scale` they stored is folded into the platform's locked LP at migration rather than going to the token creator.
+
+Settable examples:
+
+- `(100_000, 0, 900_000)` — 90% LP burned, 10% locked to the platform.
+- `(150_000, 0, 850_000)` — 85% burned, 15% locked to the platform.
+- `(0, 0, 1_000_000)` — full burn, no NFT mints. Strict "no insiders" launches.
+
+## Branding fields
+
+`name`, `web`, and `img` are inline byte arrays padded with zeros up to their size constants. To read them as strings, slice up to the first `\0`:
+
+```ts
+function readString(bytes: Uint8Array): string {
+  const end = bytes.indexOf(0);
+  return Buffer.from(end === -1 ? bytes : bytes.subarray(0, end)).toString("utf-8");
+}
+```
+
+The constants are deliberately generous (`name: 64`, `web: 256`, `img: 256`) so platforms can include enough metadata for explorers and aggregators without touching off-chain storage. Anything that exceeds these sizes reverts at `CreatePlatformConfig` with `InvalidInput`.
+
+## Fee mechanics
+
+A swap on a curve bound to a `PlatformConfig` charges three layered fees:
+
+```
+trade_fee     = amount_in × global_config.trade_fee_rate    / 1_000_000
+platform_fee  = amount_in × platform_config.fee_rate        / 1_000_000
+creator_fee   = amount_in × platform_config.creator_fee_rate / 1_000_000
+
+amount_after_fee = amount_in − trade_fee − platform_fee − creator_fee
+```
+
+- `trade_fee` accrues to the protocol's `protocol_fee_owner` (claimed via `CollectFee`).
+- `platform_fee` accrues to a per-platform vault (claimed via `ClaimPlatformFee` or `ClaimPlatformFeeFromVault`; see [`instructions`](/docs/en/products/launchlab/instructions)).
+- `creator_fee` accrues to a per-creator vault keyed by the creator's pubkey + quote mint (claimed via `ClaimCreatorFee`).
+
+### Rate caps
+
+Both rates are denominated in `1/1_000_000`, so `5000` is 50 bps and `50000` is 500 bps.
+
+| Rate | Cap | Enforced in |
+|---|---|---|
+| `fee_rate` | `50000` (500 bps) | `PlatformParams::check()` on create — reverts with `InvalidInput`. `update_platform_fee_rate` on every update variant that touches it (`FeeRate` and `AllInfo`) — reverts with `InvalidPlatformInfo`. |
+| `creator_fee_rate` | `MAX_CREATOR_FEE_RATE = 5000` (50 bps) | `create_platform_config` on create and `update_creator_fee_rate` on update — both revert with `InvalidPlatformInfo`. |
+
+The two enforcement points for `fee_rate` are separate `require!` calls in different files, so they carry different error codes, but they apply the same ceiling. A platform created at any permitted rate can be edited later, including through the `AllInfo` bulk variant that rewrites every field at once.
+
+Both `fee_rate` caps were 100 bps (`10000`) originally. The update cap moved to `25000` (250 bps) on 2026-01-27; on 2026-08-26 both moved to `50000` (500 bps) — see [the changelog entry](/docs/en/reference/changelog/2026-08-26-launchlab-platform-fee-rate-cap).
+
+`GlobalConfig.max_share_fee_rate` does **not** bound either rate. It bounds the per-transaction `share_fee_rate` argument that the four swap instructions take — the referral fee — and nothing else. See [`global-config`](/docs/en/products/launchlab/global-config#fees).
+
+## Token-2022 transfer-fee authorities
+
+`transfer_fee_extension_auth` names the platform key that ends up holding the base mint's `TransferFeeConfig` authorities when a launch is created through `InitializeWithToken2022` with a transfer fee attached. The extension carries two authorities, and they are handed over at **different points in the launch lifecycle**:
+
+| Authority | Holder at mint creation | Holder after `MigrateToCpswap` |
+|---|---|---|
+| `withdraw_withheld_authority` — withdraws the fees Token-2022 withholds on token accounts | `transfer_fee_extension_auth`, written straight into the mint. Falls back to the launch `authority` PDA when the field is `Pubkey::default()`. | Already the platform key, so nothing moves. Migration reassigns it only when the `authority` PDA still holds it. |
+| `transfer_fee_config_authority` — changes the fee rate and the maximum fee | Always the launch `authority` PDA. | `transfer_fee_extension_auth`, provided that field is non-default. |
+
+Before 2026-08-27 the mint was created with the `authority` PDA on both authorities, and both moved to the platform at graduation. The program exposes no withdraw-withheld or harvest instruction, so fees withheld during the bonding-curve phase were unreachable until the launch graduated. Writing the withdraw side at mint creation makes them claimable from the first trade — see [the changelog entry](/docs/en/reference/changelog/2026-08-27-launchlab-token2022-withheld-authority).
+
+Two consequences worth planning for:
+
+- **Set the field before you launch, not after.** A launch created while `transfer_fee_extension_auth` is `Pubkey::default()` puts the `authority` PDA on the withdraw side. Setting the field later still works — graduation finds the PDA in place and hands the authority over — but nothing can withdraw the withheld balance in the meantime.
+- **Rotating the field mid-launch splits the two authorities.** Change `transfer_fee_extension_auth` between a launch's creation and its graduation and the mint's withdraw-withheld authority stays with the key configured at creation (the PDA no longer holds it, so migration skips that handover) while the fee-config authority goes to the new key. Rotate between launches, or plan to reconcile the two keys yourself through Token-2022 directly.
+
+A platform that leaves the field at `Pubkey::default()` for a launch's whole life keeps both authorities on the `authority` PDA permanently: the fee rate can never be changed and the withheld balance can never be withdrawn. Only attach a transfer fee to a launch if the platform intends to hold these keys.
+
+## NFT migration split (CPMM-only)
+
+When a launch graduates to CPMM, the migration instruction splits the LP tokens minted by `CPMM::InitializeWithPermission` two ways:
+
+```
+lp_to_platform = floor(lp_total × (platform_scale + creator_scale) / 1_000_000)
+lp_to_burn     = lp_total − lp_to_platform
+```
+
+If `lp_to_platform` is non-zero, the LP-Lock program wraps it into one Fee Key NFT owned by `platform_nft_wallet`. This replaces the pre-upgrade behavior that created separate platform and creator Fee Keys. Fee Keys created by migrations completed before the upgrade remain unchanged. This LP-fee right is separate from CPMM creator fees controlled by `platform_cp_creator`.
+
+The burn slice is burned directly, so no account can withdraw it or claim the LP fees represented by that share.
+
+Existing launches with stored `migrate_type = 0` can still use the legacy AMM v4 path. New initialization rejects that migrate type.
+
+## Launch-parameter rules
+
+`restrict_curve_param` is the switch. At `0` the program does not read rules at all. At `1`, every launch routed through this platform must satisfy the [`PlatformCurveRule`](/docs/en/products/launchlab/curve-rules) account of the `GlobalConfig` it selected, and the launch builder must append that account to `remaining_accounts`.
+
+```rust
+pub restrict_curve_param: u8,   // 0 = unrestricted, 1 = enforce the rule of the used config
+pub curve_rule_manager:   Pubkey, // may manage rule accounts; the platform admin always may too
+```
+
+A rule is a menu of permitted launch shapes: constraints inside one check group are ANDed, groups are ORed, and each constraint is a `(field, op, value)` triple supporting `Eq`, `Gte`, `Lte`, and `Neq`. That covers value bands, alternative tiers, graduation-valuation caps, migration floors, token-type gating, and time-boxed groups — the full model, the field table, and nine worked playbooks are in [`products/launchlab/curve-rules`](/docs/en/products/launchlab/curve-rules).
+
+Two things belong here rather than on that page:
+
+- **`curve_rule_manager` is a delegation, not a transfer.** Set it through `UpdatePlatformConfig::CurveRuleManager` and that wallet can create, update, remove, and close this platform's rule accounts without the admin key. The platform admin keeps the same power in parallel, so rotating or clearing the field recovers control. `Pubkey::default()` means only the admin can manage rules. It cannot flip `restrict_curve_param`, which stays an admin-only call.
+- **Rules are enforced on top of `GlobalConfig`, never instead of it.** The rule check runs before the config's own limits and can only narrow them.
+
+This replaces the former `curve_params: Vec<PlatformCurveParam>` whitelist, which could only test exact equality, held at most 10 entries across all configs, and grew the `PlatformConfig` account itself. Platforms that used it were migrated by the protocol in a one-off pass; the legacy field, its two instructions, and `MAX_CURVE_PARAMS` are gone.
+
+## `PlatformAllowConfig` — restricting a platform
+
+Each platform decides whether to restrict which `GlobalConfig` accounts its launches may use. Set `restrict_global_config` with `UpdatePlatformConfig::RestrictGlobalConfig(0 | 1)`.
+
+```rust
+pub const PLATFORM_ALLOW_CONFIG_SEED: &str = "platform_allow_config";
+
+#[account]
+pub struct PlatformAllowConfig {
+    pub bump:            u8,
+    pub platform_config: Pubkey,
+    pub global_config:   Pubkey,
+    pub padding:         [u64; 8],
+}
+```
+
+PDA seeds: `[b"platform_allow_config", platform_config, global_config]`.
+
+The platform admin creates or closes one account per allowed pair via `CreatePlatformAllowConfig` and `ClosePlatformAllowConfig`. When restriction is `1`, initialization searches `remaining_accounts` for the expected PDA and rejects a missing account with `NotEnoughRemainingAccounts`. When restriction is `0`, no allow account is required.
+
+The former protocol-admin-managed `PlatformGlobalAccess` account and its create/close instructions are retired. Existing `PlatformConfig` and `GlobalConfig` sizes do not change, but decoders must replace the old global flag with the new platform flag. Old access PDAs are not consumed by the new check.
+
+## Read path
+
+```ts
+// The SDK exports the layout, not a getter — decode the account yourself.
+import { PlatformConfig } from "@raydium-io/raydium-sdk-v2";
+
+const info = await connection.getAccountInfo(platformConfigPda);
+const platformConfig = PlatformConfig.decode(info!.data);
+
+console.log("Platform:", readString(platformConfig.name));
+console.log("Fee rate:", platformConfig.feeRate, "(/1M)");
+console.log("NFT split:",
+  platformConfig.platformScale,
+  platformConfig.creatorScale,
+  platformConfig.burnScale,
+);
+console.log("Restrict launch params:", platformConfig.restrictCurveParam);
+console.log("Rule manager:", platformConfig.curveRuleManager.toBase58());
+```
+
+For a UI showing "where did this token launch from", `PoolState.platform_config` points at the originating `PlatformConfig` directly — fetch it once and cache the branding.
+
+## Update path
+
+| Instruction | Who signs | What changes |
+|-------------|-----------|--------------|
+| `CreatePlatformConfig` | platform admin (one-time) | Initializes the account with `PlatformParams`. |
+| `UpdatePlatformConfig` | platform admin | Generic dispatch keyed by a `param: u8`; mutates one field per call, or every field at once via `AllInfo`. Branding fields, fee rates, vesting wallet, and the various wallets are all settable through this. Both fee rates are re-validated against the caps in [Rate caps](#rate-caps) on every variant that touches them. |
+| `CreatePlatformAllowConfig` / `ClosePlatformAllowConfig` | platform admin | Add or remove one allowed `GlobalConfig` for this platform. |
+| `CreatePlatformCurveRule` / `ClosePlatformCurveRule` | `curve_rule_manager` or platform admin | Create or close the rule account of one `GlobalConfig`. |
+| `UpdatePlatformCurveRule` / `RemovePlatformCurveRule` | `curve_rule_manager` or platform admin | Add, replace, or remove one check group. The account is resized, so rent follows the content. |
+| `ClaimPlatformFee` | `platform_fee_wallet` | Sweep the per-pool platform fee from `PoolState.quote_vault`. |
+| `ClaimPlatformFeeFromVault` | `platform_fee_wallet` | Sweep the per-platform fee vault (PDA at `[platform_config, quote_mint]`). |
+
+Wallet rotations (`platform_fee_wallet`, `platform_nft_wallet`, `platform_vesting_wallet`, `platform_cp_creator`, `transfer_fee_extension_auth`, `cpswap_config`) all go through `UpdatePlatformConfig`. Read the source's `update_platform_config` dispatch table for the exact `param` codes.
+
+## Common pitfalls
+
+- **`restrict_curve_param` enabled before the builder was updated.** While it is `1` the rule PDA must be in `remaining_accounts` on every launch, even for a config with no rule account — an absent account is `NotEnoughRemainingAccounts`, not a pass. Ship the builder change first, then flip the flag.
+- **`restrict_curve_param` enabled with an empty rule.** A rule holding zero groups, or a group holding zero constraints, allows everything. Enabling the flag is not by itself a restriction; write the groups first, verify them with [the SDK check](/docs/en/products/launchlab/curve-rules#check-before-you-send), and rehearse the whole sequence on devnet.
+- **NFT-split rounding.** The three scales must sum to exactly `1_000_000`. Off-by-one errors at `CreatePlatformConfig` revert; off-by-one at runtime would mint or burn one extra LP unit, which is what the strict-equality check is there to prevent.
+- **Platform vesting double-allocation.** If `platform_vesting_scale > 0`, the platform must call `CreatePlatformVestingAccount` once after the launch's fundraising ends; if it forgets, that share remains unallocated and dormant forever (the launch's `total_locked_amount` budget is consumed but the platform never claims).
+- **`platform_cp_creator` ambiguity.** When set to `Pubkey::default()`, the launch creator is recorded as the post-graduation CPMM pool's `pool_creator`; when set to a real key, that key is recorded instead. This determines the beneficiary of post-graduation CPMM creator fees and who can sign the original `CPMM::CollectCreatorFee` path. The permissionless collection path still pays this recorded key's canonical ATAs. Decide at platform-config creation time which model you want.
+- **`transfer_fee_extension_auth` set late or rotated.** The field is read twice per Token-2022 launch — once at mint creation for `withdraw_withheld_authority`, once at graduation for `transfer_fee_config_authority` — so a value that changes between those two moments leaves the two authorities on different keys. See [Token-2022 transfer-fee authorities](#token-2022-transfer-fee-authorities).
+- **Restriction without an allow account.** Enabling `restrict_global_config` before creating the required `PlatformAllowConfig` blocks new launches that select that config.
+
+## Pointers
+
+- [`products/launchlab/global-config`](/docs/en/products/launchlab/global-config) — protocol-side rules a launch must satisfy.
+- [`products/launchlab/vesting`](/docs/en/products/launchlab/vesting) — `platform_vesting_scale` mechanics.
+- [`products/launchlab/creator-fees`](/docs/en/products/launchlab/creator-fees) — creator fees versus platform Fee Key rights.
+- [`products/launchlab/platforms`](/docs/en/products/launchlab/platforms) — platform integrator's how-to.
+
+Sources:
+
+- `raydium-launch/programs/launchpad/src/states/platform_config.rs` — `PlatformConfig`, `PlatformParams`, `MigrateNftInfo`, `is_curve_rule_manager`, `is_platform_admin`.
+- `raydium-launch/programs/launchpad/src/states/platform_curve_rule.rs` — `PlatformCurveRule`, `CurveRuleGroup`, `ParamConstraint`.
+- `raydium-launch/programs/launchpad/src/states/platform_allow_config.rs` — `PlatformAllowConfig`.
+- `raydium-launch/programs/launchpad/src/instructions/platform/update_platform_config.rs` — `PlatformConfigParam` dispatch and the per-field setters that enforce the update-time rate caps.
+- `raydium-launch/programs/launchpad/src/lib.rs` — platform config and allow-config entrypoints.
+- `raydium-launch/programs/launchpad/src/instructions/initialize_with_token_2022.rs` — where `transfer_fee_extension_auth` is written into the new mint's `TransferFeeConfig`.
+- `raydium-launch/programs/launchpad/src/instructions/admin/migrate_to_cpswap.rs` — the graduation-time authority handover and its `get_withdraw_withheld_authority` guard.

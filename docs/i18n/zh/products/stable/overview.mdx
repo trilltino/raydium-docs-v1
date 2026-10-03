@@ -1,0 +1,82 @@
+---
+title: "Stable AMM 概览"
+description: "Stable AMM 是一个独立的 Raydium 程序，用插值查找表替代恒定乘积曲线，为相关资产降低滑点。"
+---
+
+<Info>
+  **本页内容由 AI 自动翻译，所有内容以英文版本为准。**
+
+  [查看英文版 →](/docs/en/products/stable/overview)
+</Info>
+
+## 一句话总结
+
+Stable AMM 是一个**独立的 Raydium 程序**——拥有自己的部署，不是 AMM v4 的一种模式——它用**预填充的查找表**替代了曲线公式。与其使用 x·y=k，该池存储一个稀疏的 (x, y, price) 点数组，并使用**二分查找 + 线性插值**来报价。这种设计特别适合稳定币对和其他具有已知价格关系的资产：1:1 挂钩代币之间的交换几乎没有滑点。它是一个**纯 AMM**：所有流动性都存放在池自己的金库中。（早期它曾有一条 OpenBook 做市路径，但该路径已多年处于休眠状态；[2026-06-22 升级](/docs/i18n/zh/reference/changelog)最终移除了这些死代码。）目前流动性较少；大多数集成者通过 [AMM 路由程序](/docs/i18n/zh/products/routing)访问 Stable 池。
+
+## 为什么用查找表而不是 xy=k
+
+恒定乘积 AMM 在价格波动范围紧密的交易对上会产生高滑点。USDC-USDT 交换应该几乎没有成本；但在恒定乘积池上，k=x·y 即使对于微小交易量也会强制产生价格变动。查找表让池管理员能够表达*实际的*价格关系：
+
+- 对于稳定币：在 1:1 附近密集分布表，使微交换的滑点约为 0。
+- 对于抵押品对：编码目标比率，让网格塑造费用/激励曲面。
+
+该表现在是**固定的**——历史上通过 `UpdateModelData` 指令填充，该指令已被移除，所以现有池保持其表不变。链上成本仅为插值搜索——远比重新计算公式便宜。
+
+## 工作原理：模型数据账户
+
+池持有一个 `ModelDataInfo` 账户——一个**50,000 元素的数组**，包含 `DataElement` 结构体。每个元素包含：
+
+```
+DataElement {
+  x: u64,           // table X coordinate
+  y: u64,           // table Y coordinate
+  price: u64,       // price at (x, y)
+}
+```
+
+只有前 `valid_data_count` 个元素被填充；其余为零。交换时，程序：
+
+1. **计算比率**：从当前池储备计算比率，使用二分查找找到括住该比率的两个表元素。
+2. **线性插值**：在两个括号点之间线性插值以获得报价。
+3. **应用费用**（从输入金额中扣除 0.02%）并将结果返回给用户。
+
+表账户上的 `multiplier` 字段考虑了 x 和 y 可能以缩减的比例存储的可能性（例如，6 位小数而不是 18 位）。价格发现会相应地重新缩放。
+
+## 对比：Stable AMM vs. AMM v4 vs. CPMM
+
+| 维度 | Stable AMM | AMM v4 | CPMM |
+|-----------|-----------|--------|------|
+| 曲线 | 查找表 + 插值 | 恒定乘积 (xy=k) | 恒定乘积 |
+| 主要用例 | 稳定币、挂钩对 | 通用对、遗留深流动性 | 通用对、新部署 |
+| OpenBook 依赖 | **否**（做市路径长期休眠；死代码已于 2026-06 移除） | **是** | 否 |
+| Token-2022 | 否 | 否 | 是 |
+| 滑点特性 | 1:1 时最小 | 紧密比率时高 | 范围内中等 |
+| 管理员可调曲线 | 不再支持（`UpdateModelData` 已移除；表现已固定） | 否（仅 `SetParams`） | 否 |
+| 表大小 | ~50k 元素 × 24 字节 | N/A | N/A |
+| 每次交换计算 | ~5k–15k CU（二分查找 + 插值） | ~150k–200k CU | ~60k–100k CU |
+| 每次交换账户数 | 9（新布局；18 旧兼容） | ~18（AMM + OpenBook） | ~11 |
+
+## 心智模型
+
+Stable AMM 池是一个**插值查找表 AMM**，将所有流动性保存在自己的金库中。与恒定乘积池的关键区别在于价格发现曲线不是硬编码的——它是一个稀疏数组，烘焙在池的 `ModelDataInfo` 账户中。当前可调用的操作是**直接交换**（用户 ↔ 池）、**存入/提取**（LP 操作）和 **`WithdrawPnl`**（管理员费用扫描）。OpenBook 机制（`MonitorStep`）——自池停止发布订单以来长期休眠——以及池设置/管理指令已被移除。
+
+## 何时选择 Stable AMM
+
+- 你运营稳定币或其他相关资产对，希望获得紧密、可预测的定价。
+- 你对交易对的价格关系有深入了解，希望直接将其编码为曲线。
+- 你已有 AMM v4 的集成，只需要不同的曲线风格。
+
+对于新的、通用目的的池且没有紧密相关性要求，[CPMM](/docs/i18n/zh/products/cpmm) 是更简单、流动性更深的默认选择。
+
+## 后续阅读
+
+- [账户](/docs/i18n/zh/products/stable/accounts) — `AmmInfo`、`ModelDataInfo`、`DataElement` 字段参考。
+- [数学](/docs/i18n/zh/products/stable/math) — 二分查找、插值和费用应用。
+- [指令](/docs/i18n/zh/products/stable/instructions) — 可调用集合（交换、存入、提取、`WithdrawPnl`）和已移除的指令。
+- [费用](/docs/i18n/zh/products/stable/fees) — 0.02% 的费用及其 88 / 12 分配。
+- [代码示例](/docs/i18n/zh/products/stable/code-demos) — 路由和直接集成。
+
+来源：
+
+- [`reference/program-addresses`](/docs/i18n/zh/reference/program-addresses) 获取规范程序 ID
+- [`reference/changelog`](/docs/i18n/zh/reference/changelog) 获取 2026-06-22 市场代码移除升级

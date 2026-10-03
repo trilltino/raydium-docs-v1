@@ -1,0 +1,338 @@
+---
+title: "حسابات CPMM"
+description: "كل PDA وحساب مشترك يلمسه مجمع CPMM: PoolState و AmmConfig والسلطة وعملة LP والخزائن الرمزية وحلقة المخزن المؤقت للملاحظات."
+---
+
+<Info>
+  **هذه الصفحة مُترجَمة آليًا بواسطة الذكاء الاصطناعي. النسخة الإنجليزية هي المرجع المعتمد.**
+
+  [عرض النسخة الإنجليزية →](/docs/en/products/cpmm/accounts)
+</Info>
+
+<Info>
+  معرّف البرنامج وبذور PDA لـ CPMM مدرجة بشكل قانوني في [`reference/program-addresses`](/docs/i18n/ar/reference/program-addresses). تركز هذه الصفحة على **ما يخدمه كل حساب والثوابت التي يحافظ عليها**، وليس على العناوين المشفرة.
+</Info>
+
+## الحسابات الستة لمجمع CPMM
+
+يتم وصف كل مجمع CPMM بالكامل بستة عناوين مشتقة من البرنامج (PDAs) تحت برنامج CPMM، بالإضافة إلى حساب `AmmConfig` مشترك واحد يشير إليه. بمجرد حصولك على العملتين، يمكنك اشتقاق كل شيء بشكل حتمي دون لمس الشبكة.
+
+| الحساب | البذرة(البذور) | المالك | الغرض |
+|---------|---------|-------|---------|
+| `authority` | `"vault_and_lp_mint_auth_seed"` | CPMM | الموقّع لكل حركة خزينة وكل عملية mint/burn لـ LP. مشترك عبر **جميع** مجمعات CPMM. |
+| `poolState` | `"pool"`، `ammConfig`، `token0Mint`، `token1Mint` **أو** أي زوج مفاتيح عشوائي يوفره الموقّع | CPMM | هيكل حالة المجمع — زوج العملات والأرصدة في الخزائن وإجمالي LP والرسوم المتراكمة ومؤشر الملاحظة. تقبل تعليمات CPMM `Initialize` إما PDA القانوني المشتق من البذور الأربع **أو** زوج مفاتيح عشوائي موقّع من قبل المنشئ. يوجد مسار زوج المفاتيح العشوائي لهزيمة هجوم front-running حيث يراقب خصم mempool ويتسابق لاحتلال PDA القانوني قبل المنشئ الشرعي. |
+| `lpMint` | `"pool_lp_mint"`، `poolState` | SPL Token | عملة LP للمجمع. الإمداد = إجمالي LP المعلق. سلطة الـ Mint = PDA سلطة CPMM. |
+| `vault0` | `"pool_vault"`، `poolState`، `token0Mint` | SPL Token / Token-2022 | يحتفظ برصيد المجمع من token0. مملوك بواسطة PDA السلطة. |
+| `vault1` | `"pool_vault"`، `poolState`، `token1Mint` | SPL Token / Token-2022 | يحتفظ برصيد المجمع من token1. مملوك بواسطة PDA السلطة. |
+| `observation` | `"observation"`، `poolState` | CPMM | حلقة مخزن مؤقت لعينات الأسعار المستخدمة في TWAP. يتم الكتابة عليها في كل مبادلة. |
+
+والإعدادات المشتركة:
+
+| الحساب | البذرة(البذور) | المالك | الغرض |
+|---------|---------|-------|---------|
+| `ammConfig` | `"amm_config"`، `index: u16` | CPMM | يحتفظ بمعدلات الرسوم التجارية/البروتوكول/الصندوق/المنشئ ومعدل حصة رسوم المنشئ الافتراضي ومفاتيح المسؤول. واحد لكل "فئة رسوم". يرتبط Poolstate بواحد عند الإنشاء ولا يمكن تغييره لاحقًا. |
+
+وحساب اختياري واحد لكل منشئ:
+
+| الحساب | البذرة(البذور) | المالك | الغرض |
+|---------|---------|-------|---------|
+| `creatorFeeShare` | `"creator_fee_share"`، `creator`، `ammConfig` | CPMM | يتجاوز `AmmConfig.creator_fee_share_rate` لمنشئ مجمع واحد على فئة رسوم واحدة. اختياري — عند عدم وجوده ينطبق الافتراضي للإعدادات. تمت إضافته بواسطة ترقية creator-fee-share في 2026-09-19. |
+
+## اشتقاق مجمع من لا شيء سوى عملتين
+
+```ts
+import { PublicKey } from "@solana/web3.js";
+import BN from "bn.js";
+
+const CPMM_PROGRAM_ID = new PublicKey(
+  "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C"
+); // mainnet — see reference/program-addresses
+
+function u16ToBytes(n: number): Buffer {
+  const b = Buffer.alloc(2);
+  b.writeUInt16BE(n);
+  return b;
+}
+
+// token0 < token1 by byte order. Getting this wrong yields a valid PDA
+// that points at a nonexistent pool.
+function sortMints(a: PublicKey, b: PublicKey): [PublicKey, PublicKey] {
+  return Buffer.compare(a.toBuffer(), b.toBuffer()) < 0 ? [a, b] : [b, a];
+}
+
+export function deriveCpmmAccounts(
+  mintA: PublicKey,
+  mintB: PublicKey,
+  ammConfigIndex = 0,
+) {
+  const [token0Mint, token1Mint] = sortMints(mintA, mintB);
+
+  const [ammConfig] = PublicKey.findProgramAddressSync(
+    [Buffer.from("amm_config"), u16ToBytes(ammConfigIndex)],
+    CPMM_PROGRAM_ID,
+  );
+  const [authority] = PublicKey.findProgramAddressSync(
+    [Buffer.from("vault_and_lp_mint_auth_seed")],
+    CPMM_PROGRAM_ID,
+  );
+  const [poolState] = PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("pool"),
+      ammConfig.toBuffer(),
+      token0Mint.toBuffer(),
+      token1Mint.toBuffer(),
+    ],
+    CPMM_PROGRAM_ID,
+  );
+  const [lpMint] = PublicKey.findProgramAddressSync(
+    [Buffer.from("pool_lp_mint"), poolState.toBuffer()],
+    CPMM_PROGRAM_ID,
+  );
+  const [vault0] = PublicKey.findProgramAddressSync(
+    [Buffer.from("pool_vault"), poolState.toBuffer(), token0Mint.toBuffer()],
+    CPMM_PROGRAM_ID,
+  );
+  const [vault1] = PublicKey.findProgramAddressSync(
+    [Buffer.from("pool_vault"), poolState.toBuffer(), token1Mint.toBuffer()],
+    CPMM_PROGRAM_ID,
+  );
+  const [observation] = PublicKey.findProgramAddressSync(
+    [Buffer.from("observation"), poolState.toBuffer()],
+    CPMM_PROGRAM_ID,
+  );
+
+  return {
+    ammConfig,
+    authority,
+    poolState,
+    lpMint,
+    token0Mint,
+    token1Mint,
+    vault0,
+    vault1,
+    observation,
+  };
+}
+```
+
+<Tip>
+  **رتّب العملات دائمًا قبل اشتقاق PDA المجمع.** تقوم البذرة بتجزئة العملتين بترتيب البايت، وليس بترتيب المستخدم. مجمعان بـ `(A, B)` و `(B, A)` سيتصادمان على السلسلة — الترتيب هو كيفية جعل البرنامج للتعيين قانونيًا.
+</Tip>
+
+<Note>
+  **معرّف المجمع ليس دائمًا PDA القانوني.** تقبل `Initialize` زوج مفاتيح موقّع عشوائي كـ `pool_state` بالإضافة إلى PDA أعلاه. إذا لم يطابق الحساب المُمرّر PDA القانوني، يتطلب البرنامج أن يكون موقّعًا — أي أن المنشئ يمرر زوج مفاتيح جديد يوقّع عليه. هذا هو دفاع front-run: أي طرف ثالث يتسابق للاستيلاء على PDA القانوني يمكن تجنبه من قبل المنشئ الشرعي باستخدام زوج مفاتيح عشوائي بدلاً من ذلك. يتم اشتقاق PDAs اللاحقة (`lpMint`، `vault0`، `vault1`، `observation`) من `poolState.key()`، لذا تبقى فريدة لأي عنوان تم استخدامه. عند فهرسة المجمعات، اكتشف معرّف المجمع دائمًا من الحالة على السلسلة (مثل حسابات `PoolState` تحت برنامج CPMM)، وليس بواسطة اشتقاق PDA القانوني — الأخير سيفتقد مجمعات زوج المفاتيح العشوائي.
+</Note>
+
+## تخطيطات الحسابات
+
+التعريفات الكاملة في Rust موجودة في مصدر [`raydium-cp-swap`](https://github.com/raydium-io/raydium-cp-swap). الحقول أدناه هي التي ستقرأها من التكامل.
+
+### `PoolState`
+
+```rust
+// programs/cp-swap/src/states/pool.rs
+pub struct PoolState {
+    pub amm_config: Pubkey,               // binds this pool to an AmmConfig
+    pub pool_creator: Pubkey,             // who ran initialize
+    pub token_0_vault: Pubkey,            // == vault0 PDA
+    pub token_1_vault: Pubkey,            // == vault1 PDA
+
+    pub lp_mint: Pubkey,
+    pub token_0_mint: Pubkey,
+    pub token_1_mint: Pubkey,
+
+    pub token_0_program: Pubkey,          // SPL Token or Token-2022 program
+    pub token_1_program: Pubkey,
+
+    pub observation_key: Pubkey,          // == observation PDA
+    pub auth_bump: u8,
+    pub status: u8,                       // bitmask: deposit | withdraw | swap
+    pub lp_mint_decimals: u8,
+    pub mint_0_decimals: u8,
+    pub mint_1_decimals: u8,
+
+    pub lp_supply: u64,                   // mirrors lp_mint supply
+    pub protocol_fees_token_0: u64,
+    pub protocol_fees_token_1: u64,
+    pub fund_fees_token_0: u64,
+    pub fund_fees_token_1: u64,
+
+    pub open_time: u64,                   // unix; swaps rejected before this
+    pub recent_epoch: u64,
+
+    // Creator-fee state (added after the original layout):
+    pub creator_fee_on: u8,               // 0=BothToken, 1=OnlyToken0, 2=OnlyToken1
+    pub enable_creator_fee: bool,
+    pub padding1: [u8; 6],
+    pub creator_fees_token_0: u64,
+    pub creator_fees_token_1: u64,
+
+    pub padding: [u64; 28],
+}
+```
+
+ما يجب قراءته فعليًا:
+
+- **`lp_supply`** — إجمالي LP الداخلي للمجمع. **ليس** مساويًا لإمداد عملة LP: إنه أعلى بـ 100 وحدة أساسية بالضبط، لأن 100 وحدة مقفلة يتم عدها هنا لكن لم يتم صكها أبدًا. تقسم جميع رياضيات حصة LP (الإيداع والسحب) على `lp_supply`، لذا استخدم هذا الحقل ولا تستبدل إمداد العملة على السلسلة.
+- **`protocol_fees_token{0,1}`**، **`fund_fees_token{0,1}`** — الرسوم *المتراكمة* التي لم يتم كنسها بعد. هذه لا تؤثر على تسعير المبادلة؛ تجلس في الخزائن حتى يتم استدعاء `CollectProtocolFee` / `CollectFundFee`. يتلقى `protocol_fees_token{0,1}` أيضًا حصة البروتوكول من رسوم المنشئ عند جمع رسوم المنشئ، لذا ينمو خارج المبادلات — انظر [`products/cpmm/fees`](/docs/i18n/ar/products/cpmm/fees#protocol-share-of-the-creator-fee).
+- **`status`** — قناع بت يتحكم في ما إذا كان `Swap`، `Deposit`، `Withdraw` مسموحًا. يتم تحديثه بواسطة المسؤول عبر `UpdatePoolStatus`. يتحقق SDK من هذا قبل بناء معاملة؛ إذا كنت تقوم بـ CPI مباشرة، تحقق منه بنفسك.
+- **`token0_program` / `token1_program`** — برنامج الرمز المراد CPI عليه لكل خزينة. يمكن أن يكون أحدهما SPL Token الكلاسيكي والآخر Token-2022؛ هما مستقلان.
+- **`open_time`** — طابع زمني Unix. تفشل المبادلات قبل هذا الوقت. يُسمح بالودائع قبل `open_time` حتى يمكن بذر المجمع.
+- **`creator_fee_on` / `enable_creator_fee`** — معًا يتحكمان في ما إذا كانت رسوم المنشئ الاختيارية نشطة لهذا المجمع وأي جانب من المبادلة يتم جمعها منه. `enable_creator_fee == false` يصفر مسار رسوم المنشئ بالكامل. عند التفعيل، يختار `creator_fee_on`: `0` = خذ الرسوم من أي رمز هو مدخل المبادلة (`BothToken`)؛ `1` = خذ الرسوم من `token_0` فقط (تخطي على مبادلات `token_1 → token_0`)؛ `2` = خذ الرسوم من `token_1` فقط. تعيين عند إنشاء المجمع عبر `InitializeWithPermission`؛ لا يمكن تغييره لاحقًا.
+- **`creator_fees_token_{0,1}`** — رسوم المنشئ المتراكمة، يتم كنسها بواسطة `CollectCreatorFee` أو `CollectCreatorFeePermissionless`. كلا المسارين يصفران العدادات الكاملة، لكن منذ ترقية creator-fee-share في 2026-09-19 فقط جزء من الرصيد يترك المجمع: يتم **إضافة** حصة البروتوكول إلى `protocol_fees_token_{0,1}` والباقي يتم تحويله إلى المنشئ. يصلح المسار بدون إذن المستقبلات إلى ATAs القانونية لـ `pool_creator`. لم يتغير `PoolState` نفسه — لا يوجد عداد منفصل للمبلغ المشترك.
+
+### `AmmConfig`
+
+```rust
+pub struct AmmConfig {
+    pub bump: u8,
+    pub disable_create_pool: bool,
+    pub index: u16,                       // matches the seed
+    pub trade_fee_rate: u64,              // e.g., 2500 = 0.25%
+    pub protocol_fee_rate: u64,           // fraction of trade fee to protocol
+    pub fund_fee_rate: u64,               // fraction of trade fee to fund
+    pub create_pool_fee: u64,             // paid once at init (in SOL or token)
+    pub protocol_owner: Pubkey,           // can call CollectProtocolFee
+    pub fund_owner: Pubkey,               // can call CollectFundFee
+    pub creator_fee_rate: u64,            // optional pool-creator fee rate (1/1_000_000 of volume)
+    pub creator_fee_share_rate: u64,      // protocol's default share OF the creator fee
+    pub padding: [u64; 14],
+}
+// AmmConfig::LEN == 236 bytes — unchanged.
+```
+
+ثلاثة أشياء يجب الحذر منها:
+
+1. **`trade_fee_rate` و `creator_fee_rate` هما كسور من الحجم**، كلاهما مقوّم بوحدات `1/1_000_000`. `2500` يعني 0.25% من حجم التجارة. **`protocol_fee_rate` و `fund_fee_rate` هما كسور من *رسوم التجارة*** (وليس من الحجم)، بنفس مقام `1/1_000_000`. رسوم المنشئ **ليست** كسرًا من رسوم التجارة — إنها معدل مستقل خاص بها. الحسابات الكاملة موجودة في [`products/cpmm/fees`](/docs/i18n/ar/products/cpmm/fees).
+2. **`index` هو `u16`**، لذا تستخدم بذرة التجزئة 2 بايت big-endian. الخطأ بمقدار واحد في ترتيب البايت هو خطأ تكامل شائع.
+3. **`AmmConfig` غير قابل للتغيير على مستوى المجمع.** يشير المجمع إلى `AmmConfig` واحد عند الإنشاء ولا يتحول أبدًا. تنتشر تغييرات الرسوم لأن المجمع يقرأ الإعدادات في كل مبادلة — لكن لا يمكن نقل المجمع بين فئات الرسوم.
+
+ملاحظة حول رسوم المنشئ: **المعدل** نفسه (`creator_fee_rate`) يعيش على `AmmConfig` ويتم مشاركته عبر فئة الرسوم. ما إذا كان مجمع معين يفرضها فعليًا (`enable_creator_fee`) وأي جانب من المبادلة يهبط عليه (`creator_fee_on`) يعيش على `PoolState`. رسوم المنشئ **مستقلة** عن رسوم التجارة — إنها معدل خاص بها، متراكمة على عدادات خاصة بها (`creator_fees_token_{0,1}`)، ولا تقلل أبدًا من حصص LP / البروتوكول / الصندوق من رسوم التجارة. يتم الكنس عبر `CollectCreatorFee` أو `CollectCreatorFeePermissionless` المقيد بالوجهة، وكلا المسارين يسلمان حصة من الرصيد المتراكم إلى البروتوكول في الطريق — عند `creator_fee_share_rate`، أو عند المعدل على PDA [`CreatorFeeShare`](#creatorfeeshare) عند وجود واحد لزوج `(creator, amm_config)` هذا. انظر [`products/cpmm/fees`](/docs/i18n/ar/products/cpmm/fees#protocol-share-of-the-creator-fee) للميكانيكا الكاملة.
+
+### `Permission`
+
+حساب تحكم وصول صغير يستخدمه `InitializeWithPermission`. يدعم برنامج CPMM مسار إنشاء مجمع مرخص بحيث يمكن للبرامج الأخرى (مثل LaunchLab عند تخرج رمز إلى CPMM) إثبات أنها مخولة بإنشاء مجمع ضد `AmmConfig` معين.
+
+```rust
+pub struct Permission {
+    pub authority: Pubkey,    // who is allowed to call InitializeWithPermission
+    pub padding: [u64; 30],
+}
+// Permission::LEN == 8 + 32 + 8 * 30 == 280 bytes
+```
+
+يتم إنشاء PDA Permission عبر `CreatePermissionPda` بواسطة إما مسؤول CPMM أو سلطة منشئ PDA إذن مخصصة. منذ ترقية 2026-09، تقبل `ClosePermissionPda` نفس الموقّعين؛ قبل ذلك كانت حصرية للمسؤول. لا يتفاعل المستخدمون النهائيون مع هذا الحساب مباشرة — إنه أنابيب لتدفقات البرامج المتقاطعة. انظر [`security/admin-and-multisig`](/docs/i18n/ar/security/admin-and-multisig) لحد الدور و [`reference/program-addresses`](/docs/i18n/ar/reference/program-addresses) للعناوين القانونية.
+
+### `CreatorFeeShare`
+
+حساب اختياري يتجاوز حصة البروتوكول من رسوم المنشئ لزوج `(pool creator, AmmConfig)` واحد. تمت إضافته بواسطة ترقية creator-fee-share في 2026-09-19.
+
+```rust
+// programs/cp-swap/src/states/creator_fee_share.rs
+pub const CREATOR_FEE_SHARE_SEED: &str = "creator_fee_share";
+
+pub struct CreatorFeeShare {
+    pub bump: u8,
+    pub creator: Pubkey,       // the pool creator this rate applies to
+    pub amm_config: Pubkey,    // the fee tier this rate applies to
+    pub share_rate: u64,       // protocol's share OF the creator fee, 1/1_000_000
+    pub padding: [u64; 8],
+}
+// CreatorFeeShare::LEN == 8 + 1 + 32 * 2 + 8 + 8 * 8 == 145 bytes
+```
+
+```ts
+const [creatorFeeShare] = PublicKey.findProgramAddressSync(
+  [Buffer.from("creator_fee_share"), creator.toBuffer(), ammConfig.toBuffer()],
+  CPMM_PROGRAM_ID, // see reference/program-addresses
+);
+```
+
+كيف يتصرف:
+
+- **إنه اختياري، لكن الحساب لا يكون أبدًا اختياريًا في التعليمات.** يعلن `CollectCreatorFee` و `CollectCreatorFeePermissionless` كلاهما `creator_fee_share` بقيد البذرة أعلاه ويأخذانه في كل استدعاء. يتحقق البرنامج بعد ذلك ما إذا كان الحساب فارغًا أو مملوكًا بشكل أجنبي؛ إذا كان الأمر كذلك فإنه يعود إلى `AmmConfig.creator_fee_share_rate`. لذا يجب على العميل دائمًا اشتقاق وتمرير العنوان، سواء كان الحساب موجودًا أم لا.
+- **`share_rate` مقيد بـ `FEE_RATE_DENOMINATOR_VALUE` (`1_000_000`)** عند الإنشاء، وأيضًا عند تشغيل الانقسام. `1_000_000` يوجه رسوم المنشئ بالكامل إلى البروتوكول؛ `0` لا يوجه أي منها.
+- **تم الإنشاء والإغلاق بواسطة المسؤول أو سلطة مخصصة** عبر `CreateCreatorFeeShare` / `CloseCreatorFeeShare`. إغلاقه يعيد الإيجار إلى الموقّع ويسقط الزوج إلى الافتراضي للإعدادات؛ منشئ المجمع ليس موقّعًا على أي من المسارين.
+- **يتم تفتيشه على المنشئ، وليس على المجمع.** حساب واحد يحكم كل مجمع أنشأه هذا المنشئ على `AmmConfig` هذا. منشئ لديه مجمعات على فئتي رسوم يحتاج إلى حسابين ليتم تغطيتهما على كليهما.
+
+حسابات الانقسام التي يقودها موجودة في [`products/cpmm/fees`](/docs/i18n/ar/products/cpmm/fees#protocol-share-of-the-creator-fee).
+
+### الخزائن و Token-2022
+
+`vault0` و `vault1` مملوكة بواسطة PDA سلطة CPMM، ومالك برنامج الرمز (`token_program`) هو إما SPL Token أو Token-2022، يتم تحديده عند إنشاء المجمع بواسطة برنامج العملة. يتعامل المجمع مع الحالتين بشفافية — تمرر معرّف برنامج الرمز الصحيح لكل جانب في حسابات تعليمات `Swap` / `Deposit` / `Withdraw`.
+
+يفرض CPMM **قائمة سماح امتداد صارمة** عند إنشاء المجمع (`is_supported_mint` في `utils/token.rs`). يمكن استخدام عملة Token-2022 في مجمع CPMM فقط إذا كان **كل** امتداد تحمله على هذه القائمة:
+
+- **`TransferFeeConfig`.** تطبقه العملة على كل تحويل. المجمع على الجانب المستقبل لودائع `SwapBaseInput` والجانب المرسل للسحب. يحسب البرنامج **الصافي** المبلغ الهابط في الخزينة ويعيّن المنحنى وفقًا لذلك. انظر [`algorithms/token-2022-transfer-fees`](/docs/i18n/ar/algorithms/token-2022-transfer-fees).
+- **`MetadataPointer`** و **`TokenMetadata`.** البيانات الوصفية القياسية على العملة. لا تأثير على رياضيات المبادلة.
+- **`InterestBearingConfig`.** تتراكم كمية واجهة المستخدم للعملة الفائدة. تخزن الخزينة المبالغ الخام؛ يعمل المنحنى على المبالغ الخام فقط. يجب على واجهات المستخدم التي تعرض APR استدعاء مساعدات Token-2022 لتقديم كمية واجهة المستخدم.
+- **`ScaledUiAmount`.** امتداد تحجيم عرض واجهة المستخدم. نفس المعاملة مثل `InterestBearingConfig` — يستخدم المنحنى المبالغ الخام.
+
+أي امتداد آخر — `PermanentDelegate`، `TransferHook`، `DefaultAccountState`، `NonTransferable`، `ConfidentialTransfer`، `Group`/`GroupMember`، `MintCloseAuthority`، إلخ. — يسبب `Initialize` في الرفض مع `NotSupportMint`. الاستثناء الوحيد هو **سجل لكل عملة**: إذا كان PDA `SupportMintAssociated` موجودًا عند البذرة `[b"support_mint", mint]`، يتم قبول العملة بغض النظر عن مجموعة الامتدادات الخاصة بها. يتم إنشاء وإزالة PDA هذا بواسطة المسؤول (أو سلطة دعم عملة مخصصة) عبر `CreateSupportMintAssociated` / `CloseSupportMintAssociated`، لذا لا يحتاج إدراج عملة معينة إلى ترقية برنامج.
+
+<Note>
+  **تم التغيير في 2026-09.** كان CPMM يحمل سابقًا قائمة بيضاء بأربعة عناوين مشفرة `MINT_WHITELIST` اختصرت فحص الامتداد. تم **إزالة** هذه المصفوفة؛ PDA السجل هو الآن الالتفافة الوحيدة. أي عملة كانت تعتمد على القائمة البيضاء المشفرة تحتاج إلى PDA `SupportMintAssociated` قبل إنشاء مجمع جديد لها — المجمعات الموجودة غير متأثرة، لأن الفحص يعمل فقط عند إنشاء المجمع.
+</Note>
+
+تعيش قائمة الامتدادات المدققة في مصدر CP-Swap تحت `programs/cp-swap/src/utils/token.rs` ويمكن أن تتغير مع ترقيات البرنامج المستقبلية. انظر [`reference/token-2022-support`](/docs/i18n/ar/reference/token-2022-support) لمصفوفة البرنامج المتقاطع.
+
+### الملاحظة
+
+حساب الملاحظة هو حلقة مخزن مؤقت لإدخالات `ObservationState`، كل منها يخزن `block_timestamp` و **سعر تراكمي**. في كل مبادلة يضيف البرنامج ملاحظة جديدة إذا مرت فترة زمنية كافية منذ آخر واحدة. يتم حساب TWAPs بقراءة ملاحظتين وقسمة `Δcumulative / Δtime`.
+
+```rust
+// OBSERVATION_NUM is hardcoded in the program to 100.
+pub const OBSERVATION_NUM: usize = 100;
+
+pub struct Observation {
+    pub block_timestamp:              u64,
+    pub cumulative_token_0_price_x32: u128,   // Q32.32, top 64 bits left for overflow
+    pub cumulative_token_1_price_x32: u128,
+}
+
+pub struct ObservationState {
+    pub initialized:           bool,
+    pub observation_index:     u16,                            // circular index
+    pub pool_id:               Pubkey,
+    pub observations:          [Observation; OBSERVATION_NUM], // 100 entries
+    pub last_update_timestamp: u64,                            // timestamp of the most recent append
+    pub padding:               [u64; 3],
+}
+```
+
+يتم تحجيم حلقة المخزن المؤقت لـ **100 ملاحظة**. كل ملاحظة 40 بايت (`8 + 16 + 16`)، لذا المصفوفة وحدها 4,000 بايت؛ `ObservationState::LEN` هو بالضبط **4,075 بايت** (`8 + 1 + 2 + 32 + 4,000 + 8 × 4`).
+
+قاعدتا المستهلك:
+
+- **لا تستخدم ملاحظة واحدة كسعر.** إنها *تراكمية*، وليست سعر فوري. استخدم اثنتين منها لحساب TWAP.
+- **اختر ملاحظات على الأقل كتلة واحدة بعيدة.** قد لا تنتج المبادلات داخل نفس الكتلة ملاحظة جديدة؛ قراءة متتالية يمكن أن تعيد نفس السجل.
+
+المزيد من الرياضيات في [`products/clmm/accounts`](/docs/i18n/ar/products/clmm/accounts).
+
+## دورة حياة الحساب
+
+| الحدث | الحسابات المُنشأة | الحسابات المُحذوفة |
+|-------|------------------|---------------------|
+| `Initialize` | `poolState`، `lpMint`، `vault0`، `vault1`، `observation` | — |
+| `Deposit` | — (قد ينشئ ATA LP للمستخدم) | — |
+| `Withdraw` | — | — |
+| `Swap` | — (قد ينشئ ATA وجهة للمستخدم) | — |
+| `CollectProtocolFee` | — | — |
+| `CollectFundFee` | — | — |
+| `CollectCreatorFee` / `CollectCreatorFeePermissionless` | — (قد ينشئ المسار بدون إذن ATAs المنشئ) | — |
+| `CreateCreatorFeeShare` | `creatorFeeShare` | — |
+| `CloseCreatorFeeShare` | — | `creatorFeeShare` |
+| `UpdatePoolStatus` | — | — |
+
+لا يتم **إغلاق** مجمعات CPMM و PDAs الخاصة بها أبدًا. `Permission`، `SupportMintAssociated` و `CreatorFeeShare` هي الاستثناءات — إنها سجلات مستقلة يديرها المسؤول، وليست حالة المجمع، وكل واحد منها له تعليمات إغلاق صريحة. حتى عند السيولة الصفرية يبقى `poolState`. هذا مقصود: إعادة بذر نفس المجمع لاحقًا تحافظ على مخزن الملاحظات التاريخي الخاص به واشتقاق PDA الخاص به يبقى مستقرًا.
+
+## ما يجب قراءته أين
+
+- **قوائم حسابات التعليمات** (أي من الأعلى قابل للكتابة/موقّع لكل تعليمات): [`products/cpmm/instructions`](/docs/i18n/ar/products/cpmm/instructions).
+- **دلالات تراكم الرسوم**: [`products/cpmm/fees`](/docs/i18n/ar/products/cpmm/fees).
+- **رياضيات المبادلة / قاعدة تحديث الملاحظة**: [`products/cpmm/math`](/docs/i18n/ar/products/cpmm/math).
+- **البذور القانونية / معرّفات البرامج**: [`reference/program-addresses`](/docs/i18n/ar/reference/program-addresses).
+
+المصادر:
+
+- [`raydium-io/raydium-cp-swap` — PoolState, AmmConfig, ObservationState](https://github.com/raydium-io/raydium-cp-swap)

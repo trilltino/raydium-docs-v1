@@ -1,0 +1,111 @@
+---
+title: "Burn & Earn (영구 유동성 잠금)"
+description: "CPMM 또는 CLMM LP 포지션을 영구적으로 잠금하면서 양도 가능한 Raydium Fee Key NFT를 통해 거래 수수료를 청구할 수 있는 권리를 유지합니다."
+---
+
+<Info>
+  **이 페이지는 AI 자동 번역입니다. 모든 내용은 영문판을 기준으로 합니다.**
+
+  [영문판 보기 →](/docs/en/user-flows/burn-and-earn)
+</Info>
+
+<Info>
+  **여기서 "burn"의 의미.** 이름과 달리 LP 토큰 / 포지션 NFT는 소각되지 않고 프로그램 소유 에스크로에 **잠금**됩니다. 유동성은 절대 인출할 수 없지만 수수료는 계속 누적되며 Fee Key NFT 보유자가 청구할 수 있습니다. NFT는 양도 가능하므로 NFT를 소유한 사람이 수수료 흐름을 소유합니다.
+</Info>
+
+<Warning>
+  제한된 발행자 풀의 동결된 CLMM 포지션은 포지션 NFT를 잠금 에스크로로 이전할 수 없으므로 Burn & Earn에 진입할 수 없습니다. 이 플로우를 제공하기 전에 포지션 NFT 토큰 계정을 확인하세요. 일반 CLMM 포지션은 양도 가능하며 지원됩니다.
+</Warning>
+
+## Burn & Earn이란
+
+Burn & Earn은 풀 생성자(또는 모든 LP)가 거래 수수료를 청구할 권리를 유지하면서 예치금을 온체인에서 **영구적**으로 만들 수 있는 Raydium 기능입니다. 포지션은 상환 불가능해지지만 새로 발행된 **Raydium Fee Key** NFT는 해당 잠금 포지션에서 `collectFees`할 수 있는 지속적인 권리를 나타냅니다.
+
+일반적인 사용 사례:
+
+- **런칭 신뢰도.** 프로젝트는 배포자의 LP를 잠금하여 러그풀을 하지 않겠다는 의지를 보입니다. 보유자는 유동성이 영구적임을 온체인에서 확인할 수 있습니다.
+- **수수료 창출 수집품.** 수익을 생성하는 양도 가능한 NFT입니다. NFT를 판매하면 수수료 흐름이 이전됩니다.
+- **재무 등급 LP.** 프로토콜이 브랜드 / 발견 목적으로 유동성을 영구적으로 유지하면서 수수료 측면을 수익화하려는 경우입니다.
+
+## 지원되는 풀 유형
+
+| 프로그램 | Burn & Earn 지원 |
+|---|---|
+| CPMM | 예 |
+| CLMM | **전체 범위만** (권장) |
+| AMM v4 (Hybrid) | 지원 안 함 |
+
+CLMM의 경우 전체 가격 범위에 걸친 포지션만 잠금해야 합니다. 잠금 후에는 리밸런싱할 수 없습니다. 가격이 선택한 범위를 벗어나면 해당 포지션에서 수수료 획득을 영구적으로 중단합니다. 좁은 범위의 Burn & Earn 포지션은 거의 항상 실수입니다.
+
+## 프로그램 수준에서 잠금이 작동하는 방식
+
+1. 원본 LP 토큰(CPMM) 또는 포지션 NFT(CLMM)가 Burn & Earn 프로그램이 소유한 PDA로 이전됩니다.
+2. **Fee Key NFT**가 호출자에게 발행됩니다. 메타데이터는 잠금 포지션의 PDA를 가리킵니다.
+3. Burn & Earn은 `collectFees`(또는 풀 유형별 동등한 호출)를 노출합니다:
+   - 서명자가 주어진 잠금 포지션에 대한 Fee Key NFT를 보유하는지 확인합니다.
+   - CPI를 통해 기본 풀 프로그램의 수수료 청구 명령을 호출합니다.
+   - 수집된 수수료를 Fee Key 보유자의 ATA로 라우팅합니다.
+4. 해당하는 `withdraw`가 없습니다. 기본 LP / 포지션은 에스크로를 절대 떠나지 않습니다.
+
+Fee Key는 표준 SPL NFT입니다. 모든 Solana NFT 마켓플레이스에서 판매하거나, 지갑 간에 이동하거나, NFT를 수락하는 대출 프로토콜에서 담보로 사용하거나, 다른 계약으로 래핑할 수 있습니다. `collectFees` 호출 시점에 이를 보유한 사람이 수수료를 받습니다.
+
+## UI 안내
+
+1. 평소대로 CPMM 풀 또는 전체 범위 포지션이 있는 CLMM 풀을 생성합니다.
+2. **유동성 → 생성 → Burn & Earn**으로 이동합니다.
+3. 잠금할 포지션을 선택합니다.
+4. 포지션 세부 정보(NFT 주소, 크기, 풀)를 확인하고 UI에 표시된 확인 문장을 입력합니다. 이 작업은 되돌릴 수 없으므로 의도적으로 마찰이 많습니다.
+5. **확인, 유동성 영구 잠금**을 클릭합니다.
+6. Fee Key NFT가 지갑에 도착합니다. 포트폴리오 페이지의 잠금 포지션 아래에 나타납니다.
+
+포트폴리오 페이지 또는 `collectFees`를 통해 다른 포지션과 동일한 방식으로 수수료를 청구합니다.
+
+## API 표면
+
+풀 정보 엔드포인트는 Burn & Earn을 통해 잠금된 해당 풀의 유동성 비율을 나타내는 `burnPercent` 필드를 반환합니다:
+
+```http
+GET https://api-v3.raydium.io/pools/info/list
+  ?poolType=standard
+  &poolSortField=default
+  &sortType=desc
+  &pageSize=1
+  &page=1
+```
+
+```json
+{
+  "data": [
+    {
+      "id": "...",
+      "burnPercent": 99.17,
+      ...
+    }
+  ]
+}
+```
+
+`burnPercent`는 신뢰 신호를 보내기에 편리한 지표입니다. LP가 99% 이상 소각된 토큰은 LP가 0% 소각된 토큰보다 러그풀 위험이 훨씬 낮습니다.
+
+## 주의사항
+
+- **되돌릴 수 없습니다.** LP 측은 절대 회수할 수 없습니다. 다시 건드리지 않아도 되는 금액인지 확인하세요.
+- **CLMM 좁은 범위는 함정입니다.** 전체 범위 CLMM 포지션만 잠금하세요. 범위 제한 잠금 포지션이 가격이 범위를 벗어나면 수수료 획득을 중단한다는 것을 정말 이해하지 않는 한 말입니다.
+- **Fee Key NFT를 잃으면 수수료도 영구적으로 잃습니다.** 증서처럼 취급하세요. 실수로 소각하지 마세요. 적대적 계약에 스테이킹하지 마세요.
+- **이전 수수료가 있는 Token-2022 민트**: Burn & Earn은 이를 지원하지만 모든 수수료 청구 시 이전 수수료 할인이 적용됩니다. 이를 고려하세요.
+- **부분 잠금은 없습니다.** 50% 잠금, 50% 이동 가능하게 하려면 먼저 포지션을 두 개로 분할한 다음 하나만 잠금하세요.
+
+## LaunchLab은 내부적으로 Burn & Earn을 사용합니다
+
+[LaunchLab](/docs/i18n/ko/products/launchlab)에서 졸업한 토큰은 잠금 LP에 LP-Lock을 사용합니다. 2026-08-17 업그레이드 전에 `creatorScale`은 생성자 소유 Fee Key를 생성했습니다. 그 이후에 실행된 마이그레이션은 `platformScale + creatorScale`을 하나의 플랫폼 Fee Key 포지션으로 결합하고 `burnScale`을 소각합니다. 이전 완료된 마이그레이션의 Fee Key는 변경되지 않습니다. [`products/launchlab/platforms`](/docs/i18n/ko/products/launchlab/platforms) 및 [`products/launchlab/creator-fees`](/docs/i18n/ko/products/launchlab/creator-fees)를 참조하세요.
+
+## 다음 단계
+
+- [`products/cpmm/instructions`](/docs/i18n/ko/products/cpmm/instructions) — CPMM 수수료 청구 메커니즘.
+- [`products/clmm/instructions`](/docs/i18n/ko/products/clmm/instructions) — CLMM 수수료 청구 메커니즘.
+- [`products/launchlab/creator-fees`](/docs/i18n/ko/products/launchlab/creator-fees) — 생성자 수수료 대 플랫폼 Fee Key 권리.
+
+출처:
+
+- raydium.io/liquidity의 Raydium 웹 UI Burn & Earn 플로우.
+- `api-v3.raydium.io/pools/info/list` 응답 스키마.

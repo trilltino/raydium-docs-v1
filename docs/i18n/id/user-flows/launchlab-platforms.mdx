@@ -1,0 +1,60 @@
+---
+title: "Platform LaunchLab"
+description: "Bagaimana konfigurasi platform pihak ketiga membentuk peluncuran LaunchLab, biaya, branding, dan pengaturan pasca-migrasi."
+---
+
+<Info>
+  **Halaman ini diterjemahkan secara otomatis oleh AI. Versi bahasa Inggris adalah acuan resmi.**
+
+  [Lihat versi bahasa Inggris →](/docs/en/user-flows/launchlab-platforms)
+</Info>
+
+<Info>
+  Platform LaunchLab adalah konfigurasi on-chain yang digunakan oleh permukaan peluncuran atau komunitas. Pengaturan platform dapat memengaruhi biaya, branding, dukungan biaya kreator, dan perilaku pool pasca-migrasi.
+</Info>
+
+LaunchLab mendukung lingkungan peluncuran pihak ketiga melalui Platform PDA. Platform dapat menawarkan pengalaman peluncuran token bermerek sendiri sambil menggunakan infrastruktur program LaunchLab dan migrasi pool Raydium.
+
+## Apa yang dapat dikontrol platform
+
+| Pengaturan | Mengapa penting |
+|---|---|
+| Biaya kreator | Menetapkan biaya kreator kurva ikatan dan dapat memilih kreator-of-record CPMM. |
+| Biaya platform | Menetapkan ke mana pendapatan biaya tingkat platform dikirim. |
+| Metadata branding | Memberikan platform nama, deskripsi, dan logo yang dapat ditampilkan di permukaan aplikasi. |
+| Pengelompokan peluncuran | Memungkinkan UI menampilkan token yang diluncurkan di bawah platform yang sama. |
+| Pengaturan pool pasca-migrasi | Dapat menentukan konfigurasi biaya CPMM ketika platform memigrasikan peluncuran ke CPMM. |
+| Distribusi LP | Menetapkan bagian yang dibakar dan bagian LP terkunci milik platform. Skala kreator yang dipertahankan digabungkan ke dalam bagian platform. |
+| Daftar izin konfigurasi global | Dapat membatasi peluncuran ke akun `GlobalConfig` yang secara eksplisit diizinkan oleh admin platform. |
+
+## Apa yang harus diperiksa kreator
+
+Sebelum meluncurkan di bawah platform apa pun, konfirmasi:
+
+- Dompet mana yang menerima biaya platform.
+- Apakah biaya kreator diaktifkan.
+- Konfigurasi biaya CPMM dan kreator-of-record mana yang digunakan platform setelah kelulusan.
+- Bagaimana token LP dibagi setelah kelulusan.
+- Apakah NFT Fee Key platform akan dicetak.
+- Apakah platform memiliki syarat, kebijakan, atau aturan kelayakan sendiri.
+
+<Warning>
+  Pengaturan platform dapat secara material mengubah ekonomi kreator dan ekspektasi pengguna. Tinjau sebelum menandatangani transaksi peluncuran. Halaman ini menjelaskan mekanika saja dan bukan nasihat hukum, keuangan, atau investasi.
+</Warning>
+
+## Apa yang harus diperiksa pedagang
+
+Saat membeli token LaunchLab, platform dapat memengaruhi jalur biaya dan penanganan likuiditas pasca-migrasi. Sebelum berdagang:
+
+- Periksa platform dan pengaturan peluncuran token.
+- Konfirmasi tingkat biaya CPMM jika UI menampilkannya.
+- Periksa apakah LP dibakar, dikunci, atau ditugaskan.
+- Verifikasi mint token dari halaman token, bukan hanya dari teks media sosial.
+
+## Tautan
+
+- [Ringkasan LaunchLab](/docs/i18n/id/user-flows/launchlab-overview) — siklus hidup peluncuran yang menghadap pengguna.
+- [Membuat token LaunchLab](/docs/i18n/id/user-flows/creating-a-launchlab-token) — alur pengaturan kreator.
+- [Bagaimana biaya kreator bekerja](/docs/i18n/id/user-flows/how-creator-fees-work) — jalur biaya kreator versus hak Fee Key platform.
+- [Konfigurasi platform LaunchLab](/docs/i18n/id/products/launchlab/platform-config) — referensi konfigurasi teknis.
+- [Referensi platform LaunchLab](/docs/i18n/id/products/launchlab/platforms) — detail platform tingkat protokol.

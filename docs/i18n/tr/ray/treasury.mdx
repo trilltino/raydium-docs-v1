@@ -1,0 +1,103 @@
+---
+title: "Hazine"
+description: "Protokol multisig, ücret toplanması, geri alım, hazine ve havuz oluşturma ücreti adresleri."
+---
+
+<Info>
+  **Bu sayfa yapay zekâ tarafından otomatik olarak çevrilmiştir. İngilizce sürüm esas alınır.**
+
+  [İngilizce sürümü görüntüle →](/docs/en/ray/treasury)
+</Info>
+
+## Akışa genel bakış
+
+```text
+Havuz ücretleri
+  -> Programa özel toplama adresi
+      -> RAY geri alım rotası
+      -> USDC hazine rotası (varsa)
+
+Havuz oluşturma ücretleri
+  -> Programa özel SOL ücret adresi
+```
+
+Bu akıştaki her adres herkese açık ve incelenebilir.
+
+## Protokol multisig
+
+| Amaç | Adres |
+|---|---|
+| Protokol multisig | `GThUX1Atko4tqhN2NaiTazWSeFWMuiUvfFnyJyUghFMJ` |
+
+Hızlı bağlantılar:
+
+- [Squads](https://v3.squads.so)
+- [Solscan](https://solscan.io/account/GThUX1Atko4tqhN2NaiTazWSeFWMuiUvfFnyJyUghFMJ)
+
+## Ücret toplama adresleri
+
+Bir swap protokol tarafında ücret ödediğinde, ilgili program bu ücreti bir toplama adresinde biriktir.
+
+Her programa ait toplama adresleri [Protokol ücreti toplama cüzdanları](/docs/i18n/tr/reference/program-addresses#protocol-fee-collection-wallets) altında listelenmiştir.
+
+Toplama adresleri çeşitli SPL token'larını tutabilir. Örneğin, SOL/USDC havuzlarından gelen ücretler wSOL ve USDC bakiyesi üretebilir, SOL/RAY havuzları ise wSOL ve RAY bakiyesi üretebilir.
+
+Bir toplama adresini şu şekilde inceleyebilirsiniz:
+
+```bash
+spl-token accounts --owner projjosVCPQH49d5em7VYS7fJZzaqKixqKtus7yk416
+```
+
+## RAY geri alım saklama
+
+Geri alınan RAY şurada saklanır:
+
+| Amaç | Adres |
+|---|---|
+| Geri alınan RAY birikimi | `DdHDoz94o2WJmD9myRobHCwtx1bESpHTd4SSPe6VEZaz` |
+
+İnceleyin:
+
+```bash
+spl-token accounts --owner DdHDoz94o2WJmD9myRobHCwtx1bESpHTd4SSPe6VEZaz
+```
+
+Geçmiş geri alım faaliyeti, bu adrese gelen transferler ve swap'lardan yeniden oluşturulabilir.
+
+## Hazine adresleri
+
+RAY geri alımlarına yönlendirilmeyen ücretler USDC hazine adreslerine konsolide olabilir.
+
+| Kaynak | Hazine adresi |
+|---|---|
+| CLMM | `CHynyGLd4fDo35VP4yftAZ9724Gt49uXYXuqmdWtt68F` |
+| CPMM | `FS3HipLdf13nhaeN9NhRfGr1cnH84GdNEam3WHhUXVYJ` |
+
+Bir hazine adresini şu şekilde inceleyin:
+
+```bash
+spl-token accounts --owner CHynyGLd4fDo35VP4yftAZ9724Gt49uXYXuqmdWtt68F
+```
+
+## Havuz oluşturma ücretleri
+
+CPMM veya Standard AMM v4 havuzu oluşturmak, SOL cinsinden bir havuz oluşturma ücreti alır. Bu ücretler programa özel adreslerde birikir.
+
+Her iki küme için alıcı adresler [Havuz oluşturma ücreti alıcıları](/docs/i18n/tr/reference/program-addresses#pool-creation-fee-receivers) altında listelenmiştir.
+
+CLMM havuzu oluşturma yine de hesap kirası gerektirir, ancak aynı ayrı SOL havuzu oluşturma ücreti yolunu kullanmaz.
+
+## Ücret akışını denetleme
+
+Herkes Raydium'un ücret akışını genel işlem verilerinden doğrulayabilir:
+
+1. Raydium havuzundan bir swap işlemi çekin.
+2. Havuz programını belirleyin: CLMM, CPMM veya Standard AMM v4.
+3. İşlemdeki ücret muhasebesi ve token transferlerini inceleyin.
+4. Protokol tarafı hareketi ilgili toplama adresine eşleştirin.
+5. Toplama adresinden giden işlemleri izleyin.
+6. RAY birikimini `DdHDoz...VEZaz` adresine veya USDC bakiyelerini yukarıdaki hazine adreslerine eşleştirin.
+
+## Tutarsızlıkları raporlama
+
+Gözlemlenen yönlendirme burada listelenen adreslerle eşleşmiyorsa, bunu [`security/disclosure`](/docs/i18n/tr/security/disclosure) üzerinden bildirin.

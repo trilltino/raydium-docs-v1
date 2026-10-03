@@ -1,0 +1,264 @@
+---
+title: "LaunchLab PlatformConfig"
+description: "按平台配置，用于自定义品牌、费用分配、NFT 迁移份额、归属分配，以及通过该平台路由的任何启动的启动参数规则。"
+---
+
+<Info>
+  **本页内容由 AI 自动翻译，所有内容以英文版本为准。**
+
+  [查看英文版 →](/docs/en/products/launchlab/platform-config)
+</Info>
+
+<Info>
+  `PlatformConfig` 是位于 [`GlobalConfig`](/docs/i18n/zh/products/launchlab/global-config) 之上的**平台级**覆盖层。`GlobalConfig` 定义协议范围的规则（"交易费为 1%，供应量至少 1000 万，只有这个钱包可以毕业"），而 `PlatformConfig` 是每个启动平台（pump.fun、Raydium 自有 UI、第三方启动板）用来添加其费用、声称毕业后 LP 的份额、限制其启动可以选择的启动参数，以及在链上展示其品牌（名称、网站、图像）的方式。
+</Info>
+
+## 概述
+
+`PlatformConfig` 账户为平台拥有五个跨领域的关注点：
+
+1. **品牌** — 名称、网站、图像链接，全部内联存储，以便任何浏览器或聚合器都可以显示启动代币的平台。
+2. **平台费** — 在协议 `trade_fee_rate` 之上的额外交易费（`fee_rate`）。累积到平台的 `platform_fee_wallet`。在创建和更新路径上均限制为 500 bps（`50000`），从 2026-08-26 的 100 bps（`10000`）提高 — 见[费率上限](#费率上限)。
+3. **LP 迁移分割** — 三个存储的整数（`platform_scale`、`creator_scale`、`burn_scale`），总和为 `1_000_000`。在 2026-08-17 升级之前，创建者规模产生单独的创建者费用密钥。升级后执行的迁移将前两个合并为一个平台拥有的锁定 LP 份额；其余的被销毁。
+4. **启动参数规则** — 可选的限制（`restrict_curve_param`），要求启动满足其选择的 `GlobalConfig` 的 [`PlatformCurveRule`](/docs/i18n/zh/products/launchlab/curve-rules) 账户。规则支持值范围、替代层级和代币类型门控；它们存在于自己的账户中，而不是在 `PlatformConfig` 上。
+5. **全局配置允许列表** — 可选的限制，要求为选定的 `GlobalConfig` 创建平台的 `PlatformAllowConfig`。
+
+PDA 推导：
+
+```ts
+const [platformConfigPda] = PublicKey.findProgramAddressSync(
+  [
+    Buffer.from("platform_config"),
+    platformAdmin.toBuffer(),       // platform's owning pubkey
+  ],
+  LAUNCHLAB_PROGRAM_ID,
+);
+```
+
+（见源代码中的 `create_platform_config` 获取规范种子列表。）
+
+## 布局
+
+```rust
+// states/platform_config.rs
+pub const PLATFORM_CONFIG_SEED: &str = "platform_config";
+pub const NAME_SIZE: usize = 64;
+pub const WEB_SIZE:  usize = 256;
+pub const IMG_SIZE:  usize = 256;
+pub const MAX_CREATOR_FEE_RATE: u64 = 5000;       // 50 bps (denominator 1_000_000)
+pub const MAX_TRANSFER_FEE_RATE: u16 = 500;       // 5%   (denominator 10_000)
+
+#[account]
+pub struct PlatformConfig {
+    pub epoch:                       u64,
+    pub platform_fee_wallet:         Pubkey,            // signs ClaimPlatformFee
+    pub platform_nft_wallet:         Pubkey,            // receives the platform NFT slice at CPMM graduation
+    pub platform_scale:              u64,               // share of LP minted to platform NFT
+    pub creator_scale:               u64,               // creator share before upgrade; added to platform share afterward
+    pub burn_scale:                  u64,               // share of LP burned permanently
+    pub fee_rate:                    u64,               // platform's trade fee (1/1_000_000)
+    pub name:                        [u8; 64],          // utf-8 padded with zeros
+    pub web:                         [u8; 256],
+    pub img:                         [u8; 256],
+    pub cpswap_config:               Pubkey,            // CPMM AmmConfig that the post-grad pool will bind to
+    pub creator_fee_rate:            u64,               // creator-side fee taken pre-graduation
+    pub transfer_fee_extension_auth: Pubkey,            // for Token-2022 launches: withdraw-withheld authority from mint creation, fee-config authority from graduation
+    pub platform_vesting_wallet:     Pubkey,
+    pub platform_vesting_scale:      u64,               // platform's slice of total_locked_amount
+    pub platform_cp_creator:         Pubkey,            // optional creator-of-record on the post-graduation CPMM pool
+    pub restrict_global_config:      u8,                // 0 = unrestricted, 1 = require allow PDA
+    pub restrict_curve_param:        u8,                // 0 = unrestricted, 1 = enforce the PlatformCurveRule
+    pub curve_rule_manager:          Pubkey,            // hot wallet allowed to manage rule accounts
+    pub padding:                     [u8; 78],
+}
+```
+
+该账户固定为 944 字节。在 2026-08-31 版本将启动参数移到 [`PlatformCurveRule`](/docs/i18n/zh/products/launchlab/curve-rules) 账户之前，它持有尾部的 `Vec<PlatformCurveParam>`；`restrict_curve_param`、`curve_rule_manager` 和 vec 长度前缀占用的 4 字节都来自填充，因此字节计数和每个早期字段偏移都保持不变。有关解码器必须更改的内容，请参阅[更改日志条目](/docs/i18n/zh/reference/changelog/2026-08-31-launchlab-platform-curve-rules)。
+
+`platform_scale + creator_scale + burn_scale` 必须等于 `1_000_000`，**并且 `creator_scale` 必须恰好为 `0`** —— 程序在 `CreatePlatformConfig` 和 `MigrateNftInfo` 更新路径上都断言 `require_eq!(creator_scale, 0)`，所以实际可设置的分割只是 `platform_scale + burn_scale = 1_000_000`。该字段之所以保留，只是为了让 2026-08-17 之前的配置仍能解码；在那些配置上，它们存储的任何 `creator_scale` 在迁移时都会被折入平台的锁定 LP，而不是流向代币创建者。
+
+可设置的示例：
+
+- `(100_000, 0, 900_000)` — 90% LP 销毁，10% 锁定到平台。
+- `(150_000, 0, 850_000)` — 85% 销毁，15% 锁定到平台。
+- `(0, 0, 1_000_000)` — 完全销毁，无 NFT 铸造。严格的"无内部人士"启动。
+
+## 品牌字段
+
+`name`、`web` 和 `img` 是内联字节数组，用零填充至其大小常数。要将它们作为字符串读取，请切片到第一个 `\0`：
+
+```ts
+function readString(bytes: Uint8Array): string {
+  const end = bytes.indexOf(0);
+  return Buffer.from(end === -1 ? bytes : bytes.subarray(0, end)).toString("utf-8");
+}
+```
+
+常数故意设置得很大（`name: 64`、`web: 256`、`img: 256`），以便平台可以包含足够的元数据供浏览器和聚合器使用，而无需触及链外存储。任何超过这些大小的内容都会在 `CreatePlatformConfig` 处以 `InvalidInput` 回滚。
+
+## 费用机制
+
+绑定到 `PlatformConfig` 的曲线上的交换收取三层费用：
+
+```
+trade_fee     = amount_in × global_config.trade_fee_rate    / 1_000_000
+platform_fee  = amount_in × platform_config.fee_rate        / 1_000_000
+creator_fee   = amount_in × platform_config.creator_fee_rate / 1_000_000
+
+amount_after_fee = amount_in − trade_fee − platform_fee − creator_fee
+```
+
+- `trade_fee` 累积到协议的 `protocol_fee_owner`（通过 `CollectFee` 声称）。
+- `platform_fee` 累积到每个平台的金库（通过 `ClaimPlatformFee` 或 `ClaimPlatformFeeFromVault` 声称；见[`instructions`](/docs/i18n/zh/products/launchlab/instructions)）。
+- `creator_fee` 累积到由创建者的公钥 + 报价铸币厂键入的每个创建者金库（通过 `ClaimCreatorFee` 声称）。
+
+### 费率上限
+
+两个费率都以 `1/1_000_000` 计价，因此 `5000` 是 50 bps，`50000` 是 500 bps。
+
+| 费率 | 上限 | 强制执行位置 |
+|---|---|---|
+| `fee_rate` | `50000`（500 bps） | 创建时 `PlatformParams::check()` — 以 `InvalidInput` 回滚。每个触及它的更新变体（`FeeRate` 和 `AllInfo`）上的 `update_platform_fee_rate` — 以 `InvalidPlatformInfo` 回滚。 |
+| `creator_fee_rate` | `MAX_CREATOR_FEE_RATE = 5000`（50 bps） | 创建时 `create_platform_config` 和更新时 `update_creator_fee_rate` — 两者都以 `InvalidPlatformInfo` 回滚。 |
+
+`fee_rate` 的两个强制执行点是不同文件中的单独 `require!` 调用，因此它们携带不同的错误代码，但它们应用相同的上限。在任何允许的费率下创建的平台可以稍后编辑，包括通过一次重写每个字段的 `AllInfo` 批量变体。
+
+两个 `fee_rate` 上限最初都是 100 bps（`10000`）。更新上限在 2026-01-27 移至 `25000`（250 bps）；在 2026-08-26 两者都移至 `50000`（500 bps） — 见[更改日志条目](/docs/i18n/zh/reference/changelog/2026-08-26-launchlab-platform-fee-rate-cap)。
+
+`GlobalConfig.max_share_fee_rate` **不**限制任何一个费率。它限制四个交换指令采用的每个交易 `share_fee_rate` 参数 — 推荐费 — 仅此而已。见[`global-config`](/docs/i18n/zh/products/launchlab/global-config#fees)。
+
+## Token-2022 转账费权限
+
+`transfer_fee_extension_auth` 命名平台密钥，当通过 `InitializeWithToken2022` 创建启动并附加转账费时，该密钥最终会持有基础铸币厂的 `TransferFeeConfig` 权限。该扩展携带两个权限，它们在启动生命周期的**不同点**被移交：
+
+| 权限 | 铸币厂创建时的持有者 | `MigrateToCpswap` 后的持有者 |
+|---|---|---|
+| `withdraw_withheld_authority` — 提取 Token-2022 在代币账户上扣留的费用 | `transfer_fee_extension_auth`，直接写入铸币厂。当字段为 `Pubkey::default()` 时回退到启动 `authority` PDA。 | 已经是平台密钥，所以没有任何移动。迁移仅在 `authority` PDA 仍持有它时才重新分配它。 |
+| `transfer_fee_config_authority` — 更改费率和最大费用 | 始终是启动 `authority` PDA。 | `transfer_fee_extension_auth`，前提是该字段非默认。 |
+
+在 2026-08-27 之前，铸币厂是用两个权限上的 `authority` PDA 创建的，两者都在毕业时移到平台。该程序不公开任何提取扣留或收获指令，因此在债券曲线阶段扣留的费用在启动毕业之前是无法到达的。在铸币厂创建时在提取端写入使它们可从第一笔交易声称 — 见[更改日志条目](/docs/i18n/zh/reference/changelog/2026-08-27-launchlab-token2022-withheld-authority)。
+
+值得规划的两个后果：
+
+- **在启动前设置字段，而不是之后。** 在 `transfer_fee_extension_auth` 为 `Pubkey::default()` 时创建的启动将 `authority` PDA 放在提取端。稍后设置字段仍然有效 — 毕业找到 PDA 就位并移交权限 — 但在此期间没有任何东西可以提取扣留的余额。
+- **在启动中旋转字段会分割两个权限。** 在启动的创建和毕业之间更改 `transfer_fee_extension_auth`，铸币厂的提取扣留权限保留在创建时配置的密钥（PDA 不再持有它，所以迁移跳过该移交），而费用配置权限转到新密钥。在启动之间旋转，或计划通过 Token-2022 直接协调两个密钥。
+
+在启动的整个生命周期中将字段保留在 `Pubkey::default()` 的平台永久将两个权限保留在 `authority` PDA 上：费率永远无法更改，扣留的余额永远无法提取。仅当平台打算持有这些密钥时才将转账费附加到启动。
+
+## NFT 迁移分割（仅 CPMM）
+
+当启动毕业到 CPMM 时，迁移指令将 `CPMM::InitializeWithPermission` 铸造的 LP 代币分为两种方式：
+
+```
+lp_to_platform = floor(lp_total × (platform_scale + creator_scale) / 1_000_000)
+lp_to_burn     = lp_total − lp_to_platform
+```
+
+如果 `lp_to_platform` 非零，LP-Lock 程序将其包装成一个由 `platform_nft_wallet` 拥有的费用密钥 NFT。这替代了创建单独平台和创建者费用密钥的升级前行为。由升级前完成的迁移创建的费用密钥保持不变。此 LP 费用权利与由 `platform_cp_creator` 控制的 CPMM 创建者费用分开。
+
+销毁片段直接被销毁，因此没有账户可以提取它或声称该份额代表的 LP 费用。
+
+具有存储 `migrate_type = 0` 的现有启动仍可使用旧版 AMM v4 路径。新初始化拒绝该迁移类型。
+
+## 启动参数规则
+
+`restrict_curve_param` 是开关。在 `0` 时，程序根本不读取规则。在 `1` 时，通过此平台路由的每个启动必须满足其选择的 `GlobalConfig` 的 [`PlatformCurveRule`](/docs/i18n/zh/products/launchlab/curve-rules) 账户，启动构建器必须将该账户附加到 `remaining_accounts`。
+
+```rust
+pub restrict_curve_param: u8,   // 0 = unrestricted, 1 = enforce the rule of the used config
+pub curve_rule_manager:   Pubkey, // may manage rule accounts; the platform admin always may too
+```
+
+规则是允许的启动形状的菜单：一个检查组内的约束是 AND 的，组是 OR 的，每个约束是支持 `Eq`、`Gte`、`Lte` 和 `Neq` 的 `(field, op, value)` 三元组。这涵盖了值范围、替代层级、毕业估值上限、迁移下限、代币类型门控和时间限制的组 — 完整模型、字段表和九个工作手册在 [`products/launchlab/curve-rules`](/docs/i18n/zh/products/launchlab/curve-rules)。
+
+两件事属于这里而不是那一页：
+
+- **`curve_rule_manager` 是委托，不是转移。** 通过 `UpdatePlatformConfig::CurveRuleManager` 设置它，该钱包可以创建、更新、删除和关闭此平台的规则账户，而无需管理员密钥。平台管理员并行保持相同的权力，因此旋转或清除字段会恢复控制。`Pubkey::default()` 意味着只有管理员可以管理规则。它不能翻转 `restrict_curve_param`，这仍然是仅管理员的调用。
+- **规则在 `GlobalConfig` 之上强制执行，永远不是代替。** 规则检查在配置自己的限制之前运行，只能缩小它们。
+
+这替代了前面的 `curve_params: Vec<PlatformCurveParam>` 白名单，它只能测试精确相等，最多在所有配置中持有 10 个条目，并增加了 `PlatformConfig` 账户本身。使用它的平台由协议在一次性通过中迁移；旧版字段、其两个指令和 `MAX_CURVE_PARAMS` 已消失。
+
+## `PlatformAllowConfig` — 限制平台
+
+每个平台决定是否限制其启动可能使用的 `GlobalConfig` 账户。使用 `UpdatePlatformConfig::RestrictGlobalConfig(0 | 1)` 设置 `restrict_global_config`。
+
+```rust
+pub const PLATFORM_ALLOW_CONFIG_SEED: &str = "platform_allow_config";
+
+#[account]
+pub struct PlatformAllowConfig {
+    pub bump:            u8,
+    pub platform_config: Pubkey,
+    pub global_config:   Pubkey,
+    pub padding:         [u64; 8],
+}
+```
+
+PDA 种子：`[b"platform_allow_config", platform_config, global_config]`。
+
+平台管理员通过 `CreatePlatformAllowConfig` 和 `ClosePlatformAllowConfig` 为每个允许的对创建或关闭一个账户。当限制为 `1` 时，初始化在 `remaining_accounts` 中搜索预期的 PDA，并以 `NotEnoughRemainingAccounts` 拒绝缺失的账户。当限制为 `0` 时，不需要允许账户。
+
+前面的协议管理员管理的 `PlatformGlobalAccess` 账户及其创建/关闭指令已停用。现有 `PlatformConfig` 和 `GlobalConfig` 大小不变，但解码器必须用新的平台标志替换旧的全局标志。旧访问 PDA 不被新检查消费。
+
+## 读取路径
+
+```ts
+// The SDK exports the layout, not a getter — decode the account yourself.
+import { PlatformConfig } from "@raydium-io/raydium-sdk-v2";
+
+const info = await connection.getAccountInfo(platformConfigPda);
+const platformConfig = PlatformConfig.decode(info!.data);
+
+console.log("Platform:", readString(platformConfig.name));
+console.log("Fee rate:", platformConfig.feeRate, "(/1M)");
+console.log("NFT split:",
+  platformConfig.platformScale,
+  platformConfig.creatorScale,
+  platformConfig.burnScale,
+);
+console.log("Restrict launch params:", platformConfig.restrictCurveParam);
+console.log("Rule manager:", platformConfig.curveRuleManager.toBase58());
+```
+
+对于显示"此代币从哪里启动"的 UI，`PoolState.platform_config` 直接指向原始 `PlatformConfig` — 获取一次并缓存品牌。
+
+## 更新路径
+
+| 指令 | 谁签署 | 更改内容 |
+|-------------|-----------|--------------|
+| `CreatePlatformConfig` | 平台管理员（一次性） | 使用 `PlatformParams` 初始化账户。 |
+| `UpdatePlatformConfig` | 平台管理员 | 由 `param: u8` 键入的通用调度；每个调用改变一个字段，或通过 `AllInfo` 一次改变每个字段。品牌字段、费率、归属钱包和各种钱包都可通过此设置。两个费率都根据[费率上限](#费率上限)中的上限在每个触及它们的变体上重新验证。 |
+| `CreatePlatformAllowConfig` / `ClosePlatformAllowConfig` | 平台管理员 | 为此平台添加或删除一个允许的 `GlobalConfig`。 |
+| `CreatePlatformCurveRule` / `ClosePlatformCurveRule` | `curve_rule_manager` 或平台管理员 | 创建或关闭一个 `GlobalConfig` 的规则账户。 |
+| `UpdatePlatformCurveRule` / `RemovePlatformCurveRule` | `curve_rule_manager` 或平台管理员 | 添加、替换或删除一个检查组。账户被调整大小，因此租金跟随内容。 |
+| `ClaimPlatformFee` | `platform_fee_wallet` | 从 `PoolState.quote_vault` 扫除每个池的平台费。 |
+| `ClaimPlatformFeeFromVault` | `platform_fee_wallet` | 扫除每个平台的费用金库（PDA 在 `[platform_config, quote_mint]`）。 |
+
+钱包轮换（`platform_fee_wallet`、`platform_nft_wallet`、`platform_vesting_wallet`、`platform_cp_creator`、`transfer_fee_extension_auth`、`cpswap_config`）都通过 `UpdatePlatformConfig` 进行。阅读源代码的 `update_platform_config` 调度表以获取确切的 `param` 代码。
+
+## 常见陷阱
+
+- **在构建器更新之前启用 `restrict_curve_param`。** 当它为 `1` 时，规则 PDA 必须在每个启动的 `remaining_accounts` 中，即使对于没有规则账户的配置 — 缺失的账户是 `NotEnoughRemainingAccounts`，而不是通过。首先发布构建器更改，然后翻转标志。
+- **启用 `restrict_curve_param` 且规则为空。** 持有零组的规则，或持有零约束的组，允许一切。启用标志本身不是限制；首先写入组，使用 [SDK 检查](/docs/i18n/zh/products/launchlab/curve-rules#check-before-you-send) 验证它们，并在 devnet 上排练整个序列。
+- **NFT 分割舍入。** 三个规模必须精确总和为 `1_000_000`。`CreatePlatformConfig` 处的差一错误会回滚；运行时的差一会铸造或销毁一个额外的 LP 单位，这正是严格相等检查所在的位置。
+- **平台归属双重分配。** 如果 `platform_vesting_scale > 0`，平台必须在启动的筹款结束后调用 `CreatePlatformVestingAccount` 一次；如果它忘记了，该份额保持未分配和休眠状态（启动的 `total_locked_amount` 预算被消费但平台永远不声称）。
+- **`platform_cp_creator` 歧义。** 当设置为 `Pubkey::default()` 时，启动创建者被记录为毕业后 CPMM 池的 `pool_creator`；当设置为真实密钥时，该密钥被记录。这决定了毕业后 CPMM 创建者费用的受益人以及谁可以签署原始 `CPMM::CollectCreatorFee` 路径。无权限收集路径仍向此记录密钥的规范 ATA 支付。在平台配置创建时决定你想要哪个模型。
+- **`transfer_fee_extension_auth` 设置晚或旋转。** 该字段每个 Token-2022 启动读取两次 — 一次在铸币厂创建时用于 `withdraw_withheld_authority`，一次在毕业时用于 `transfer_fee_config_authority` — 所以在这两个时刻之间更改的值将两个权限留在不同的密钥上。见 [Token-2022 转账费权限](#token-2022-转账费权限)。
+- **限制而无允许账户。** 在创建所需的 `PlatformAllowConfig` 之前启用 `restrict_global_config` 会阻止选择该配置的新启动。
+
+## 指针
+
+- [`products/launchlab/global-config`](/docs/i18n/zh/products/launchlab/global-config) — 启动必须满足的协议端规则。
+- [`products/launchlab/vesting`](/docs/i18n/zh/products/launchlab/vesting) — `platform_vesting_scale` 机制。
+- [`products/launchlab/creator-fees`](/docs/i18n/zh/products/launchlab/creator-fees) — 创建者费用与平台费用密钥权利。
+- [`products/launchlab/platforms`](/docs/i18n/zh/products/launchlab/platforms) — 平台集成商的操作指南。
+
+源代码：
+
+- `raydium-launch/programs/launchpad/src/states/platform_config.rs` — `PlatformConfig`、`PlatformParams`、`MigrateNftInfo`、`is_curve_rule_manager`、`is_platform_admin`。
+- `raydium-launch/programs/launchpad/src/states/platform_curve_rule.rs` — `PlatformCurveRule`、`CurveRuleGroup`、`ParamConstraint`。
+- `raydium-launch/programs/launchpad/src/states/platform_allow_config.rs` — `PlatformAllowConfig`。
+- `raydium-launch/programs/launchpad/src/instructions/platform/update_platform_config.rs` — `PlatformConfigParam` 调度和强制执行更新时费率上限的每个字段设置器。
+- `raydium-launch/programs/launchpad/src/lib.rs` — 平台配置和允许配置入口点。
+- `raydium-launch/programs/launchpad/src/instructions/initialize_with_token_2022.rs` — `transfer_fee_extension_auth` 被写入新铸币厂的 `TransferFeeConfig` 的位置。
+- `raydium-launch/programs/launchpad/src/instructions/admin/migrate_to_cpswap.rs` — 毕业时权限移交及其 `get_withdraw_withheld_authority` 守卫。

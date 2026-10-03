@@ -1,0 +1,79 @@
+---
+title: "Phân phối phí LP"
+description: "Cách LaunchLab kết hợp các tỷ lệ nền tảng và nhà tạo thành LP bị khóa do nền tảng sở hữu và đốt các token LP CPMM còn lại."
+---
+
+<Info>
+  **Trang này được dịch tự động bằng AI. Phiên bản tiếng Anh là bản chính thức.**
+
+  [Xem bản tiếng Anh →](/docs/en/products/launchlab/tips-and-gotchas/lp-fee-distribution)
+</Info>
+
+Khi một token LaunchLab di chuyển sang CPMM, pool sẽ mint các token LP. Trước bản nâng cấp ngày 2026-08-17, `creatorScale` được khóa riêng cho nhà tạo token. Đối với các lần di chuyển được thực hiện sau bản nâng cấp, `migrateCpLockNftScale` vẫn lưu trữ ba trường có tổng bằng `1_000_000`, nhưng runtime chỉ tạo ra hai điểm đích.
+
+## Phân chia hiệu quả
+
+| Trường | Hành vi được cập nhật |
+|---|---|
+| `platformScale` | Được bao gồm trong phần LP bị khóa do nền tảng sở hữu. |
+| `creatorScale` | Trước bản nâng cấp, nó mint một Fee Key do nhà tạo sở hữu. Sau bản nâng cấp, nó được bao gồm trong phần LP bị khóa do nền tảng sở hữu. |
+| `burnScale` | Bị đốt vĩnh viễn. Không có Fee Key nào đại diện cho phần này. |
+
+```text
+effectivePlatformScale = platformScale + creatorScale
+platformLp = floor(totalLp × effectivePlatformScale / 1_000_000)
+burnLp = totalLp − platformLp
+```
+
+Khi `burnScale` bằng không, nền tảng nhận tất cả các đơn vị LP. Khi `effectivePlatformScale` bằng không, tất cả LP bị đốt và không có Fee Key nền tảng nào được tạo.
+
+## Ví dụ
+
+```ts
+// @raydium-io/raydium-sdk-v2@0.2.64-alpha · mainnet-beta · verified 2026-08-13
+// 90% LP bị khóa do nền tảng sở hữu, 10% bị đốt.
+migrateCpLockNftScale: {
+  platformScale: new BN(900_000),
+  creatorScale: new BN(0),
+  burnScale: new BN(100_000),
+}
+
+// 100% LP bị khóa do nền tảng sở hữu.
+migrateCpLockNftScale: {
+  platformScale: new BN(1_000_000),
+  creatorScale: new BN(0),
+  burnScale: new BN(0),
+}
+
+// 100% bị đốt; không có Fee Key.
+migrateCpLockNftScale: {
+  platformScale: new BN(0),
+  creatorScale: new BN(0),
+  burnScale: new BN(1_000_000),
+}
+
+// A stored value you may still READ off a pre-2026-08-17 config — not settable now.
+// Its 500_000 creator share is folded into the platform's locked LP at migration:
+// { platformScale: 400_000, creatorScale: 500_000, burnScale: 100_000 }
+```
+
+## Mối quan hệ với phí nhà tạo CPMM
+
+Các trường tỷ lệ chỉ kiểm soát quyền sở hữu LP. Chúng không đặt tỷ lệ phí swap hoặc xác định người thụ hưởng phí nhà tạo CPMM. `cpConfigId` chọn `AmmConfig` của CPMM; `platformCpCreator` xác định xem pool CPMM có ghi lại nhà tạo khởi chạy ban đầu hay một địa chỉ do nền tảng chọn hay không.
+
+## Cập nhật phân chia
+
+Trước khi cập nhật nền tảng:
+
+- Xác nhận ba giá trị cộng lại chính xác bằng `1_000_000`.
+- Trình bày `platformScale + creatorScale` là phần nền tảng hiệu quả.
+- Không hứa một Fee Key nhà tạo dựa trên `creatorScale`.
+- Bảo tồn quyền sở hữu Fee Key nhà tạo được hiển thị bằng các lần di chuyển được hoàn thành trước bản nâng cấp; những bản ghi đó không được viết lại.
+- Giải thích thay đổi trước khi các lần khởi chạy trong tương lai sử dụng cấu hình được cập nhật.
+
+## Liên kết
+
+- [Cấu hình nền tảng](/docs/i18n/vi/products/launchlab/platform-config)
+- [Burn & Earn](/docs/i18n/vi/user-flows/burn-and-earn)
+- [Tham chiếu phí LaunchLab & CPMM](/docs/i18n/vi/products/launchlab/tips-and-gotchas/launchlab-cpmm-fee-reference)
+- [Phí nhà tạo LaunchLab](/docs/i18n/vi/products/launchlab/creator-fees)

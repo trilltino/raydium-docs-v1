@@ -1,0 +1,484 @@
+---
+title: "Rust CPI"
+description: "Raydium-Programme von einem anderen Solana-Programm aus über CPI aufrufen: Kontolisten-Konstruktion, Signer-Seeds, verbleibende Konten und Fehlerbehandlung für CPMM, CLMM und LaunchLab. AMM v4 (ohne Anchor-Crate) und Farm v6 werden in eigenen Abschnitten behandelt."
+---
+
+<Info>
+  **Diese Seite wurde mit KI automatisch übersetzt. Maßgeblich ist stets die englische Version.**
+
+  [Englische Version ansehen →](/docs/en/sdk-api/rust-cpi)
+</Info>
+
+CPI („Cross-Program Invocation") ist der Mechanismus, über den ein Solana-Programm ein anderes aufruft. Die meisten Raydium-Programme werden mit Anchor-CPI-Wrapper-Crates ausgeliefert, die die Aufrufstelle wie einen typisierten Funktionsaufruf aussehen lassen, mit Kontostrukturen, die validierte Feldnamen und `cpi::<ix>()`-Helfer haben. Diese Seite dokumentiert das allgemeine Muster einmal, dann die programmspezifischen Unterschiede. Für ausführbare TypeScript-Beispiele siehe die `code-demos`-Seite jedes Produktkapitels.
+
+## Welches Muster gilt für welches Programm
+
+| Programm | Anchor-basiert | Crate | Wo |
+|---|---|---|---|
+| CPMM | Ja | `raydium-cp-swap` (öffentliches Repo; Rust `use`-Pfad ist `raydium_cp_swap`) | [Das allgemeine Muster](#das-allgemeine-anchor-cpi-muster), das durchgearbeitete Beispiel |
+| CLMM | Ja | `raydium-clmm` (öffentliches Repo; Rust `use`-Pfad ist `raydium_clmm`) | [Anwendung des Musters: CLMM](#anwendung-des-musters-clmm) |
+| LaunchLab | Ja | kein bestätigter Crate-Name; Programmquelle ist geschlossen, aber die On-Chain-IDL-Metadaten-ID ist `raydium_launchpad`, ein technischer Name statt des Produktnamens (siehe Hinweis in [Anwendung des Musters: LaunchLab](#anwendung-des-musters-launchlab)) | [Anwendung des Musters: LaunchLab](#anwendung-des-musters-launchlab) |
+| Farm v6 | Unbestätigt; keine öffentliche IDL oder Quelle gefunden (siehe Warnung in [Farm v6](#farm-v6)) | n/a | [Farm v6](#farm-v6) |
+| AMM v4 | **Nein**, älter als Anchor ohne CPI-Crate | keine | [AMM v4](#amm-v4-manuelle-instruction-konstruktion) |
+
+Wenn Sie CPMM, CLMM oder LaunchLab integrieren, lesen Sie zuerst [das allgemeine Muster](#das-allgemeine-anchor-cpi-muster), dann springen Sie zum Abschnitt Ihres Programms für die Kontoliste und alle Unterschiede. Farm v6 und AMM v4 unterscheiden sich genug, um ihre Abschnitte eigenständig zu lesen.
+
+## Cargo-Abhängigkeiten
+
+```toml icon="file-code"
+# Beide öffentlichen Raydium-CPI-Crates pinnen Anchor =1.0.2 auf ihren Upgrade-Branches,
+# daher kann ein Programm von beiden abhängen — siehe die Tabelle unten.
+[dependencies]
+anchor-lang     = "=1.0.2"
+anchor-spl      = "=1.0.2"
+raydium-cp-swap = { git = "https://github.com/raydium-io/raydium-cp-swap", branch = "chore/upgrade-anchor", features = ["cpi"] }
+raydium-clmm    = { git = "https://github.com/raydium-io/raydium-clmm",    branch = "chore/upgrade-anchor", features = ["cpi"] }
+# HINWEIS: Die `master`-Branches beider Repos pinnen immer noch anchor-lang 0.32.1. Die =1.0.2-Pins
+# oben werden nur gegen die Upgrade-Branches aufgelöst; wenn Sie `master` anvisieren, verwenden Sie =0.32.1
+# und die 0.3x CpiContext-API — und dann nur eines der beiden Crates gleichzeitig.
+# LaunchLab: Programmquelle ist nicht öffentlich verfügbar (siehe reference/program-addresses).
+# Es gibt keine Git-Abhängigkeit, auf die verwiesen werden kann. Generieren Sie stattdessen CPI-Bindings
+# aus der veröffentlichten IDL. Siehe „Anwendung des Musters: LaunchLab" unten.
+# AMM v4 hat kein veröffentlichtes Anchor-CPI-Crate; siehe seinen eigenen Abschnitt.
+```
+
+<Warning>
+  **Der Abhängigkeitsschlüssel muss exakt dem `[package] name` des Ziel-Repos entsprechen, Bindestriche eingeschlossen.** Cargo behandelt `raydium_cp_swap` nicht als äquivalent zu `raydium-cp-swap` beim Auflösen einer *Git*-Abhängigkeit.
+</Warning>
+
+`branch = "master"` verfolgt die neueste veröffentlichte Quelle; pinnen Sie auf einen spezifischen `rev = "<commit>"`, wenn Sie einen reproduzierbaren Build benötigen. Dies wird empfohlen, sobald Sie über die Prototypisierung hinaus sind, da eine Upstream-Kontolayout-Änderung auf `master` Ihren Build ohne Warnung bricht.
+
+Das `cpi`-Feature-Flag lässt die Crates nur zur CPI-Oberfläche (Kontostrukturen + Invoker) kompilieren, anstatt das vollständige Programm zu kompilieren, sodass Ihre Binärdatei klein bleibt.
+
+**`anchor-lang` / `anchor-spl` müssen dem entsprechen, was das Ziel-Crate pinnt**:
+
+| Crate | Pinnt `anchor-lang` / `anchor-spl` |
+|---|---|
+| `raydium-cp-swap` (`chore/upgrade-anchor`) | `=1.0.2`, aus dem [2026-09-09 Upgrade](/docs/i18n/de/reference/changelog/2026-09-09-cpmm-anchor-1-and-excess-lamports) |
+| `raydium-clmm` (`chore/upgrade-anchor`) | `=1.0.2`, aus dem [2026-09-30 Upgrade](/docs/i18n/de/reference/changelog/2026-09-30-clmm-anchor-1-and-excess-lamports) |
+| `raydium-cp-swap` (`master`) | `0.32.1`, Caret-gepinnt. Das Upgrade ist nicht auf `master` gelandet |
+| `raydium-clmm` (`master`) | `=0.32.1`. Das Upgrade ist nicht auf `master` gelandet |
+
+<Warning>
+  **Nehmen Sie beide Crates aus der gleichen Anchor-Linie.** Beide Upgrade-Branches pinnen `=1.0.2`, daher kann ein Programm von einer einzigen Crate aus in CPMM und CLMM CPI aufrufen. Das Mischen von Linien bricht den Build: zum Beispiel `raydium-cp-swap` auf `chore/upgrade-anchor` mit `raydium-clmm` auf `master`. Cargo müsste zwei inkompatible Kopien von Anchors Traits in eine Binärdatei linken. Wenn Sie bei einem gemischten Paar stecken, teilen Sie das Programm in zwei auf, oder lassen Sie das typisierte CPI-Crate für eine Seite fallen und kodieren Sie diese Instruction manuell (das für [AMM v4](#amm-v4-manuelle-instruction-konstruktion) gezeigte Muster funktioniert für jedes Programm). Überprüfen Sie beide `Cargo.toml`-Dateien vor dem Start, da die Branches irgendwann zu `master` wechseln werden.
+</Warning>
+
+<Warning>
+  **Anchor 1.0 hat zwei Dinge geändert, die jede CPI-Aufrufstelle berührt.** Wenn Sie eine funktionierende Integration von `0.3x` verschieben:
+
+  - **`CpiContext::new` nimmt einen `Pubkey`, nicht einen `AccountInfo`.** `CpiContext::new(ctx.accounts.cpmm_program.to_account_info(), accts)` wird zu `CpiContext::new(*ctx.accounts.cpmm_program.key, accts)`. Gleiches für `new_with_signer`. Das Strukturfeld ist jetzt `program_id: Pubkey`.
+  - **`Context` hat eine Lebensdauer, nicht vier.** `Context<'_, '_, 'info, 'info, MyProxySwap<'info>>` wird zu `Context<'info, MyProxySwap<'info>>`.
+
+  Auf der Client-Seite gibt `anchor-client`'s `RequestBuilder::instructions()` jetzt `Vec<Instruction>` statt `Result<Vec<Instruction>>` zurück (lassen Sie das `?` weg), und `CommitmentConfig` wurde aus `solana-sdk` verschoben — nehmen Sie es stattdessen von `anchor_client`. `spl-associated-token-account` 8.0 re-exportiert seine Helfer aus dem neuen `spl-associated-token-account-interface`-Crate. `get_associated_token_address` und `ID` sind immer noch an der *Crate-Root* erreichbar (`spl_associated_token_account::{get_associated_token_address, ID}`), aber die Adress-Helfer sind dort veraltet — bevorzugen Sie die direkte Abhängigkeit von `spl-associated-token-account-interface` und importieren Sie `spl_associated_token_account_interface::address::get_associated_token_address` und `spl_associated_token_account_interface::program::ID`. Beachten Sie, dass `::address` und `::program` Module des *Interface*-Crates sind; `spl_associated_token_account::address::…` wird nicht aufgelöst.
+</Warning>
+
+Für funktionierende CPI-Beispiele, die die Kontostrukturen end-to-end verdrahten, siehe [`raydium-io/raydium-cpi-example`](https://github.com/raydium-io/raydium-cpi-example) (behandelt AMM v4, CPMM und CLMM). Sein neuester Branch ist [`anchor-0.31.0`](https://github.com/raydium-io/raydium-cpi-example/tree/anchor-0.31.0) — es gibt noch keinen Anchor-1.x-Branch, daher behandeln Sie dieses Repo als Referenz für **Kontostruktur-Verdrahtung**, nicht für die Versions-Pins, die diese Seite vorschreibt.
+
+## Das allgemeine Anchor-CPI-Muster
+
+Dieser Abschnitt geht **CPMM** end-to-end als durchgearbeitetes Beispiel durch: `Accounts`-Struktur, `CpiContext`, `cpi::<ix>()`. CLMM folgt der identischen Form, mit einer anderen Kontoliste und einer Anforderung für verbleibende Konten. LaunchLab folgt der gleichen Mechanik, aber seine Kontoliste enthält mehrere Konten ohne CPMM/CLMM-Äquivalent (`global_config`, `platform_config`, `event_authority`, `program`), daher behandeln Sie es als das gleiche *Muster*, nicht die gleiche *Form*. Siehe stattdessen den eigenen Abschnitt jedes Programms, anstatt anzunehmen, dass die Kontoliste dieser Anleitung direkt übertragen wird.
+
+### Kontolisten-Konstruktion
+
+Jeder Raydium-CPI erfordert eine `Accounts`-Struktur im aufrufenden Programm. Seine Felder sind alle Konten, die *Ihre* Instruction benötigt, mit Feld-Level-Validatoren; ihre Deklarationsreihenfolge muss nicht mit Raydiums eigener Instruction-Kontoordnung übereinstimmen, da Ihr eigener IDL-generierter Client sie nach Name adressiert, nicht nach Position:
+
+```rust icon="rust"
+use anchor_lang::prelude::*;
+use anchor_spl::token::{Token, TokenAccount, Mint};
+
+#[derive(Accounts)]
+pub struct MyProxySwap<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    /// CHECK: validiert von CPMM
+    #[account(mut)]
+    pub pool_state: UncheckedAccount<'info>,
+
+    /// CHECK: ditto
+    pub amm_config: UncheckedAccount<'info>,
+
+    /// CHECK: ditto
+    pub pool_authority: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    pub input_vault: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub output_vault: Account<'info, TokenAccount>,
+
+    pub input_mint: Account<'info, Mint>,
+    pub output_mint: Account<'info, Mint>,
+
+    #[account(mut)]
+    pub user_input_ata:  Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub user_output_ata: Account<'info, TokenAccount>,
+
+    /// Typisiert als `Program<RaydiumCpSwap>` statt `UncheckedAccount`: Dieses Konto
+    /// ist das aufgerufene Programm, keine Raydium-eigenen Daten, daher prüft Anchors
+    /// `Program<T>`-Wrapper seine Adresse automatisch, anstatt diese Prüfung dem
+    /// Aufgerufenen zu überlassen.
+    pub cpmm_program: Program<'info, raydium_cp_swap::program::RaydiumCpSwap>,
+    pub token_program: Program<'info, Token>,
+    /// CHECK: Observation-PDA
+    #[account(mut)]
+    pub observation_state: UncheckedAccount<'info>,
+}
+```
+
+Die meisten Raydium-seitigen Konten sind `UncheckedAccount`, weil der Aufgerufene (Raydium) die Validierung besitzt. Ihr aufrulendes Programm validiert nur streng Konten, die *Sie* besitzen, wie Benutzer-ATAs und Ihre eigenen PDAs. Der `/// CHECK:`-Dokumentationskommentar unterdrückt Anchors Warnung über fehlende Prüfungen. Die eine Raydium-seitige Ausnahme ist `cpmm_program` selbst: Es ist das aufgerufene Programm, nicht ein Datenkonto, das Raydium intern validiert, daher ist es typisiert als `Program<T>` und erhält Anchors automatische Adressprüfung statt einer manuellen `/// CHECK:`. Diese meist-`UncheckedAccount`-Form, bei der Raydium seine eigenen Konten validiert, ist die gleiche für CLMM und LaunchLab. Dieses Beispiel geht davon aus, dass beide Mints klassische SPL-Token sind; wenn eine Seite ein Token-2022-Mint sein kann, fügen Sie ein `token_program_2022: Program<'info, anchor_spl::token_2022::Token2022>`-Feld hinzu und übergeben Sie es als `input_token_program`/`output_token_program` dieser Seite im CPI-Aufruf unten statt `token_program`.
+
+### Den CPI-Aufruf aufbauen
+
+Anchor generiert einen Helfer pro Instruction zusammen mit einer CPI-Kontostruktur (`cpi::accounts::Swap`, unten als `CpmmSwap` aliasiert). Anders als Ihre eigene `MyProxySwap`-Struktur oben sind die Feldnamen und Reihenfolge dieser Struktur durch `raydium-cp-swap`'s eigene IDL festgelegt und müssen exakt übereinstimmen:
+
+```rust icon="rust"
+use raydium_cp_swap::cpi::{self, accounts::Swap as CpmmSwap};
+
+pub fn my_proxy_swap(
+    ctx: Context<MyProxySwap>,
+    amount_in: u64,
+    minimum_amount_out: u64,
+) -> Result<()> {
+    let cpi_accounts = CpmmSwap {
+        // `payer` ist IHR Signer — er muss `input_token_account` besitzen.
+        payer:                ctx.accounts.user.to_account_info(),
+        // `authority` ist CPMMs EIGENE Vault-PDA bei Seeds [b"vault_and_lp_mint_auth_seed"],
+        // die CPMM mit sich selbst signiert. Das Übergeben Ihres Signers hier schlägt die
+        // Seeds-Constraint (`ConstraintSeeds`) fehl, bevor irgendeine Übertragung läuft.
+        authority:            ctx.accounts.pool_authority.to_account_info(),
+        amm_config:           ctx.accounts.amm_config.to_account_info(),
+        pool_state:           ctx.accounts.pool_state.to_account_info(),
+        input_token_account:  ctx.accounts.user_input_ata.to_account_info(),
+        output_token_account: ctx.accounts.user_output_ata.to_account_info(),
+        input_vault:          ctx.accounts.input_vault.to_account_info(),
+        output_vault:         ctx.accounts.output_vault.to_account_info(),
+        input_token_program:  ctx.accounts.token_program.to_account_info(),
+        output_token_program: ctx.accounts.token_program.to_account_info(),
+        input_token_mint:     ctx.accounts.input_mint.to_account_info(),
+        output_token_mint:    ctx.accounts.output_mint.to_account_info(),
+        observation_state:    ctx.accounts.observation_state.to_account_info(),
+    };
+    // Anchor 1.0: Das erste Argument ist der Pubkey des Programms, nicht sein AccountInfo.
+    let cpi_ctx = CpiContext::new(
+        *ctx.accounts.cpmm_program.key,
+        cpi_accounts,
+    );
+
+    cpi::swap_base_input(cpi_ctx, amount_in, minimum_amount_out)?;
+    Ok(())
+}
+```
+
+`cpi::swap_base_input` wird aus der IDL generiert; seine Argumentliste spiegelt die Argumentliste der Anchor-Instruction wider. Jedes bestätigte Anchor-basierte Raydium-Programm (CPMM, CLMM, LaunchLab) generiert seine `cpi::<ix>()`-Helfer auf die gleiche Weise, wobei der Funktionsname dem Instruction-Namen in Snake-Case entspricht. Ob dies sich auf Farm v6 erstreckt, ist unbestätigt; siehe seinen Abschnitt.
+
+### Signer-Seeds (PDA-signierter CPI)
+
+Wenn Ihr Programm den CPI im Namen einer PDA signiert (häufig für Vaults, Escrows usw.), verwenden Sie `CpiContext::new_with_signer`:
+
+```rust icon="rust"
+let bump         = ctx.accounts.my_authority_bump;
+let signer_seeds: &[&[&[u8]]] = &[&[b"my_authority", &[bump]]];
+
+let cpi_ctx = CpiContext::new_with_signer(
+    *ctx.accounts.cpmm_program.key,
+    cpi_accounts,
+    signer_seeds,
+);
+
+cpi::swap_base_input(cpi_ctx, amount_in, minimum_amount_out)?;
+```
+
+Die Signer-Seeds müssen der PDA-Ableitung entsprechen. Für jedes Konto, das als `authority` (oder ähnliche Signer-Rolle) übergeben wird, prüft die Solana-Runtime, dass die PDA über diese Seeds signiert.
+
+### Verbleibende Konten
+
+Einige Raydium-Instructions nehmen **verbleibende Konten**, eine Liste variabler Länge, die nach den festen Konten angehängt wird. Anchors CPI-Helfer führen keine Typprüfung für verbleibende Konten durch; übergeben Sie sie über `.with_remaining_accounts(...)`:
+
+```rust icon="rust"
+let cpi_ctx = CpiContext::new(program_id, accounts)
+    .with_remaining_accounts(ctx.remaining_accounts.to_vec());
+```
+
+Die Reihenfolge ist immer wichtig, da das empfangende Programm verbleibende Konten in der Reihenfolge durchläuft, in der Sie sie übergeben. Zwei bestätigte Ordnungen:
+
+- **CLMM `SwapV2`**: [Tick-Arrays](#anwendung-des-musters-clmm), geordnet nach Richtung.
+- **Farm v6**: `(reward_vault, user_reward_ata)`-Paare, aber nur ab dem zweiten Reward-Stream an; siehe [Farm v6](#farm-v6) für das, was das Dekodieren einer echten Transaktion zeigt.
+
+## Anwendung des Musters: CLMM
+
+`SwapV2` folgt [dem allgemeinen Muster](#das-allgemeine-anchor-cpi-muster) oben mit einer anderen Kontoliste und einer Anforderung für verbleibende Konten für Tick-Arrays. Das `#[program]`-Modul des Crates heißt `raydium_clmm`, was auch sein Rust-`use`-Pfad ist.
+
+<Warning>
+  **Die CPI-Kontostruktur heißt `SwapSingleV2`, nicht `SwapV2`.** `SwapV2` ist der On-Chain-*Instruction*-Name.
+</Warning>
+
+```rust icon="rust"
+use raydium_clmm::cpi::{self, accounts::SwapSingleV2 as ClmmSwap};
+
+#[derive(Accounts)]
+pub struct MyProxyClmmSwap<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    /// CHECK: validiert von CLMM
+    pub amm_config: UncheckedAccount<'info>,
+    /// CHECK: ditto
+    #[account(mut)]
+    pub pool_state: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    pub input_token_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub output_token_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub input_vault: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub output_vault: Account<'info, TokenAccount>,
+
+    /// CHECK: Observation-PDA
+    #[account(mut)]
+    pub observation_state: UncheckedAccount<'info>,
+
+    pub token_program: Program<'info, Token>,
+    pub token_program_2022: Program<'info, anchor_spl::token_2022::Token2022>,
+    /// CHECK: SPL-Memo-Programm, erforderlich für einige Token-2022-Pfade
+    pub memo_program: UncheckedAccount<'info>,
+
+    pub input_vault_mint: Account<'info, Mint>,
+    pub output_vault_mint: Account<'info, Mint>,
+
+    /// Typisiert als `Program<T>` statt `UncheckedAccount`, gleicher Grund wie CPMMs
+    /// `cpmm_program` im allgemeinen Muster oben: Es ist das aufgerufene Programm, und
+    /// `Program<T>` prüft seine Adresse automatisch.
+    pub clmm_program: Program<'info, raydium_clmm::program::RaydiumClmm>,
+    // remaining_accounts: tick_array_bitmap_extension (falls der Durchlauf sie benötigt), dann
+    // so viele tick_array-Konten, wie die erwartete Preisspanne des Swaps umfasst.
+}
+```
+
+Berechnen Sie die Tick-Array-Liste auf die gleiche Weise wie das SDK, über ein Quote gegen den aktuellen Pool-Status, anstatt eine feste Anzahl zu erraten; ein Swap, der die übergebenen Arrays überläuft, wird mit `TickArrayNotFound` zurückgewiesen (siehe [`products/clmm/instructions`](/docs/i18n/de/products/clmm/instructions) für die vollständige Kontotabelle und Fehlerliste). Übergeben Sie sie in der Richtung des Preis-Durchlaufs: erstes Array in Swap-Richtung zuerst.
+
+## Anwendung des Musters: LaunchLab
+
+LaunchLab ist Anchor-basiert und IDL-veröffentlicht: [`raydium_launchpad/raydium_launchpad.json`](https://github.com/raydium-io/raydium-idl/blob/master/raydium_launchpad/raydium_launchpad.json) im öffentlichen `raydium-idl`-Repo. Die interne Metadaten-ID dieser IDL ist `raydium_launchpad`, ein technischer Name für das zugrunde liegende Programm, nicht ein alternativer Name für das Produkt. Anders als CPMM und CLMM ist jedoch **die Programmquelle selbst nicht öffentlich verfügbar** (siehe [`reference/program-addresses`](/docs/i18n/de/reference/program-addresses)). Es gibt keine `git = "..."`-Abhängigkeit, auf die Cargo verweisen kann, und keine Quelle, um zu bestätigen, was der Rust-`use`-Pfad eines echten Crates wäre.
+
+Generieren Sie Bindings aus der veröffentlichten IDL mit Anchors `declare_program!`-Makro. Speichern Sie die IDL-JSON als `idls/raydium_launchpad.json` in Ihrem Crate (Cargo sucht nach einem `idls/`-Verzeichnis relativ zu `CARGO_MANIFEST_DIR`), dann generiert `declare_program!(raydium_launchpad);` `raydium_launchpad::cpi::accounts::<Ix>`-Strukturen und `cpi::<ix>()`-Funktionen direkt aus der IDL, ohne Programmquelle erforderlich. Der generierte Kontostruktur-Name ist immer der Instruction-Name in PascalCase (`buy_exact_in` → `BuyExactIn`), und Feldnamen entsprechen exakt den IDL-Kontonamen, der gleichen Kontoliste, die bereits in `MyProxyBuy` unten verwendet wird.
+
+Die CPI-Form folgt [dem allgemeinen Muster](#das-allgemeine-anchor-cpi-muster). Die Kontoliste und Argumente unten stammen aus der On-Chain-IDL's `buy_exact_in`-Instruction, nicht aus `products/launchlab/instructions.mdx`:
+
+```rust icon="rust"
+use anchor_lang::prelude::*;
+use anchor_spl::token::{Token, TokenAccount, Mint};
+use raydium_launchpad::cpi::{self, accounts::BuyExactIn};
+
+#[derive(Accounts)]
+pub struct MyProxyBuy<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    /// CHECK: PDA, Seeds = [b"vault_auth_seed"], validiert vom Programm
+    pub authority: UncheckedAccount<'info>,
+
+    /// CHECK: validiert vom Programm
+    pub global_config: UncheckedAccount<'info>,
+    /// CHECK: validiert vom Programm
+    pub platform_config: UncheckedAccount<'info>,
+
+    /// CHECK: validiert vom Programm
+    #[account(mut)]
+    pub pool_state: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    pub user_base_token: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub user_quote_token: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub base_vault: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub quote_vault: Account<'info, TokenAccount>,
+
+    pub base_token_mint: Account<'info, Mint>,
+    pub quote_token_mint: Account<'info, Mint>,
+
+    /// CHECK: Token-Programm des Base-Mints (SPL Token oder Token-2022, je nach Mint)
+    pub base_token_program: UncheckedAccount<'info>,
+    /// Typisiert als `Program<Token>` statt `UncheckedAccount`: Die IDL legt dies auf
+    /// klassisches SPL Token fest (anders als base_token_program oben), daher ist Anchors
+    /// eingebaute Adressprüfung auf `Program<Token>` allein ausreichend.
+    pub quote_token_program: Program<'info, Token>,
+
+    /// CHECK: PDA, Seeds = [b"__event_authority"], erforderlich durch das emit_cpi!-Muster des Programms
+    pub event_authority: UncheckedAccount<'info>,
+    /// CHECK: das Konto des Programms selbst, erforderlich neben event_authority
+    pub program: UncheckedAccount<'info>,
+}
+
+pub fn my_proxy_buy(
+    ctx: Context<MyProxyBuy>,
+    amount_in: u64,
+    minimum_amount_out: u64,
+    share_fee_rate: u64,
+) -> Result<()> {
+    let cpi_accounts = BuyExactIn {
+        payer:               ctx.accounts.payer.to_account_info(),
+        authority:           ctx.accounts.authority.to_account_info(),
+        global_config:       ctx.accounts.global_config.to_account_info(),
+        platform_config:     ctx.accounts.platform_config.to_account_info(),
+        pool_state:          ctx.accounts.pool_state.to_account_info(),
+        user_base_token:     ctx.accounts.user_base_token.to_account_info(),
+        user_quote_token:    ctx.accounts.user_quote_token.to_account_info(),
+        base_vault:          ctx.accounts.base_vault.to_account_info(),
+        quote_vault:         ctx.accounts.quote_vault.to_account_info(),
+        base_token_mint:     ctx.accounts.base_token_mint.to_account_info(),
+        quote_token_mint:    ctx.accounts.quote_token_mint.to_account_info(),
+        base_token_program:  ctx.accounts.base_token_program.to_account_info(),
+        quote_token_program: ctx.accounts.quote_token_program.to_account_info(),
+        event_authority:     ctx.accounts.event_authority.to_account_info(),
+        program:             ctx.accounts.program.to_account_info(),
+    };
+    // `program` dient hier als CPI-Ziel: LaunchLabs eigenes Konto ist sowohl eines der
+    // erforderlichen Konten seiner Instruction (für sein emit_cpi!-Muster) als auch das
+    // Programm, das CpiContext::new aufruft.
+    let cpi_ctx = CpiContext::new(
+        *ctx.accounts.program.key,
+        cpi_accounts,
+    );
+
+    cpi::buy_exact_in(cpi_ctx, amount_in, minimum_amount_out, share_fee_rate)?;
+    Ok(())
+}
+```
+
+Nach der Graduation ist das Ziel-Programm CPMM oder AMM v4, je nach `pool_state.migrate_type`, das `products/launchlab/accounts.mdx` sagt, wird zur `Initialize`-Zeit gesetzt. Ihre CPI-Kontoliste muss für beide vorbereitet sein, oder Sie müssen `migrate_type` zuerst aus `PoolState` lesen und verzweigen.
+
+## Fehlerbehandlung
+
+Jedes Anchor-basierte Raydium-Programm gibt sein eigenes Error-Enum zurück; Anchor umhüllt sie, daher sieht Ihr aufrulendes Programm sie als `Err(ProgramError::Custom(code))`. Um spezifische Fehler zu behandeln:
+
+```rust icon="rust"
+use raydium_cp_swap::error::ErrorCode as CpmmErr;
+
+match cpi::swap_base_input(cpi_ctx, amount_in, minimum_amount_out) {
+    Ok(_) => Ok(()),
+    Err(e) => {
+        msg!("CPMM-Swap fehlgeschlagen: {:?}", e);
+        // Erneut auslösen oder in Ihren eigenen Error-Typ konvertieren.
+        Err(e)
+    }
+}
+```
+
+Tauschen Sie den relevanten Error-Typ für das Programm aus, das Sie aufrufen (`raydium_clmm::error::ErrorCode` für CLMM usw.). Error-Code-Nummern sind stabil pro IDL-Richtlinie ([`sdk-api/anchor-idl`](/docs/i18n/de/sdk-api/anchor-idl#idl-change-policy)), daher können Sie gegen spezifische Codes testen, indem Sie gegen den numerischen Wert vergleichen. Vollständige Error-Tabellen: [CPMM](/docs/i18n/de/reference/error-codes#cpmm-standard-amm-errors), [CLMM](/docs/i18n/de/reference/error-codes#clmm-errors), [AMM v4, Farm v6 und LaunchLab](/docs/i18n/de/reference/error-codes#amm-v4-farm-v3-/-v5-/-v6-launchlab-errors).
+
+## Compute-Budget in zusammengesetzten CPIs
+
+Jeder CPI-Frame hat Overhead, und die eigene CU-Verbrauch des Aufgerufenen stapelt sich auf Ihrem, daher benötigt eine Transaktion, die von innerhalb Ihres Programms in Raydium aufruft, ein explizites Compute-Budget, anstatt sich auf das 200k-CU-Standard zu verlassen.
+
+<Note>
+  **Gemessen, nicht geschätzt.** Ein CPMM `swap_base_input` auf Mainnet verbraucht **~23.000 CU** im CPMM-Programm selbst — Stichprobe vom 2026-09-09 über acht Live-Swaps auf einem hochvolumigen Pool (22.721–23.052), gelesen aus der `Program CPMMoo8… consumed N of M compute units`-Protokollzeile. Zum Vergleich: AMM v4 Swap ~26.000; CLMM `swap` ~41.000; CLMM `swap_v2` ~48.000 (43.838–52.887), steigt mit jedem Tick-Crossing.
+
+  Eine frühere Überarbeitung dieser Seite meldete ~47.700 CU für einen Proxy-Swap-CPI. Diese Zahl war die *ganze Transaktion* (`computeUnitsConsumed`), die das aufgerufene Programm, den CPI-Frame und jedes ATA-Setup einschließt — nicht die Kosten des Aufgerufenen. Beide sind nützlich, aber sie sind nicht die gleiche Zahl, daher vergleichen Sie Gleiches mit Gleichem. Messen Sie Ihre eigene Transaktion, anstatt von einer dieser Dokumentation zu budgetieren.
+</Note>
+
+CLMM- und LaunchLab-CPIs kosten mehr (CLMM durchläuft insbesondere zusätzliche Tick-Arrays über `remaining_accounts`, was CU pro Array hinzufügt), aber nur die CPMM-Zahl oben ist ein gemessener Wert. Setzen Sie immer ein explizites `ComputeBudgetProgram::set_compute_unit_limit(...)`-Instruction, das von Ihrer eigenen Messung dimensioniert ist, nicht eine Zahl, die aus der Dokumentation kopiert wurde, da das Standard-200k-CU-Limit stillschweigend erschöpft wird und die Pro-Instruction-Kosten sich verschieben, wenn Programme aktualisiert werden.
+
+## AMM v4: manuelle Instruction-Konstruktion
+
+AMM v4 ist älter als Anchor und hat kein CPI-Crate, was es zum einzigen Programm in diesem Dokument macht, das nicht dem allgemeinen Muster oben folgt. Bauen Sie die `Instruction` manuell:
+
+```rust icon="rust"
+use anchor_lang::prelude::*;
+use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::solana_program::instruction::{Instruction, AccountMeta};
+
+const AMM_V4_PROGRAM_ID: Pubkey = pubkey!("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8");
+
+// SwapBaseIn-Diskriminator ist 9.
+let mut data = vec![9u8];
+data.extend_from_slice(&amount_in.to_le_bytes());
+data.extend_from_slice(&minimum_amount_out.to_le_bytes());
+
+let ix = Instruction {
+    program_id: AMM_V4_PROGRAM_ID,
+    accounts: vec![
+        AccountMeta::new_readonly(token_program_id, false),
+        AccountMeta::new(amm_id, false),
+        AccountMeta::new_readonly(amm_authority, false),
+        // ... verbleibende Konten pro products/amm-v4/instructions ...
+    ],
+    data,
+};
+invoke_signed(&ix, &account_infos, signer_seeds)?;
+```
+
+Siehe [`products/amm-v4/code-demos`](/docs/i18n/de/products/amm-v4/code-demos) für die vollständige Kontoliste.
+
+## Farm v6
+
+**Verwenden Sie das TS SDK, wenn das eine Option für Ihre Integration ist.** `raydium.farm.deposit(...)` (siehe [`products/farm-staking/code-demos`](/docs/i18n/de/products/farm-staking/code-demos)) wird durch echte Demos ausgeübt und hängt nicht davon ab, ob ein Rust-Anchor-Crate für dieses Programm existiert.
+
+<Warning>
+  **Farm v6 bietet keinen Anchor-CPI-Pfad.** Es gibt kein `raydium_farm_v6`-Crate auf crates.io, kein öffentliches Quell-Repository und keine On-Chain-IDL — das Programm hat weder ein Legacy-`anchor:idl`-Konto noch einen Eintrag im Program-Metadata-Programm (siehe [`sdk-api/anchor-idl`](/docs/i18n/de/sdk-api/anchor-idl)). Behandeln Sie es als ein Nicht-Anchor-Programm und bauen Sie seine Instructions manuell, wie unten.
+</Warning>
+
+**Wenn Sie trotzdem Rust-CPI benötigen**, zum Beispiel um von einem anderen On-Chain-Programm zu komponieren, bauen Sie die `Instruction` manuell, auf die gleiche Weise wie [AMM v4](#amm-v4-manuelle-instruction-konstruktion): Leiten Sie die echte Kontoliste und Instruction-Diskriminatoren unabhängig ab, zum Beispiel durch Dekodieren der TypeScript-Layouts des SDK (`raydium-sdk-V2`'s Farm-Modul), Dekodieren echter Transaktionen direkt (siehe unten) oder Dumpen und Disassemblieren des bereitgestellten Programms.
+
+Für die Null-Argument-Instruction-Form, die mit einem Harvest- oder Claim-Aufruf konsistent ist, ist die echte Kontoordnung ein festes Präfix (`token_program`, das Farm-Status-Konto, eine Vault-Authority-PDA, die erste Reward-Vault dieser PDA, eine zweite PDA, der Aufrufer und die ATA des Aufrufers für diesen ersten Reward-Mint), gefolgt von `(reward_vault_i, user_reward_ata_i)`-Paaren in `remaining_accounts` für jeden Reward-Stream nach dem ersten. Die Paarungskonvention ist real, aber sie beginnt erst beim zweiten Reward-Stream: Der erste Stream's Vault und ATA sind feste Konten, nicht nebeneinander, und nicht Teil von `remaining_accounts` überhaupt.
+
+## Testen eines CPI-Flows
+
+Lokale Entwicklung erfordert, dass die Raydium-Programme in Ihrem Test-Validator verfügbar sind. Drei Optionen:
+
+1. **`anchor test` mit Programm-Klon.** Zieht bereitgestellte Mainnet-Bytecode in Ihren lokalen Validator; siehe [Programme in einen lokalen Validator klonen](#programme-in-einen-lokalen-validator-klonen) unten für die `Anchor.toml`-Konfiguration und zwei Dinge, die speziell Pool-Erstellungs-Tests verwirren.
+2. **Devnet.** Raydium stellt die meisten Programme auf Devnet bereit, aber unter **unterschiedlichen Programm-IDs als Mainnet** für jedes Programm (CPMM, CLMM, AMM v4, Stable AMM und LaunchLab haben jeweils eine unterschiedliche Devnet-Adresse; siehe die Devnet-Tabelle in [`reference/program-addresses`](/docs/i18n/de/reference/program-addresses)). Farm v3/v5/v6 werden nicht zuverlässig auf Devnet veröffentlicht; die Live-API (`https://api-v3-devnet.raydium.io/main/info`) hat das aktuelle Bild. Wenn Sie `raydium_clmm`'s gebündelte `DEVNET_PROGRAM_ID`-Konstanten verwenden (oder das Äquivalent für andere Crates), gehen Sie nicht davon aus, dass eine Mainnet-ID auch auf Devnet funktioniert. Führen Sie `anchor test --provider.cluster devnet` aus, um Live-Code zu treffen, sobald Sie die richtigen Adressen haben.
+3. **Lokale Bereitstellung.** Klonen Sie die Raydium-Repos (CPMM, CLMM; LaunchLab's Quelle ist für diese Option nicht verfügbar) und `anchor deploy` zu einem lokalen Validator. Fügt Test-Zyklus-Overhead hinzu, aber lässt Sie den Aufgerufenen zum Debuggen ändern.
+
+Führen Sie mit `anchor test` aus, oder `anchor build` zuerst und `anchor test --skip-build` danach, wenn Sie die Test-Datei iterieren, ohne das Programm zu ändern.
+
+### Programme in einen lokalen Validator klonen
+
+```toml icon="file-code"
+[test]
+# Standard (5s) reicht nicht aus, sobald Sie mehrere Konten klonen, da jedes
+# eine sequenzielle Mainnet-RPC-Runde während des Validator-Starts ist.
+startup_wait = 60000
+
+[test.validator]
+url = "https://api.mainnet-beta.solana.com"
+
+[[test.validator.clone]]
+address = "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK"  # CLMM
+
+[[test.validator.clone]]
+address = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C"  # CPMM
+
+[[test.validator.clone]]
+address = "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj"   # LaunchLab
+
+[[test.validator.clone]]
+address = "FarmqiPv5eAj3j1GMdMCMUGXqPUvmquZtMy86QH6rzhG"  # Farm v6
+```
+
+Dies funktioniert nach Programm-ID, unabhängig davon, ob die Programmquelle öffentlich ist, daher klont LaunchLab auf die gleiche Weise wie CPMM und CLMM, obwohl seine Quelle nicht verfügbar ist. `reference/program-addresses` ist die Quelle der Wahrheit für jede Adresse hier.
+
+<Warning>
+  **Das Klonen des Programms reicht nicht aus, wenn Ihr Test auch *einen Pool erstellt*** (anstatt gegen einen zu tauschen, der bereits existiert). CPMMs `initialize`-Instruction validiert seine `amm_config`- und `create_pool_fee`-Konten gegen echte On-Chain-Daten, daher müssen Sie diese auch klonen, oder `initialize` schlägt sofort fehl. Speziell für CPMM: Klonen Sie die Fee-Tier `AmmConfig`, die Sie möchten (holen Sie sich ihre Adresse von `GET https://api-v3.raydium.io/main/cpmm-config`, Index 0 ist der 0,25%-Tier) und das [Fee-Receiver-Token-Konto](/docs/i18n/de/reference/program-addresses#shared-config-/-pda-conventions), validiert nach exakter Adresse, nicht on-the-fly erstellt, daher muss es bereits existieren.
+</Warning>
+
+<Warning>
+  **Ein Pool, den Ihr Test gerade erstellt hat, ist nicht sofort tauschbar.** CPMMs `initialize` überschreibt stillschweigend eine angeforderte `open_time`, die nicht streng in der Zukunft liegt (`if open_time <= block_timestamp { open_time = block_timestamp + 1 }`), daher lässt sogar `startTime: 0` („sofort öffnen", pro SDK) eine echte ≥1-Sekunden-Lücke, bevor der Pool Swaps akzeptiert. Ein Test, der einen Pool erstellt und sofort dagegen tauscht, wird [`NotApproved`](/docs/i18n/de/reference/error-codes#cpmm-standard-amm-errors) treffen. Ein kurzes `await` (1–2s) zwischen Pool-Erstellung und dem ersten Swap reicht aus. Dies ist spezifisch für Tests; ein Mensch, der zwei separate manuelle Befehle ausführt, würde normalerweise nichts bemerken, da Tippen und Prozessstart bereits mehr als eine Sekunde verbrauchen.
+</Warning>
+
+## Zeiger
+
+- [`products/cpmm/code-demos`](/docs/i18n/de/products/cpmm/code-demos), [`products/clmm/code-demos`](/docs/i18n/de/products/clmm/code-demos), [`products/amm-v4/code-demos`](/docs/i18n/de/products/amm-v4/code-demos), [`products/farm-staking/code-demos`](/docs/i18n/de/products/farm-staking/code-demos), [`products/launchlab/code-demos`](/docs/i18n/de/products/launchlab/code-demos): produktspezifische CPI- und TypeScript-Beispiele.
+- [`sdk-api/anchor-idl`](/docs/i18n/de/sdk-api/anchor-idl): IDL-Abruf und Client-Regeneration, einschließlich des IDL-Codegen-Pfads für LaunchLab.
+- [`integration-guides/cpi-integration`](/docs/i18n/de/integration-guides/cpi-integration): höherwertige Integrationsmuster wie Escrows, Vaults und Aggregator-Komposition.
+
+Quellen:
+
+- [raydium-cp-swap](https://github.com/raydium-io/raydium-cp-swap)
+- [raydium-clmm](https://github.com/raydium-io/raydium-clmm)
+- [raydium-idl](https://github.com/raydium-io/raydium-idl): LaunchLab-IDL (Programmquelle selbst ist geschlossen)
+- [Anchor-CPI-Dokumentation](https://www.anchor-lang.com/docs/basics/cpi)

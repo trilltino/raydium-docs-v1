@@ -1,0 +1,65 @@
+---
+title: "Visão geral do LaunchLab"
+description: "O que é LaunchLab, para quem é, e como os lançamentos de tokens migram do trading em curva de ligação para a liquidez do pool Raydium."
+---
+
+<Info>
+  **Esta página foi traduzida automaticamente por IA. A versão em inglês é a fonte oficial.**
+
+  [Ver versão em inglês →](/docs/en/user-flows/launchlab-overview)
+</Info>
+
+<Warning>
+  LaunchLab é infraestrutura de lançamento de tokens sem permissão. Qualquer pessoa pode criar um token, escolher um nome ou ticker e configurar parâmetros de lançamento. Sempre verifique os endereços de mint e as configurações de lançamento antes de comprar ou promover um token. Esta página explica apenas a mecânica do produto e não constitui aconselhamento financeiro, legal ou de investimento.
+</Warning>
+
+LaunchLab permite que criadores emitam tokens e iniciem liquidez através de uma curva de ligação. Compradores fazem trading contra a curva antes da graduação. Quando o lançamento atinge seu limite de graduação, a liquidez migra para um pool AMM Raydium e o trading continua através do roteamento normal do Raydium.
+
+## Quem usa LaunchLab
+
+| Público | Tarefas comuns |
+|---|---|
+| Traders | Descobrir tokens em estágio inicial, comprar ou vender na curva de ligação e acompanhar o progresso da graduação. |
+| Criadores | Lançar um token sem código, configurar parâmetros da curva e opcionalmente ganhar taxas de criador. |
+| Plataformas | Construir ambientes de lançamento personalizados com suas próprias configurações de taxa, marca e superfícies de descoberta de lançamentos. |
+
+## Como funciona um lançamento
+
+1. Um criador configura metadados do token, oferta, configurações da curva, alvo de graduação e configurações opcionais de taxa.
+2. O token abre em uma curva de ligação. Compradores e vendedores fazem trading diretamente contra essa curva.
+3. O preço da curva muda conforme compras e vendas acontecem.
+4. Quando a curva atinge seu alvo de graduação, a liquidez migra para um pool Raydium.
+5. Após a graduação, os usuários fazem trading do token através do Raydium Swap e agregadores que roteiam através de pools Raydium.
+
+## Modos de criação
+
+| Modo | Use quando | Configurações principais |
+|---|---|---|
+| JustSendit | Você quer o lançamento mais rápido sem código com configurações padrão. | Nome, ticker, imagem, links sociais opcionais, primeira compra opcional. |
+| LaunchLab | Você precisa de mais controle sobre oferta, alvo de arrecadação, alocação de curva, vesting ou taxas de criador. | Oferta, alvo de arrecadação, alocação de curva, vesting, compartilhamento de taxa pós-migração. |
+
+JustSendit usa um alvo de graduação padrão. O modo LaunchLab permite que criadores definam o alvo de graduação, sujeito aos limites da UI e do programa.
+
+## Graduação e liquidez
+
+A graduação fecha a curva de ligação e migra os ativos para um pool CPMM. O tratamento de LP e o criador de registro do CPMM dependem da configuração da plataforma.
+
+- Todos os lançamentos recém-inicializados migram para CPMM.
+- Os campos de plataforma e criador se combinam em uma participação de LP bloqueada de propriedade da plataforma; a participação restante é queimada.
+- As taxas de criador do CPMM são separadas da Fee Key da plataforma e seguem o criador do pool CPMM registrado.
+
+## Noções básicas de segurança
+
+- Verifique o mint do token, não apenas o ticker ou logo.
+- Revise o alvo de graduação e o progresso da curva antes de fazer trading.
+- Verifique as configurações de taxa do criador e da plataforma antes de lançar ou comprar.
+- Trate os NFTs da Fee Key da plataforma como ativos de direitos de taxa. Se transferidos ou queimados, os direitos de reivindicação de taxa de LP se movem ou podem ser perdidos.
+- Leia [Confiança e segurança](/docs/i18n/pt/getting-started/trust-and-safety) antes de conectar uma carteira ou assinar transações.
+
+## Referências
+
+- [Comprando um token LaunchLab](/docs/i18n/pt/user-flows/buying-a-launchlab-token) — como o fluxo de trading funciona antes e depois da graduação.
+- [Criando um token LaunchLab](/docs/i18n/pt/user-flows/creating-a-launchlab-token) — guias de criação JustSendit e LaunchLab.
+- [Como funcionam as taxas de criador](/docs/i18n/pt/user-flows/how-creator-fees-work) — taxas de criador em curva de ligação e CPMM versus direitos de Fee Key da plataforma.
+- [Plataformas LaunchLab](/docs/i18n/pt/user-flows/launchlab-platforms) — o que as configurações de plataforma podem controlar.
+- [Visão geral do protocolo LaunchLab](/docs/i18n/pt/products/launchlab/overview) — mecânica mais profunda do protocolo.

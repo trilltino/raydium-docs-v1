@@ -1,0 +1,233 @@
+---
+title: "Hướng dẫn Stable AMM"
+description: "Tập hợp hướng dẫn hiện có thể gọi — Deposit, Withdraw, SwapBaseIn, SwapBaseOut, WithdrawPnl — cộng với các hướng dẫn bị xóa trong bản nâng cấp 2026-06-22."
+---
+
+<Info>
+  **Trang này được dịch tự động bằng AI. Phiên bản tiếng Anh là bản chính thức.**
+
+  [Xem bản tiếng Anh →](/docs/en/products/stable/instructions)
+</Info>
+
+<Info>
+  Stable AMM là một **chương trình độc lập** với ID chương trình riêng của nó. Nó **không phải** là một chế độ của chương trình AMM v4, và nó không được giao dịch "thông qua" AMM v4 — nó được triển khai, nâng cấp và gọi riêng biệt. Nó chỉ giống AMM v4 về quy ước phí và bố cục tài khoản.
+</Info>
+
+<Warning>
+  **Bản nâng cấp 2026-06-22 — xóa mã OpenBook (market) không hoạt động.** Stable AMM **đã ngừng đăng lệnh lên OpenBook từ lâu**; con đường tạo thị trường sổ lệnh đã ngủ yên trong nhiều năm. Bản nâng cấp này xóa các tài khoản và mã liên quan đến thị trường còn sót lại — nó **không** thay đổi hành vi giao dịch trực tiếp.
+
+  Hai hệ quả đối với các nhà tích hợp:
+
+  1. **Bố cục tài khoản nhỏ hơn.** `SwapBaseIn` / `SwapBaseOut` (**18 → 9**), `Deposit` (**14 → 12**), và `Withdraw` (**21/22 → 12**) loại bỏ các tài khoản Serum/market không hoạt động. Bố cục cũ vẫn phân tích được để tương thích ngược. `WithdrawPnl` (**16 → 10**) là một **thay đổi phá vỡ cứng mà không có con đường tương thích** (chỉ admin).
+  2. **Hầu hết các hướng dẫn bị xóa.** Chỉ `SwapBaseIn`, `SwapBaseOut`, `Deposit`, `Withdraw`, và `WithdrawPnl` vẫn có thể gọi được. Tất cả các hướng dẫn khác không thể gọi được nữa.
+
+  Nhật ký thay đổi: [`reference/changelog`](/docs/i18n/vi/reference/changelog).
+</Warning>
+
+## Danh sách hướng dẫn
+
+### Có thể gọi được
+
+| Hướng dẫn | Danh mục | Ghi chú |
+|-------------|----------|-------|
+| `Deposit` | Thanh khoản | Thêm thanh khoản, nhận LP. Bố cục 12 tài khoản mới; bố cục 14 tài khoản cũ vẫn tương thích. |
+| `Withdraw` | Thanh khoản | Đốt LP, nhận cả hai bên. Bố cục 12 tài khoản mới; bố cục 21/22 tài khoản cũ vẫn tương thích. |
+| `SwapBaseIn` | Swap | Swap đầu vào chính xác. Bố cục 9 tài khoản mới; bố cục 18 tài khoản cũ vẫn tương thích. |
+| `SwapBaseOut` | Swap | Swap đầu ra chính xác. Bố cục 9 tài khoản mới; bố cục 18 tài khoản cũ vẫn tương thích. |
+| `WithdrawPnl` | Admin | Quét phí giao thức tích lũy. Bố cục 10 tài khoản mới (**phá vỡ cứng — không tương thích bố cục cũ**). |
+
+### Bị xóa (không thể gọi được nữa)
+
+Những hướng dẫn này bị xóa trong bản nâng cấp 2026-06-22 và không thể gọi được nữa. Xem [Hướng dẫn bị xóa](#removed-instructions).
+
+| Hướng dẫn | Danh mục trước đây | Mục đích trước đây |
+|-------------|-----------------|----------------|
+| `Initialize` | Vòng đời | Tạo một pool. |
+| `PreInitialize` | Vòng đời | Trợ giúp pre-allocation kế thừa. |
+| `InitModelData` | Thiết lập mô hình | Tạo và khởi tạo bảng tra cứu. |
+| `UpdateModelData` | Thiết lập mô hình | Điền tối đa 5 phần tử bảng mỗi lần gọi. |
+| `MonitorStep` | Crank | Giải quyết lệnh OpenBook, đăng lại lệnh. |
+| `SetParams` | Admin | Thay đổi tham số pool. |
+| `WithdrawSrm` | Kế thừa | Quét hoàn lại chiết khấu phí SRM. |
+| `SimulateInfo` | Chẩn đoán | Trợ giúp báo giá chỉ đọc. |
+
+## `Deposit`
+
+Thêm thanh khoản, nhận token LP.
+
+**Đối số**
+
+```
+max_coin_amount: u64
+max_pc_amount: u64
+base_side: u64          // 0 = base on coin, 1 = base on pc
+```
+
+**Tài khoản** — bố cục mới, 12 tài khoản (ghi được `W`, ký `S`)
+
+| # | Tên | W | S | Ghi chú |
+|---|------|---|---|-------|
+| 0 | `token_program` |   |   | SPL Token. |
+| 1 | `amm` | W |   | `AmmInfo` của pool. |
+| 2 | `amm_authority` |   |   | PDA toàn chương trình. |
+| 3 | `amm_target_orders` | W |   | |
+| 4 | `amm_lp_mint` | W |   | Mint LP. |
+| 5 | `amm_coin_vault` | W |   | Kho coin của pool. |
+| 6 | `amm_pc_vault` | W |   | Kho pc của pool. |
+| 7 | `model_data_account` |   |   | **Bảng tra cứu chỉ đọc.** |
+| 8 | `user_source_coin` | W |   | Đầu vào coin của người dùng. |
+| 9 | `user_source_pc` | W |   | Đầu vào pc của người dùng. |
+| 10 | `user_dest_lp` | W |   | ATA LP của người dùng. |
+| 11 | `user_source_owner` |   | S | Người ký giao dịch. |
+
+**Tương thích**: `amm_open_orders` (cũ #3) và `serum_market` (cũ #9) bị xóa. Khi **14** tài khoản được truyền, hướng dẫn được phân tích với bố cục 14 tài khoản cũ; các tài khoản Serum bị bỏ qua.
+
+**Toán học** — pro-rata tiêu chuẩn sử dụng bảng tra cứu để tính tỷ lệ. SDK tính cặp coin/pc cho số lượng LP mong muốn và kiểm tra so với các giới hạn tối đa.
+
+## `Withdraw`
+
+Đốt LP, nhận cả hai bên theo tỷ lệ.
+
+**Đối số**
+
+```
+amount: u64            // Token LP để đốt
+```
+
+**Tài khoản** — bố cục mới, 12 tài khoản (ghi được `W`, ký `S`)
+
+| # | Tên | W | S | Ghi chú |
+|---|------|---|---|-------|
+| 0 | `token_program` |   |   | SPL Token. |
+| 1 | `amm` | W |   | `AmmInfo` của pool. |
+| 2 | `amm_authority` |   |   | PDA toàn chương trình. |
+| 3 | `amm_target_orders` | W |   | |
+| 4 | `amm_lp_mint` | W |   | Mint LP. |
+| 5 | `amm_coin_vault` | W |   | Kho coin của pool. |
+| 6 | `amm_pc_vault` | W |   | Kho pc của pool. |
+| 7 | `model_data_account` |   |   | **Bảng tra cứu chỉ đọc.** |
+| 8 | `user_source_lp` | W |   | Nguồn LP của người dùng. |
+| 9 | `user_dest_coin` | W |   | Đầu ra coin của người dùng. |
+| 10 | `user_dest_pc` | W |   | Đầu ra pc của người dùng. |
+| 11 | `user_lp_owner` |   | S | Người ký giao dịch. |
+
+**Tương thích**: chín tài khoản Serum (`amm_open_orders`, `serum_program`, `serum_market`, `serum_coin_vault`, `serum_pc_vault`, `serum_vault_signer`, `serum_event_q`, `serum_bids`, `serum_asks`) bị xóa. Bố cục **21-** hoặc **22-tài khoản** cũ vẫn được chấp nhận. Tuy nhiên, lưu ý rằng **logic phí giới thiệu cho tài khoản `referrer_pc_wallet` tùy chọn thứ 22 đã bị xóa** — nó vẫn có thể được truyền nhưng không còn có hiệu lực.
+
+**Điều kiện tiên quyết**
+
+- `user_source_lp` giữ ít nhất `amount`.
+
+**Điều kiện sau**
+
+- `amount` token LP bị đốt.
+- Người dùng nhận số lượng coin và pc theo tỷ lệ hiện tại, điều chỉnh cho phí tích lũy.
+
+## `SwapBaseIn`
+
+Swap đầu vào chính xác sử dụng bảng tra cứu để định giá.
+
+**Đối số**
+
+```
+amount_in: u64
+minimum_amount_out: u64
+```
+
+**Tài khoản** — bố cục mới, 9 tài khoản (ghi được `W`, ký `S`)
+
+| # | Tên | W | S | Ghi chú |
+|---|------|---|---|-------|
+| 0 | `spl_token program` |   |   | SPL Token. |
+| 1 | `amm` | W |   | `AmmInfo` của pool. |
+| 2 | `amm_authority` |   |   | PDA toàn chương trình. |
+| 3 | `amm_coin_vault` | W |   | Kho coin của pool. |
+| 4 | `amm_pc_vault` | W |   | Kho pc của pool. |
+| 5 | `model_data_account` |   |   | **Bảng tra cứu chỉ đọc.** |
+| 6 | `user_source_token` | W |   | Tài khoản token đầu vào của người dùng. |
+| 7 | `user_destination_token` | W |   | Tài khoản token đầu ra của người dùng. |
+| 8 | `user_source_owner` |   | S | Người dùng (người ký giao dịch). |
+
+**Tương thích**: chín tài khoản OpenBook (`amm_open_orders`, `serum_program`, `serum_market`, `serum_bids`, `serum_asks`, `serum_event_queue`, `serum_coin_vault`, `serum_pc_vault`, `serum_vault_signer`) bị xóa. Nếu số lượng tài khoản được truyền **không phải 9**, hướng dẫn được phân tích với bố cục **18-tài khoản** cũ; các tài khoản Serum phải vẫn chiếm vị trí của chúng, nhưng nội dung của chúng không còn được xác thực hoặc sử dụng.
+
+**Điều kiện tiên quyết**
+
+- `amm.status` cho phép swap.
+- `user_source_token` giữ ≥ `amount_in`.
+
+**Điều kiện sau**
+
+- Người dùng mất `amount_in`, nhận `amount_out ≥ minimum_amount_out`.
+- Phí pool tăng các bộ đếm `need_take_pnl_*`.
+
+**Toán học** — Nội suy bảng tra cứu như được mô tả trong [`products/stable/math`](/docs/i18n/vi/products/stable/math).
+
+## `SwapBaseOut`
+
+Swap đầu ra chính xác (nghịch đảo của `SwapBaseIn`). Bố cục 9 tài khoản giống nhau, hướng toán học khác.
+
+**Đối số**
+
+```
+max_amount_in: u64
+amount_out: u64
+```
+
+## `WithdrawPnl`
+
+Chỉ admin. Quét phí giao thức tích lũy từ `need_take_pnl_*` vào các tài khoản PnL được chỉ định.
+
+<Warning>
+  **Thay đổi phá vỡ cứng — không có con đường tương thích.** Hướng dẫn này **không** có phân tích cho bố cục cũ. Gửi bố cục cũ không thành công với các lỗi xác thực như `InvalidTokenCoin` do sự không liên kết tài khoản (cũ #3 là `open_orders`). Công cụ admin gọi `WithdrawPnl` **phải** được cập nhật lên bố cục 10 tài khoản mới.
+</Warning>
+
+**Đối số** — không có (được điều khiển bởi trạng thái).
+
+**Tài khoản** — bố cục mới, 10 tài khoản cố định, chỉ admin (ghi được `W`, ký `S`)
+
+| # | Tên | W | S | Ghi chú |
+|---|------|---|---|-------|
+| 0 | `spl_token program` |   |   | SPL Token. |
+| 1 | `amm` | W |   | `AmmInfo` của pool. |
+| 2 | `amm_authority` |   |   | PDA toàn chương trình. |
+| 3 | `amm_coin_vault` | W |   | Kho coin của pool. |
+| 4 | `amm_pc_vault` | W |   | Kho pc của pool. |
+| 5 | `amm_target_orders` | W |   | |
+| 6 | `model_data` |   |   | Bảng tra cứu. |
+| 7 | `user_coin` | W |   | Tài khoản coin của admin (nhận phí). |
+| 8 | `user_pc` | W |   | Tài khoản pc của admin (nhận phí). |
+| 9 | `amm_admin` |   | S | Admin pool (người ký). |
+
+**Thay đổi logic**: khi quỹ khả dụng của pool không đủ để rút PnL tích lũy, pool **không còn** được đặt vào `CancelAllOrdersState` / `Disabled`; hướng dẫn trả về `TakePnlError` trực tiếp. `referrer_pc_wallet` tùy chọn cũng đã bị xóa.
+
+**Điều kiện tiên quyết**
+
+- `amm_admin` phải được ủy quyền.
+
+**Điều kiện sau**
+
+- `need_take_pnl_coin` và `need_take_pnl_pc` được chuyển đến các tài khoản của admin.
+- Các bộ đếm được đặt lại về 0.
+
+## Hướng dẫn bị xóa
+
+Các hướng dẫn sau bị xóa trong bản nâng cấp 2026-06-22 và **không thể gọi được nữa**. Chúng được ghi lại ở đây chỉ để các nhà tích hợp nhận ra chúng trong các giao dịch và SDK lịch sử.
+
+- **`Initialize`** — trước đây khởi động một pool Stable AMM mới. Bị xóa.
+- **`PreInitialize`** — trợ giúp pre-allocation kế thừa. Bị xóa.
+- **`InitModelData`** — trước đây tạo và khởi tạo bảng tra cứu `ModelDataInfo`. Bị xóa.
+- **`UpdateModelData`** — trước đây điền tối đa 5 phần tử bảng tra cứu mỗi lần gọi. Bị xóa.
+- **`MonitorStep`** — crank OpenBook giải quyết lệnh và đăng lại lưới lệnh. Đã ngủ yên lâu sau khi pool ngừng đăng lên OpenBook; bây giờ bị xóa.
+- **`SetParams`** — thay đổi tham số admin (trạng thái, phí, chủ sở hữu, khóa dữ liệu mô hình, v.v.). Bị xóa.
+- **`WithdrawSrm`** — quét hoàn lại chiết khấu phí SRM từ các pool thời kỳ Serum sớm. Bị xóa.
+- **`SimulateInfo`** — trợ giúp báo giá chỉ đọc. Bị xóa; sử dụng các trợ giúp đường cong ổn định ngoài chuỗi của SDK để báo giá (xem [Bản demo mã](/docs/i18n/vi/products/stable/code-demos)).
+
+## Tiếp theo
+
+- [Tài khoản](/docs/i18n/vi/products/stable/accounts) — cho bố cục và kích thước trường tài khoản.
+- [Toán học](/docs/i18n/vi/products/stable/math) — cho logic nội suy bảng tra cứu.
+- [Bản demo mã](/docs/i18n/vi/products/stable/code-demos) — để xem cách gọi những hướng dẫn này từ SDK.
+
+Nguồn:
+
+- `raydium-stable/program/src/instruction.rs` (enum và pack/unpack)
+- `raydium-stable/program/src/processor.rs` (logic thực thi)

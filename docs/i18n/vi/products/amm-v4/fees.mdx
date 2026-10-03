@@ -1,0 +1,111 @@
+---
+title: "Phí AMM v4"
+description: "Phí giao dịch 0,25%, cách chia cho LP/giao thức, sinh lợi từ các lệnh OpenBook, và cách admin thu thập phí giao thức tích lũy."
+---
+
+<Info>
+  **Trang này được dịch tự động bằng AI. Phiên bản tiếng Anh là bản chính thức.**
+
+  [Xem bản tiếng Anh →](/docs/en/products/amm-v4/fees)
+</Info>
+
+## Tầng phí duy nhất được công bố
+
+Khác với CPMM và CLMM, AMM v4 **không có tài khoản `AmmConfig`**. Phí được lưu trữ trực tiếp trên struct `AmmInfo.fees` của mỗi pool và được cố định tại thời điểm tạo pool. Các giá trị mặc định áp dụng cho hầu hết các pool AMM v4 đang hoạt động:
+
+| Trường on-chain | Mặc định | Ý nghĩa |
+|---|---|---|
+| `swap_fee_numerator / swap_fee_denominator` | `25 / 10_000` | **Phí giao dịch brutto trên swap đường AMM: 0,25% khối lượng đầu vào.** |
+| `trade_fee_numerator / trade_fee_denominator` | `25 / 10_000` | Còn sót lại sau khi loại bỏ OpenBook (trước đây dùng cho định giá lệnh hạn chế). Mặc định là `0,25%` giống `swap_fee`. |
+| `pnl_numerator / pnl_denominator` | `12 / 100` | **Phần của giao thức từ phí swap: 12%** — tức là `0,25% × 12% = 0,03%` khối lượng. Tích lũy vào các bộ đếm `need_take_pnl_*`. |
+| `min_separate_numerator / min_separate_denominator` | `5 / 10_000` | Ngưỡng độ chính xác nội bộ dùng bởi logic làm tròn chia phí. |
+
+Lưu ý rằng `pnl_numerator / pnl_denominator` là một phân số **của phí swap**, không phải của khối lượng giao dịch — đây là một sai hiểu phổ biến. Phần của LP là phần bù (`88%` của phí = `0,22%` khối lượng) và được tính ngầm; không có tử số "phần LP" riêng biệt.
+
+Một số pool sớm được tạo với các tử số khác nhau; luôn đọc `AmmInfo.fees` trước khi trích dẫn.
+
+**Không có phí quỹ** và **không có phí tạo pool**: đây là những phát minh của CPMM/CLMM không tồn tại trong mô hình phí gốc của AMM v4.
+
+## Cách tính chia phí
+
+Trên mỗi swap, pool tính phí giao dịch brutto từ số tiền đầu vào, sau đó phân bổ:
+
+```
+gross_fee   = ceil(amount_in * swap_fee_numerator / swap_fee_denominator)        // 0.25% of amount_in
+pnl_portion = gross_fee * pnl_numerator / pnl_denominator                        // 12% of gross_fee
+lp_portion  = gross_fee − pnl_portion                                            // 88% of gross_fee
+```
+
+- `lp_portion` được giữ lại trong vault và góp phần vào `k` tiếp theo. LP thu được nó bằng cách đốt token LP sau này.
+- `pnl_portion` tăng `AmmInfo.state_data.need_take_pnl_coin` hoặc `need_take_pnl_pc` tùy thuộc vào phía nào là đầu vào của swap.
+
+Cùng một thủ thuật bảo toàn bất biến như CPMM: số tiền PnL vật lý nằm trong vault nhưng bị trừ khỏi dự trữ dùng trong đường cong, vì vậy `TakePnl` di chuyển token mà không thay đổi giá.
+
+## PnL từ OpenBook (lịch sử)
+
+<Note>
+  **Đã loại bỏ.** Tích hợp OpenBook đã bị loại bỏ khỏi chương trình, vì vậy luồng PnL *thứ hai* được mô tả trong phần này không còn được tạo ra. Các bộ đếm `total_pnl_{coin,pc}` hiện là các trường không dùng nữa — chúng mang các giá trị lịch sử đã đóng băng và không bao giờ được cập nhật. Đường dẫn phí giao thức 0,03% (ở trên) không bị ảnh hưởng và vẫn hoạt động.
+</Note>
+
+Trước đây, AMM v4 có một *luồng* doanh thu giống phí thứ hai: khi các lệnh hạn chế của nó trên OpenBook được thực hiện, pool có thể ở phía taker của lệnh và kiếm hoặc trả spread maker/taker của thị trường. Các sự kiện PnL này được giải quyết vào vault pool trong `MonitorStep` và chương trình ghi chúng vào `state_data.total_pnl_{coin,pc}` dưới dạng các bộ đếm thông tin.
+
+- Khi lưới được đăng ký của pool được hiệu chỉnh chính xác xung quanh giá đường cong, các lệnh OpenBook có xu hướng **tích cực về phí** cho pool — AMM đang tạo thị trường hiệu quả trên OpenBook và kiếm được chiết khấu maker.
+- Khi OpenBook tạm dừng hoặc hàng đợi sự kiện đầy, pool có thể nằm trên các lệnh cũ được thực hiện với giá không thuận lợi, tạo ra PnL âm. Sự liên kết hoạt động này là một trong những động lực để chuyển đi khỏi thiết kế lai.
+
+PnL OpenBook này **không phải** giống với phí giao thức 0,03%. PnL OpenBook làm tăng dự trữ pool trực tiếp (có lợi cho LP + giao thức tỷ lệ với chia phí), trong khi phí giao thức 0,03% được gắn thẻ cụ thể để admin thu thập. Với phía OpenBook tắt, lần duy nhất tích lũy phí ngày nay là 0,25% trên swap AMM và chia 22/3 của nó.
+
+## Thu thập
+
+Admin (multisig Raydium) gọi `WithdrawPnl` để quét `need_take_pnl_*` vào các tài khoản "chủ sở hữu PnL" cấp pool được cấu hình trên `AmmConfig` của chương trình (một config khác, có phạm vi chương trình — không phải AmmConfig kiểu CPMM cho mỗi pool). Quét:
+
+1. Chuyển `need_take_pnl_coin` / `need_take_pnl_pc` từ vault pool đến đích PnL.
+2. Đặt lại các bộ đếm về không.
+
+Không còn bước giải quyết OpenBook. Nếu số dư vault không đủ để bao gồm PnL tích lũy, lệnh sẽ trả về `TakePnlError` trực tiếp. Hoạt động không di chuyển đường cong — LP không nên thấy bất kỳ thay đổi giá nào trên lệnh gọi `WithdrawPnl`. Lưu ý bố cục tài khoản `WithdrawPnl` đã thay đổi trong bản nâng cấp 2026-07 (xem [instructions](/docs/i18n/vi/products/amm-v4/instructions#withdrawpnl-/-takepnl)).
+
+## Hoàn lại phí LP
+
+Không có lệnh "thu thập phí LP" chuyên dụng. Phí LP tích lũy trong vault và làm tăng `k` theo thời gian; LP nhận được chúng bằng cách đốt token LP qua `Withdraw`. Giá trị của token LP tăng đơn điệu khi `(coin_reserve_effective, pc_reserve_effective)` tăng.
+
+## Hình ảnh: 1.000 USDC khối lượng đi đâu
+
+Trên swap nặng USDC là \$1.000 so với pool có tham số mặc định:
+
+```
+Phí giao dịch brutto (0,25%):   $2,50
+  Phần LP   (0,22%):            $2,20   → ở lại trong pool, tăng k
+  Phần PnL  (0,03%):            $0,30   → need_take_pnl_pc, được quét bởi TakePnl
+Phần còn lại gửi cho người dùng: $997,50   (trừ tác động giá do đường cong)
+```
+
+So sánh với CPMM `AmmConfig[0]` (tầng 0,25%, không có phí tạo): LP nhận \$2,10, giao thức \$0,30, quỹ \$0,10. CPMM giới thiệu dòng quỹ bằng cách cắt nó từ những gì sẽ là phần của LP trong tầng tương đương của AMM v4.
+
+## Bảng so sánh
+
+| | AMM v4 | CPMM `index=0` | CLMM `index=2` |
+|---|---|---|---|
+| Phí giao dịch | 0,25% | 0,25% | 0,25% |
+| LP | 0,22% | 0,21% | Thay đổi theo phát hành |
+| Giao thức | 0,03% | 0,03% | Theo tầng |
+| Quỹ | N/A | 0,01% | Theo tầng |
+| Tạo pool (tùy chọn) | N/A | 0 theo mặc định | N/A |
+| Nơi phí nằm | Pool vault + need_take_pnl_* | Pool vault + protocol_fees_* + fund_fees_* | Toàn cục + theo tick + theo vị trí |
+
+Ma trận đầy đủ trong [`reference/fee-comparison`](/docs/i18n/vi/reference/fee-comparison).
+
+## Ghi chú cho người tích hợp
+
+- **Báo giá.** Lấy `AmmInfo` qua SDK hoặc `api-v3.raydium.io/pools/info/ids`. Dự trữ hiện chỉ là vault, vì vậy bạn có thể báo giá trực tiếp so với số dư vault — chỉ cần nhớ trừ `need_take_pnl_*` (PnL tích lũy được giữ trong vault nhưng loại trừ khỏi đường cong).
+- **Tham số phí cũ.** Về nguyên tắc `SetParams` có thể thay đổi `swap_fee_numerator`, nhưng trên thực tế multisig Raydium chưa thay đổi mặc định cho bất kỳ pool nào đang hoạt động. Tuy nhiên, luôn đọc từ trạng thái on-chain thay vì hardcode.
+- **Không có phần thưởng.** AMM v4 không hỗ trợ phát hành phần thưởng trên pool. Các farm hệ sinh thái cũ (Farm v3 / v5 / v6) là tương đương của lớp staking — xem [`products/farm-staking`](/docs/i18n/vi/products/farm-staking).
+
+## Tiếp theo
+
+- [`products/amm-v4/math`](/docs/i18n/vi/products/amm-v4/math) — dẫn xuất phí giao dịch bên trong đường cong.
+- [`products/amm-v4/instructions`](/docs/i18n/vi/products/amm-v4/instructions) — danh sách tài khoản `WithdrawPnl` / `SetParams`.
+- [`reference/fee-comparison`](/docs/i18n/vi/reference/fee-comparison) — ma trận so sánh song song.
+
+Nguồn:
+
+- [Chương trình Raydium AMM — `raydium-io/raydium-amm`](https://github.com/raydium-io/raydium-amm)
+- Các trường tử số/mẫu số phí AMM v4 on-chain (xác minh so với các tài khoản `AmmInfo` trên mainnet).

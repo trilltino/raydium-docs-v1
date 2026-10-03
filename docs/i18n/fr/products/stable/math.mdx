@@ -1,0 +1,146 @@
+---
+title: "Mathématiques du Stable AMM"
+description: "Recherche binaire et interpolation linéaire pour extraire les prix d'une table de consultation. Application des frais identique à AMM v4. Comptabilité pure du pool AMM après le découplage d'OpenBook."
+---
+
+<Info>
+  **Cette page est traduite automatiquement par IA. La version anglaise fait foi.**
+
+  [Voir la version anglaise →](/docs/en/products/stable/math)
+</Info>
+
+## La courbe de la table de consultation
+
+Le Stable AMM remplace la formule x·y=k par une **table de consultation clairsemée** de tuples (x, y, price). Lors de la tarification d'un swap, le programme :
+
+1. Calcule le ratio actuel du pool à partir des réserves.
+2. **Effectue une recherche binaire** dans la table pour trouver les deux entrées qui encadrent ce ratio.
+3. **Interpole linéairement** entre elles pour obtenir un prix intermédiaire.
+4. Applique les frais et retourne le devis.
+
+Cette approche échange le déterminisme d'une formule contre une **flexibilité administrative** dans la formation des prix, et elle est suffisamment efficace pour tenir dans le budget de calcul de Solana.
+
+## Disposition de la table et recherche binaire
+
+`ModelDataInfo` contient jusqu'à 50 000 entrées `DataElement`, indexées par l'administrateur. Seules les `valid_data_count` premières sont actives. Chaque entrée :
+
+```
+DataElement {
+  x: u64,      // Coordonnée X (montant du côté coin, mis à l'échelle)
+  y: u64,      // Coordonnée Y (montant du côté pc, mis à l'échelle)
+  price: u64,  // price = x/y, mis à l'échelle par le multiplicateur
+}
+```
+
+Pour trouver un prix aux réserves actuelles du pool (x_real, y_real) :
+
+1. Calculez le ratio : `target_ratio = (x_real * multiplier) / y_real`.
+2. Recherchez binaire pour les entrées où `(element.x * multiplier) / element.y` encadre `target_ratio`.
+3. Quand un encadrement `[min_idx, max_idx]` est trouvé, interpolez.
+
+Le code de recherche binaire du programme s'étend sur environ 150 lignes dans `state.rs::ModelDataInfo::get_mininum_range_by_xy_real`. L'invariant clé : **les entrées doivent être triées** (x croissant, y décroissant, price croissant) pour que la recherche fonctionne.
+
+## Interpolation linéaire
+
+Une fois que deux points de la table encadrent le ratio, l'interpolation calcule un prix intermédiaire et une paire de réserves :
+
+```
+target = (x_real * multiplier) / y_real
+
+[x1, y1, p1] = table[min_idx]
+[x2, y2, p2] = table[max_idx]
+
+// Interpoler le prix
+p = p1 + (p2 - p1) * (target - ratio1) / (ratio2 - ratio1)
+
+// Interpoler la réserve
+x = x1 + (x2 - x1) * (target - ratio1) / (ratio2 - ratio1)
+y = y1 + (y2 - y1) * (target - ratio1) / (ratio2 - ratio1)
+```
+
+Le résultat est une courbe linéaire par morceaux qui relie en douceur les points de la table.
+
+## Mise à l'échelle : le multiplicateur
+
+Les réserves du pool et les prix sont stockés à des échelles différentes. Le champ `multiplier` sur `ModelDataInfo` en tient compte. Un motif courant :
+
+- Coin a 6 décimales, PC a 18 décimales.
+- Multiplicateur = 10^6 (ou similaire).
+- Les entrées de la table sont stockées à une échelle réduite pour tenir dans les limites de u64.
+
+Le programme redimensionne à la lecture/écriture via :
+
+```
+real_value = table_value * ratio / multiplier
+table_value = real_value * multiplier / ratio
+```
+
+## Tarification du swap : `SwapBaseIn` et `SwapBaseOut`
+
+### SwapBaseIn (entrée exacte)
+
+Étant donné le montant d'entrée `amount_in` :
+
+1. Obtenez le ratio actuel de `(coin_vault, pc_vault)`.
+2. Trouvez les entrées de table encadrantes et interpolez pour obtenir le ratio dans l'espace de la table.
+3. Convertissez l'entrée dans l'espace de la table : `dx_table = amount_in * multiplier / ratio`.
+4. Interrogez la table à la nouvelle coordonnée X pour trouver le nouveau Y.
+5. `dy_table = y_old - y_new`.
+6. Convertissez en retour : `dy_real = dy_table * ratio / multiplier`.
+7. Appliquez les frais de trading : `dy_output = dy_real - (dy_real * trade_fee_numerator / trade_fee_denominator)`.
+8. Retournez `dy_output`.
+
+### SwapBaseOut (sortie exacte)
+
+Symétrique : étant donné le `amount_out` souhaité, résolvez pour le `amount_in` requis.
+
+Les deux chemins lisent les réserves effectives directement depuis les coffres du pool. Le pool n'a pas maintenu d'ordres ouverts OpenBook depuis des années, il n'y a donc rien à régler en premier — les soldes des coffres racontent toute l'histoire. (La [mise à jour du 2026-06-22](/docs/i18n/fr/reference/changelog) a supprimé le code de marché restant.)
+
+## Application des frais
+
+Même arithmétique qu'AMM v4 — consultez [`products/amm-v4/math`](/docs/i18n/fr/products/amm-v4/math) pour la dérivation complète — mais avec les chiffres propres aux pools Stable.
+
+```
+gross_fee = amount_in * (swap_fee_numerator / swap_fee_denominator)    // 2/10_000 = 0.02%
+lp_portion = gross_fee - (gross_fee * pnl_numerator / pnl_denominator) // 88% de ce montant = 0.0176%
+pnl_portion = gross_fee * (pnl_numerator / pnl_denominator)            // 12% de ce montant = 0.0024%
+```
+
+La `pnl_portion` va à `need_take_pnl_*` et est balayée par l'administrateur via `WithdrawPnl`. La `lp_portion` reste dans le coffre, gonflant `k` et bénéficiant aux détenteurs de jetons LP.
+
+## Comptabilité des actifs du pool
+
+La formule a historiquement ajouté les fonds que le pool détenait comme ordres ouverts dans son compte OpenOrders d'OpenBook. Ce terme a été zéro en pratique depuis que le pool a cessé de publier des ordres, et la mise à jour du 2026-06-22 l'a supprimé entièrement de la formule, laissant le calcul basé sur le coffre uniquement :
+
+```
+Ancien : total assets = vault balances + open-order funds (native_coin_total / native_pc_total) − pending PnL (need_take_pnl)
+Nouveau : total assets = vault balances − pending PnL (need_take_pnl)
+```
+
+C'est la valeur que les mathématiques de la courbe traitent comme des réserves effectives (la portion `need_take_pnl` accumulée mais non balayée se trouve physiquement dans le coffre mais est exclue de la tarification). Le code de devis et les indexeurs qui lisaient précédemment les soldes OpenOrders doivent supprimer ce terme.
+
+## MonitorStep (supprimé)
+
+`MonitorStep` était l'**instruction de crank** qui réglait les remplissages OpenBook en attente, recalculait `AmmInfo.target_orders` et repostait la grille d'ordres limités dérivée de la table de consultation. Le pool a cessé de publier des ordres sur OpenBook il y a des années, donc le crank n'avait plus rien à faire ; il a été **supprimé dans la mise à jour du 2026-06-22**. Les intégrateurs n'ont pas besoin de crankifier les pools Stable.
+
+## Résumé : pourquoi cela fonctionne
+
+La conception de la table de consultation + interpolation est **efficace et flexible** :
+
+- **Efficacité :** La recherche binaire est O(log 50 000) ≈ 16 itérations, chacune ~ 300–500 CU. L'interpolation est quelques multiplications/divisions. Le coût total de devis est ~ 5k–15k CU, beaucoup moins cher que de recalculer une formule à chaque swap.
+- **Flexibilité :** L'administrateur peut encoder n'importe quelle courbe linéaire par morceaux. Les paires de stablecoins obtiennent une haute densité autour de 1:1 ; les paires collatéralisées obtiennent des courbes personnalisées.
+- **Liquidité autonome :** Tous les fonds vivent dans les coffres du pool et la tarification les lit directement — pas de crank, pas de carnet de commandes externe, moins de comptes par transaction.
+
+Pour des approfondissements sur la logique d'interpolation, consultez `raydium-stable/program/src/state.rs`, méthodes `get_data_by_x`, `get_data_by_y`, `get_dy_by_dx_base_in`, etc.
+
+## Où aller ensuite
+
+- [Comptes](/docs/i18n/fr/products/stable/accounts) — référence des champs `ModelDataInfo` et `DataElement`.
+- [Instructions](/docs/i18n/fr/products/stable/instructions) — l'ensemble appelable (swap, deposit, withdraw, `WithdrawPnl`) et les instructions supprimées.
+- [Frais](/docs/i18n/fr/products/stable/fees) — application des frais et `WithdrawPnl`.
+- [`products/amm-v4/math`](/docs/i18n/fr/products/amm-v4/math) — pour la logique de tarification des ordres inclusive des frais d'OpenBook.
+
+Sources :
+
+- `raydium-stable/program/src/state.rs` (implémentations d'interpolation et de recherche binaire)
+- `raydium-stable/program/src/math.rs` (utilitaires de calcul)

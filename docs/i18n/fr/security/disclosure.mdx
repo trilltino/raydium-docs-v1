@@ -1,0 +1,247 @@
+---
+title: "Divulgation responsable"
+description: "Programme de bug bounty de Raydium : périmètre (code de programme on-chain uniquement), niveaux de sévérité et récompenses, canaux de contact (Immunefi ou email de sécurité), structure des paiements, plus le canal non-bounty pour signaler les problèmes du SDK / API / UI."
+---
+
+<Info>
+  **Cette page est traduite automatiquement par IA. La version anglaise fait foi.**
+
+  [Voir la version anglaise →](/docs/en/security/disclosure)
+</Info>
+
+<Info>
+  Raydium gère un programme de bug bounty actif **couvrant uniquement le code de programme on-chain** — les smart contracts Solana aux adresses de programme listées dans [`reference/program-addresses`](/docs/i18n/fr/reference/program-addresses). Le programme est actif sur Immunefi depuis le 25 avril 2023. Les paiements évoluent selon la sévérité et l'impact économique, atteignant jusqu'à \$505 000 au sommet du niveau critique.
+
+  **Le SDK, les API REST et le frontend (raydium.io) ne font pas partie du bounty.** Les problèmes à ce niveau ne donnent pas lieu à paiement, mais les signalements sont toujours bienvenus — consultez [Signalements non-bounty (SDK / API / UI)](#signalements-non-bounty-sdk-/-api-/-ui) ci-dessous pour le canal de contact.
+
+  Cette page est la source de vérité pour ce que le bounty couvre, comment signaler et à quoi s'attendre du processus de réponse.
+</Info>
+
+## Périmètre
+
+### Dans le périmètre du bounty (rémunéré)
+
+Le bounty s'applique **uniquement au code de programme on-chain déployé** :
+
+- **Programmes déployés** aux adresses de programme dans [`reference/program-addresses`](/docs/i18n/fr/reference/program-addresses) :
+  - AMM v4 (`675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8`)
+  - CPMM (`CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C`)
+  - CLMM (`CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK`)
+  - Stable AMM (`5quBtoiQqxF9Jv6KYKctB59NT3gtJD2Y65kdnB1Uev3h`)
+  - LaunchLab (`LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj`)
+  - Farm v3 / v5 / v6
+  - LP-Lock / Burn & Earn (`LockrWmn6K5twhz3y9w1dQERbmgSaRkfnTeTKbpofwE`)
+  - AMM Routing
+- **Bugs de composabilité CPI de smart contract** où l'utilisation correcte d'un programme Raydium par un programme composant provoque un dysfonctionnement du programme Raydium lui-même.
+
+### Hors du périmètre du bounty (bienvenue à signaler — voir ci-dessous)
+
+- **Raydium SDK v2** (`@raydium-io/raydium-sdk-v2`) sur npm.
+- **API REST** (tous les hôtes listés dans l'onglet [API Reference](/docs/i18n/fr/api-reference) — `api-v3.raydium.io`, `transaction-v1.raydium.io`, `launch-*-v1.raydium.io`, etc.).
+- **Frontend** (`raydium.io`) — incluant XSS, CSRF, bugs de flux d'authentification, usurpation de portefeuille, états UI cassés.
+- **Indexeurs off-chain, passerelles d'images / IPFS et toute autre infrastructure** qui fournit des données à l'interface utilisateur.
+
+Ceux-ci ne donnent pas lieu à paiement. Les signalements sont toujours bienvenus et utiles — soumettez-les via le [canal non-bounty](#signalements-non-bounty-sdk-/-api-/-ui) ci-dessous.
+
+### Hors de portée (non admissible du tout)
+
+- Programmes tiers qui composent avec Raydium (signalez à leurs équipes).
+- Agrégateurs tiers qui routent via Raydium (par exemple Jupiter).
+- Outils off-chain **non maintenus par Raydium** (SDK communautaires en Python, bots tiers, etc.).
+- Attaques d'ingénierie sociale contre les membres de l'équipe Raydium.
+- Tout résultat nécessitant une collusion côté validateur ou des attaques de majorité de stake (c'est au niveau Solana, pas une cible de bounty DeFi).
+- DoS via spam des points de terminaison RPC publics.
+- Résultats d'outils de scan automatisé sans preuve de concept fonctionnelle.
+
+**Exclusions spécifiques au programme (selon la liste Immunefi) :**
+
+- **Dépendances AMM v4 / OpenBook** — les bugs concernant les dépendances OpenBook ne sont pas dans le périmètre. AMM v4 est défini sur le statut 6, donc la liquidité n'est plus partagée avec les marchés OpenBook.
+- **Les résultats déjà signalés dans les examens de sécurité antérieurs ne sont pas admissibles** : l'examen Ottersec de CLMM, et les examens Kudelski, Ottersec et MadShield du programme Hybrid AMM. Le re-signalement d'un problème déjà divulgué ne donne pas lieu à paiement.
+- **Échec de la réclamation de rendement CLMM par conception** — le CLMM émet des jetons de frais de trading et de rendement agricole aux LP. Si un attaquant vidait le coffre ou les jetons de frais, les utilisateurs ne pourraient pas réclamer le rendement et les transactions échoueraient. C'est par conception et n'est **pas** considéré comme une vulnérabilité.
+
+### Zone grise — discuter d'abord
+
+- Bugs dans les primitives de résistance MEV qui interagissent avec une infrastructure externe.
+- Cas limites d'intégration Token-2022 où le comportement « correct » est ambigu.
+- Attaques économiques / théoriques des jeux qui ne correspondent pas clairement à un bug de code.
+
+En cas de doute, penchez-vous du côté du signalement.
+
+## Sévérité et récompenses
+
+Les signalements sont classés selon le [Système de classification de la sévérité des vulnérabilités Immunefi V2.3](https://immunefi.com/immunefi-vulnerability-severity-classification-system-v2-3/), selon un modèle de **Primauté des règles** : les conditions de cette page et la liste Immunefi gouvernent et prennent précédence sur la classification par défaut où elles diffèrent. Les récompenses sont libellées en USD et payées par l'équipe Raydium en **RAY, SOL ou USDC**.
+
+Les niveaux de récompense des smart contracts sont :
+
+| Sévérité | Récompense |
+|----------|--------|
+| **Critique** | **10 % des fonds directement affectés**, plafonné à **\$505 000**, avec un **minimum de \$50 000** |
+| **Élevée** | **\$5 000–\$40 000** |
+| **Moyenne** | **\$5 000 forfaitaires** |
+
+Il n'y a pas de niveau rémunéré séparé en dessous de Moyen. Le minimum critique de \$50 000 existe spécifiquement pour décourager les chercheurs de retenir un signalement lorsque les fonds directement affectés sont faibles.
+
+### Calcul de la récompense critique
+
+Pour les actifs du mainnet, la récompense critique est **10 % des fonds directement affectés**, jusqu'à un maximum de **\$505 000**. Si 10 % des fonds à risque tombe en dessous de **\$50 000**, le signalement paie toujours le **minimum de \$50 000**. Le plafond et la base de 10 % des fonds à risque s'appliquent aux signalements critiques de smart contracts.
+
+### Impacts dans le périmètre
+
+Le bounty utilise la taxonomie d'impact standardisée d'Immunefi. Des exemples spécifiques à Raydium sont donnés pour illustrer comment chaque impact correspond aux programmes.
+
+**Critique**
+
+- **Vol direct de fonds utilisateur**, au repos ou en mouvement, autre que le rendement non réclamé — par exemple, drainer les fonds LP d'un utilisateur via une instruction Raydium valide, ou une frappe non bornée de jetons LP.
+- **Gel permanent des fonds** — par exemple, corrompre la comptabilité du pool pour que les fonds deviennent irrécupérables de façon permanente.
+- **Vulnérabilités qui pourraient geler les fonds utilisateur de façon permanente, ou qui drainent ou volent des fonds sans approbation de transaction utilisateur** — par exemple, contourner l'autorité de mise à niveau du programme, ou un bug de vol de tous les frais de protocole.
+
+**Élevée**
+
+- **Vol de rendement non réclamé** — par exemple, voler les récompenses en attente des fermes ou des positions CLMM.
+- **Gel permanent du rendement non réclamé**.
+- **Gel temporaire des fonds pour n'importe quelle durée** — par exemple, geler la position d'un utilisateur pour qu'il ne puisse pas la fermer via une tx malveillante.
+- **Vulnérabilités qui pourraient geler temporairement les fonds utilisateur ou altérer intentionnellement la valeur des fonds utilisateur** — par exemple, manipuler les mathématiques du pool ou contourner la protection contre le slippage.
+
+**Moyenne**
+
+- **Smart contract incapable de fonctionner en raison d'un manque de fonds en jetons**.
+- **Remplissage de bloc pour profit**.
+- **Griefing** (pas de motif de profit pour l'attaquant, mais dommage aux utilisateurs ou au protocole) — par exemple, un DoS griefable où tous les swaps sur un pool reviennent.
+- **Vol de gaz**.
+- **Consommation de gaz non bornée**.
+
+## Canaux de contact
+
+### Principal : Immunefi
+
+Le bug bounty de Raydium est listé sur [Immunefi](https://immunefi.com/bug-bounty/raydium/information/). Signalez via la plateforme Immunefi :
+
+1. Créez un compte Immunefi.
+2. Accédez à la page du bounty Raydium.
+3. Soumettez le résultat avec une PoC complète. **Une preuve de concept est requise pour toutes les sévérités** — les explications et déclarations ne sont pas acceptées, le code fonctionnel est requis. Les signalements critiques et élevés doivent également inclure un correctif suggéré.
+4. Les signalements sont traités rapidement — le temps de résolution médian du programme est d'environ 1 jour.
+
+**Les paiements sont gérés directement par l'équipe Raydium**, pas par l'escrow Immunefi — libellés en USD et payés en RAY, SOL ou USDC. **Aucune vérification d'identité n'est requise** pour le traitement du paiement.
+
+### Alternative : soumission par email
+
+Les résultats dans le périmètre du bounty peuvent également être soumis par email au lieu de (ou en plus de) Immunefi :
+
+- `security@raydium.io`
+- `security@reactorlabs.io`
+
+Incluez une PoC complète et fonctionnelle, et pour les signalements critiques / élevés un correctif suggéré, tout comme sur Immunefi. Chiffrez les détails sensibles avec la clé PGP de l'équipe si nécessaire — demandez dans l'email et l'équipe échangera les clés. Ne soumettez pas le même résultat via plusieurs canaux à la fois (choisissez Immunefi *ou* email).
+
+### Direct (pour les résultats critiques et sensibles au temps)
+
+Si le résultat est activement exploité ou imminent et que vous ne pouvez pas attendre le triage Immunefi, le chemin secondaire le plus rapide est :
+
+- **Email direct** à `security@raydium.io` ou `security@reactorlabs.io` — le chemin le plus rapide pour atteindre l'équipe directement ; signalez la ligne d'objet comme une exploitation active.
+- **Bouton d'urgence Immunefi** sur la page du bounty — escalade en quelques minutes pendant les heures de bureau.
+- **Contact chiffré via Immunefi** — Immunefi peut relayer un message chiffré de bout en bout à l'équipe Raydium.
+
+Évitez les canaux publics (X / Twitter, Telegram, Discord) pour les signalements de sécurité — la divulgation elle-même peut déclencher une exploitation. Utilisez Immunefi ou les emails de sécurité ci-dessus pour le signalement et tout suivi.
+
+### Signalements non-bounty (SDK / API / UI)
+
+Pour les problèmes dans les composants **en dehors du bounty** — le SDK, les API REST, le frontend `raydium.io`, ou toute infrastructure off-chain — il n'y a pas de paiement, mais l'équipe veut toujours en entendre parler. Utilisez :
+
+- **Email** : `security@raydium.io` ou `security@reactorlabs.io` pour tout ce qui a des implications de sécurité (XSS, CSRF, fuites de flux d'authentification, rejeu de message signé, usurpation de portefeuille, données sensibles exposées par une API, etc.). Chiffrez avec la clé PGP de l'équipe si le bug est sensible ; demandez dans l'email et l'équipe échangera les clés.
+- **Problèmes GitHub** : pour les bugs fonctionnels non-sécurité dans le SDK, la documentation ou tout dépôt open-source maintenu par Raydium. Ouvrez un problème sur le dépôt pertinent (par exemple [`raydium-io/raydium-sdk-V2`](https://github.com/raydium-io/raydium-sdk-V2)).
+- **Discord** (`discord.gg/raydium`) : bien pour les retours UI / UX à faible impact qui ne touchent pas à la sécurité. **Ne postez pas** quoi que ce soit qui pourrait permettre une exploitation s'il est lu par un étranger.
+
+Ce que vous obtenez des signalements non-bounty :
+
+- **Accusé de réception** dans la réponse en quelques jours ouvrables.
+- **Coordination inter-dépôts** si le correctif s'étend sur le programme et le SDK.
+- **Crédit public** (avec votre consentement) dans le changelog ou les notes de version pertinents.
+- **Les signaleurs réguliers de résultats substantiels** sont parfois invités à un programme de contributeur ; ce chemin est séparé du bounty on-chain et est offert sur une base discrétionnaire.
+
+Ce que vous n'obtenez pas :
+
+- Un paiement échelonné, quelle que soit la sévérité. Le bounty est pour les résultats du code de programme.
+- Couverture selon la politique de refuge sûr ci-dessous — cette politique se réfère spécifiquement à la recherche dans le périmètre du bounty. Pour les tests SDK / API / UI, suivez les conventions de divulgation responsable normales et les conditions de service standard.
+
+## Règles d'engagement
+
+### À faire
+
+- **Testez uniquement sur un fork local** du mainnet ou du testnet public. Tout travail de preuve de concept doit être effectué sur un fork local.
+- Incluez une PoC fonctionnelle dans le signalement (requis pour toutes les sévérités).
+- Estimez l'impact économique au mieux de vos connaissances.
+- Proposez un correctif — requis pour les signalements critiques et élevés.
+
+### À ne pas faire
+
+- **Testez sur le mainnet ou le code déployé du testnet public.** Tout tel test est interdit ; utilisez uniquement les forks locaux.
+- **Testez avec des oracles de prix ou des smart contracts tiers**, ou avec des systèmes, applications, extensions de navigateur ou sites web tiers.
+- Divulguez publiquement la vulnérabilité avant qu'un correctif ne soit déployé (la divulgation publique d'un bug non corrigé dans un bounty sous embargo est interdite).
+- Exécutez des tests automatisés qui génèrent un trafic important, ou toute attaque par déni de service contre les actifs du projet.
+- Tentez du phishing ou d'autres ingénieries sociales contre les membres de l'équipe Raydium ou les utilisateurs.
+- Soumettez le même résultat via plus d'un canal à la fois — choisissez Immunefi *ou* email, pas les deux, et jamais via des DM publics.
+
+Ceux-ci suivent les [Règles Immunefi](https://immunefi.com/rules/) ; les violations invalident le bounty.
+
+## Chronologie de réponse
+
+Le **temps de résolution médian du programme est d'environ 1 jour** (selon la liste publique Immunefi). Les phases ci-dessous sont indicatives de la progression d'un signalement ; les SLA exacts sont régis par la liste Immunefi et le processus de triage, pas par cette page :
+
+| Phase | Temps indicatif |
+|-------|-------------|
+| Triage initial | ~1 jour (médian) |
+| Classification de sévérité | Quelques jours ouvrables |
+| Développement du correctif | Dépend de la sévérité + complexité |
+| Déploiement du correctif | Sujet au timelock du programme on-chain |
+
+Pour les résultats critiques, la piste de correctif s'accélère : l'équipe convoque le multisig, rédige un correctif, le soumet pour examen et met en file d'attente le déploiement verrouillé dans le temps.
+
+## Ce qu'il ne faut pas divulguer publiquement
+
+Jusqu'à ce qu'un correctif soit déployé et que l'équipe Raydium ait coordonné la divulgation avec vous :
+
+- Ne tweetez pas sur le résultat (même vague « J'ai trouvé quelque chose de gros »).
+- Ne décrivez pas la classe de bug à des tiers.
+- Ne partagez pas le code PoC avec quiconque en dehors de l'équipe de triage de Raydium.
+
+Après le déploiement du correctif + fenêtre de divulgation coordonnée :
+
+- Les articles publics sont bienvenus et encouragés.
+- Raydium fera la promotion croisée des articles substantiels.
+- Les chercheurs qui consentent à être nommés sont crédités sur le [Immunefi Whitehat Hall of Fame](https://immunefi.com/hall-of-fame/).
+
+## Politique de refuge sûr
+
+La recherche menée dans le périmètre et les règles ci-dessus est explicitement autorisée. Raydium :
+
+- Ne poursuivra pas d'action en justice pour une recherche de bonne foi qui suit cette politique.
+- N'interférera pas avec les activités de recherche (par exemple, liste noire des portefeuilles de chercheurs).
+- Collaborera à la compréhension du résultat.
+
+La recherche *en dehors* du périmètre ou des règles n'est pas protégée par le refuge sûr. Si votre plan de recherche est limite, demandez via le canal « Ask Project » d'Immunefi avant de tester.
+
+## Divulgations notables antérieures
+
+Statistiques agrégées pour le **bounty du code de programme**, qui est actif sur Immunefi depuis le 25 avril 2023 (chiffres selon la liste publique Immunefi) :
+
+- Récompenses totales payées à ce jour : ~\$3,4 M.
+- Temps de résolution médian : ~1 jour.
+
+Le Immunefi Whitehat Hall of Fame liste les chercheurs qui ont consenti à être nommés. Les signalements non-bounty (SDK / API / UI) sont suivis séparément et reconnus dans les notes de version du dépôt pertinent plutôt que sur Immunefi.
+
+## Programmes connexes
+
+- **Prime aux bugs du validateur Agave (Anza)** — couvre les bugs du client validateur Solana (consensus, sûreté, vivacité, DoS). Signalez-y les problèmes au niveau Solana ; les programmes SPL et les propriétés web sont explicitement hors périmètre. [Politique de sécurité d'Agave](https://github.com/anza-xyz/agave/security/policy).
+- **Squads Protocol Bug Bounty** — couvre le multisig lui-même. [docs.squads.so/main/security/bug-bounty](https://docs.squads.so/main/security/bug-bounty).
+- **Immunefi** — couvre de nombreux protocoles DeFi incluant Raydium. [immunefi.com](https://immunefi.com).
+
+Un bug qui s'étend sur les couches (par exemple un bug du validateur Solana qui se manifeste sur Raydium) doit être signalé à tous les programmes applicables.
+
+## Pointeurs
+
+- [`security/audits`](/docs/i18n/fr/security/audits) — historique des audits antérieurs.
+- [`security/admin-and-multisig`](/docs/i18n/fr/security/admin-and-multisig) — structure d'autorité.
+- [`security/attack-vectors`](/docs/i18n/fr/security/attack-vectors) — classes d'attaque connues.
+
+Sources :
+
+- [Page du bounty Raydium sur Immunefi](https://immunefi.com/bug-bounty/raydium/information/) — périmètre canonique, conditions de paiement et canal de contact.

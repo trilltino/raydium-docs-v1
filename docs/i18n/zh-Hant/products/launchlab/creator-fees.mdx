@@ -1,0 +1,72 @@
+---
+title: "LaunchLab 創作者費用"
+description: "創作者費用在畢業前透過綁定曲線累積，畢業後透過 CPMM 池創作者累積，與平台擁有的鎖定流動性分開計算。"
+---
+
+<Info>
+  **本頁內容由 AI 自動翻譯，所有內容以英文版本為準。**
+
+  [查看英文版 →](/docs/en/products/launchlab/creator-fees)
+</Info>
+
+<Info>
+  LaunchLab 創作者收入來自兩個費用計數器：畢業前的綁定曲線創作者費用金庫，以及畢業後的 CPMM 創作者費用。在 2026-08-17 升級前，`creator_scale` 也會產生創作者擁有的流動性費用金鑰。升級後執行的遷移會將該鎖定流動性份額分配給平台。
+</Info>
+
+## 遷移前：直接費用累積
+
+當代幣在綁定曲線上交易時，每次買入和賣出都可以收取創作者費用成分。費用累積在每個創作者、每個報價代幣的金庫中。
+
+- 費用以報價代幣計價。
+- `PlatformConfig.creator_fee_rate` 設定費率。
+- 創作者可以在畢業前或畢業後透過 `ClaimCreatorFee` 領取。
+- 畢業停止新的綁定曲線累積，但不會清除未領取的餘額。
+
+## 遷移後：CPMM 創作者費用
+
+每次新啟動都會畢業到 CPMM。選定的 CPMM `AmmConfig.creator_fee_rate` 和 `PoolState.creator_fee_on` 決定 CPMM 交換時是否累積創作者費用。
+
+CPMM 池創作者是：
+
+- 當 `PlatformConfig.platform_cp_creator` 為預設公鑰時的原始啟動創作者；或
+- 否則為設定的 `platform_cp_creator`。
+
+該記錄的 CPMM 創作者擁有創作者費用計數器。他們可以使用創作者簽署的收集指令，任何支付者都可以觸發目標受限的無需許可路徑，將費用支付給創作者的規範 ATA。請參閱 [`products/cpmm/fees`](/docs/i18n/zh-Hant/products/cpmm/fees)。
+
+## 鎖定流動性是獨立的平台權利
+
+在 CPMM 遷移時，LaunchLab 仍驗證：
+
+```text
+platform_scale + creator_scale + burn_scale = 1_000_000
+```
+
+在 2026-08-17 升級前，LaunchLab 單獨鎖定 `creator_scale` 並將對應的費用金鑰鑄造給代幣創作者。對於升級後執行的遷移，它結合 `platform_scale + creator_scale`。如果合併份額非零，LP-Lock 程式會為 `platform_nft_wallet` 建立一個費用金鑰 NFT。`burn_scale` 餘額被銷毀。
+
+因此，對於在更新程式下執行的遷移，保留的 `creator_scale` 欄位不是創作者收入流。它對平台的鎖定流動性金額有貢獻。對於歷史池，請讀取實際的費用金鑰和鎖定流動性記錄，而不是從目前規則推斷所有權。
+
+在升級前完成的遷移建立的費用金鑰不會被重新分配或修改。在升級前建立但之後遷移的啟動使用新的平台擁有分配。
+
+## 領取路徑
+
+| 收入 | 受益人 | 領取路徑 |
+|---|---|---|
+| 綁定曲線創作者費用 | 原始啟動創作者 | LaunchLab `ClaimCreatorFee` |
+| CPMM 創作者費用 | CPMM `pool_creator` | CPMM 創作者簽署或無需許可收集 |
+| 鎖定流動性交易費用，升級前遷移 | 該遷移時建立的創作者或平台費用金鑰的目前持有人 | LP-Lock / Burn & Earn 收穫流程 |
+| 鎖定流動性交易費用，更新遷移 | 平台費用金鑰的目前持有人 | LP-Lock / Burn & Earn 收穫流程 |
+
+## 整合者檢查清單
+
+- 讀取 `platform_cp_creator` 以識別畢業後 CPMM 創作者費用受益人。
+- 對於更新遷移，不要將 `creator_scale` 顯示為創作者費用金鑰百分比。對於歷史遷移，讀取實際費用金鑰記錄。
+- 分開追蹤綁定曲線金庫和 CPMM 創作者費用計數器。
+- 將平台費用金鑰視為流動性費用權利，而非 CPMM 創作者費用憑證。
+- 在啟用更新遷移建構器前刷新已部署的 IDL。
+
+## 相關連結
+
+- [`products/launchlab/platform-config`](/docs/i18n/zh-Hant/products/launchlab/platform-config) — 規模和創作者記錄欄位。
+- [`products/launchlab/tips-and-gotchas/lp-fee-distribution`](/docs/i18n/zh-Hant/products/launchlab/tips-and-gotchas/lp-fee-distribution) — 確切的流動性分割。
+- [`products/cpmm/fees`](/docs/i18n/zh-Hant/products/cpmm/fees) — CPMM 創作者費用累積和收集。
+- [`user-flows/burn-and-earn`](/docs/i18n/zh-Hant/user-flows/burn-and-earn) — 費用金鑰機制。

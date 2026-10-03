@@ -1,0 +1,168 @@
+---
+title: "Likidite ekleme veya çıkarma"
+description: "Raydium arayüzü aracılığıyla token yatırma, çekme, farm ödüllerini hasat etme ve CLMM ücretleri ile ödüllerini toplama."
+---
+
+<Info>
+  **Bu sayfa yapay zekâ tarafından otomatik olarak çevrilmiştir. İngilizce sürüm esas alınır.**
+
+  [İngilizce sürümü görüntüle →](/docs/en/user-flows/add-remove-liquidity)
+</Info>
+
+<Info>
+  Likidite pozisyonları ve ödüller, Raydium ürünleri arasında farklı mekanizmalar kullanır. **CPMM** pozisyonları fungible LP tokenlerini kullanır. **CLMM** pozisyonları seçili fiyat aralığına sahip pozisyon NFT'lerini kullanır. **Farm** ödülleri, uygun LP tokenları stake edilirken tahakkuk eder.
+</Info>
+
+## Başlamadan önce
+
+Aşağıdakilere sahip olduğunuzu kontrol edin:
+
+- Yatırmak istediğiniz token çifti.
+- İşlem ücretleri ve öncelik ücretleri için yeterli SOL.
+- Raydium.io üzerinde doğru pool.
+- Pozisyonun pasif CPMM likiditesi mi yoksa aktif olarak yönetilen CLMM likiditesi mi olduğu konusunda net bir anlayış.
+
+Yeni bir pool oluşturuyorsanız [Pool Oluşturma](/docs/i18n/tr/user-flows/choosing-a-pool-type) ile başlayın.
+
+## CPMM pool'una likidite ekleme
+
+1. Raydium üzerinde pool sayfasını açın.
+2. **Likidite ekle**'ye tıklayın.
+3. Bir tokenin miktarını girin. Diğer miktar pool'un mevcut oranında otomatik olarak doldurulur.
+4. Alacağınız LP tokenlerini ve beklenen pool payınızı gözden geçirin.
+5. Raydium'da onaylayın, ardından cüzdanınızda onaylandığını doğrulayın.
+
+Arayüz, eksik token hesaplarını, desteklenen Token-2022 transfer-fee mint'leri için hesapları oluşturur ve gerektiğinde SOL'u sarmalanır.
+
+## CPMM pool'undan likidite çıkarma
+
+1. Pool sayfasını veya portföy pozisyonunuzu açın.
+2. **Likidite çıkar**'a tıklayın.
+3. LP token miktarını girin veya yüzde kaydırıcısını kullanın.
+4. Alacağınız iki token miktarını gözden geçirin.
+5. Onaylayın ve cüzdanınızda onaylandığını doğrulayın.
+
+Çekim sonrasında küçük yuvarlama kalıntıları kalabilir. Bu, sabit-ürün pool'ları için normaldir.
+
+## CLMM pozisyonu açma veya yönetme
+
+CLMM pozisyonları NFT'lerdir. Dört yaygın işlemi vardır:
+
+- **Pozisyon aç**: başlangıç aralığı ve likidite ile yeni bir pozisyon NFT'si oluştur.
+- **Likidite artır**: mevcut bir pozisyona daha fazla likidite ekle.
+- **Likidite azalt**: NFT'yi tutarken likiditenin bir kısmını çıkar.
+- **Pozisyonu kapat**: tüm likiditeyi çıkar, bekleyen ücretleri ve ödülleri topla, ardından NFT'yi yak.
+
+<Info>
+  Çoğu yeni CLMM pozisyonu donmuş olmayan ve aktarılabilir durumda kalır. Bir pozisyon, V2 açık yolunu kullanırken ve pool mint'lerinden biri CLMM'nin kısıtlı-yayıncı listesiyle eşleştiğinde, yalnızca başlangıçtaki NFT sahibine bağlanır. Bu eşleşen NFT hesabı dondurulur, bu nedenle aktarılamaz veya emanet içine taşınamaz. Sahibi yine de likiditeyi artırabilir veya azaltabilir, ücretleri ve ödülleri toplayabilir ve Raydium aracılığıyla pozisyonu kapatabilir.
+</Info>
+
+## CLMM pozisyonu açma
+
+1. CLMM pool sayfasını açın.
+2. Daha düşük bir fiyat ve daha yüksek bir fiyat seçin.
+3. Yatırım miktarını girin.
+4. Pozisyonun aralık içinde, kısmen aralık içinde mi yoksa aralık dışında mı olduğunu gözden geçirin.
+5. Onaylayın ve onaylandığını doğrulayın.
+
+Seçtiğiniz aralık, token oranını belirler. Mevcut fiyat alt kenarın yakınındaysa, pozisyon çoğunlukla bir token gerektirebilir. Üst kenarın yakınındaysa, çoğunlukla diğer token gerektirebilir.
+
+## CLMM pozisyonunu artırma, azaltma veya kapatma
+
+- **Artır**: pozisyon kartını açın, **Artır**'a tıklayın, bir miktar girin, gerekli token çiftini gözden geçirin ve imzalayın.
+- **Azalt**: **Azalt**'a tıklayın, bir yüzde veya miktar seçin, tahmini token getirisini gözden geçirin ve imzalayın.
+- **Kapat**: likiditeyi sıfıra azalt, talep edilmemiş ücretleri ve ödülleri topla, ardından pozisyonu kapat. Kapatma, pozisyon NFT'sini yakar ve uygun olduğunda kirayı geri döndürür.
+
+Pozisyon kısıtlı-yayıncı pool'una aitse, kapatmak için mevcut Raydium arayüzünü veya güncellenmiş SDK'yı kullanın. Kapatma işlemi, CLMM programının donmuş pozisyon NFT'sini atomik olarak çözmesi ve yakması için pool hesabını içermelidir.
+
+Mevcut fiyat seçtiğiniz aralığın dışındaysa, yatırım tek taraflı olabilir. Arayüz, tek taraflı veya aralık dışında bir pozisyonu imzalamadan önce uyarır.
+
+## Farm ödüllerini hasat etme
+
+Farm ödülleri, LP tokenleriniz aktif bir farm'da stake edilirken tahakkuk eder. Hasat, bekleyen ödülleri cüzdanınıza aktarır. Stake'inizi çekmez.
+
+1. [raydium.io/portfolio](https://raydium.io/portfolio) sayfasını açın.
+2. Farm pozisyonunuzu bulun.
+3. **Hasat et**'e tıklayın.
+4. Ödül akışı başına bekleyen miktarları gözden geçirin.
+5. Onaylayın ve cüzdanınızda onaylandığını doğrulayın.
+
+Farm yatırımları ve çekimleri genellikle bekleyen ödülleri aynı işlemin parçası olarak kapatır. Onay ekranını dikkatle gözden geçirin çünkü bekleyen ödülleri de hasat edebilir.
+
+## CLMM ücretleri ve ödüllerini toplama
+
+CLMM pozisyonları her iki pool mint'inde swap ücretleri kazanır. Ücretler pozisyonda tahakkuk eder ve otomatik olarak bileşikleştirilmez.
+
+1. [raydium.io/portfolio](https://raydium.io/portfolio) sayfasından CLMM pozisyonunuzu açın.
+2. **Ücretleri topla** veya **Ödülleri topla**'ya tıklayın.
+3. Token miktarlarını gözden geçirin.
+4. Onaylayın ve onaylandığını doğrulayın.
+
+Arayüz **Tümünü topla** seçeneği sunuyorsa, ücretleri ve ödülleri birlikte toplamak için kullanın.
+
+Manuel olarak bileşikleştirmek için ücretleri toplayın, gerekirse iki tokeni yeniden dengeleyin, ardından pozisyonda likiditeyi artırın.
+
+## Zamanlama ve ücret ekonomisi
+
+Her talep, bir Solana işlem ücreti ve yoğunluk sırasında bir öncelik ücreti gerektirir.
+
+- Küçük bekleyen miktarlar için, ödüller işlem ücretine göre anlamlı olana kadar bekleyin.
+- Daha büyük pozisyonlar için, haftalık veya aylık talepler genellikle yeterlidir.
+- Aktif olarak bileşikleştirmiyorsanız, her gün talep etmeye gerek yoktur.
+
+## Doğrulama
+
+CPMM yatırımından sonra:
+
+- Cüzdanınızın LP token bakiyesini gösterdiğini kontrol edin.
+- Raydium'un portföy sayfasının pozisyonu gösterdiğini kontrol edin.
+- İşlem imzasını açın ve pool yatırımının başarılı olduğunu doğrulayın.
+
+CLMM pozisyonunu açtıktan veya artırdıktan sonra:
+
+- Portföyünüzün pozisyon NFT'sini gösterdiğini kontrol edin.
+- Alt ve üst fiyat aralığının seçtiğiniz aralıkla eşleştiğini doğrulayın.
+- Mevcut fiyatın aralık içinde olup olmadığını kontrol edin.
+
+Hasat ettikten veya topladıktan sonra:
+
+- İşlem durumunun **Başarılı** olduğunu kontrol edin.
+- Ödül veya ücret token bakiyesinin cüzdanınızda arttığını doğrulayın.
+- Raydium'un portföy sayfasını yenileyin ve bekleyen miktarların sıfırlandığını veya azaldığını doğrulayın.
+
+## Sorun giderme
+
+### Yatırım oranında slippage
+
+Yatırım oranı, teklif zamanında hesaplanır. İmzalamadan önce pool fiyatı hareket ederse, işlem başarısız olabilir. Yeniden teklif alın ve yeniden deneyin. Slippage'ı yalnızca değişken çiftler için gerektiği kadar artırın.
+
+### Yatırımda Token-2022 transfer ücretleri
+
+Token-2022 mint'i transfer ücretleri alırsa, pool gönderdiğinizden daha az alır. Raydium, imzalamadan önce transfer-fee uyarısını gösterir.
+
+### Çekim sırasında toz
+
+Yuvarlama, pool'da veya cüzdanınızda küçük miktarlar bırakabilir. Bu normaldir ve başarısız bir çekimi göstermez.
+
+### CLMM pozisyonu LP token değildir
+
+CLMM pozisyonları NFT'lerdir. Fungible LP tokenlerini aramak yerine Raydium'un portföy sayfasını veya cüzdanınızın NFT görünümünü kontrol edin.
+
+### Ödül sona ermeden hemen önce hasat etme
+
+Bir ödül akışı sona ererken bekleyen ödülleriniz varsa, bekleyen miktar büyümeyi durdurur. Farm olağandışı bir şekilde kapatılmadığı sürece, bitiş zamanından sonra talep edebilirsiniz.
+
+### Öncelik ücreti çok düşük
+
+İşlem beklemede kalırsa veya süresi doluyorsa, daha yüksek bir öncelik-ücret ayarıyla yeniden deneyin.
+
+### Birçok farm arasında talep etme
+
+Çok sayıda pozisyon veya ödül akışı dahil edilirse, büyük toplu talepler başarısız olabilir. Bir seferde birkaç pozisyon talep edin.
+
+## İşaretçiler
+
+- [CPMM hesapları](/docs/i18n/tr/products/cpmm/accounts) ve [CLMM hesapları](/docs/i18n/tr/products/clmm/accounts) — zincir üstü durum.
+- [CLMM ücretleri](/docs/i18n/tr/products/clmm/fees) — CLMM'nin yerleşik ücretleri ve ödülleri.
+- [Cüzdan entegrasyonu](/docs/i18n/tr/integration-guides/wallet-integration) — cüzdan arayüzünde pozisyonları gösterme.
+- [CLMM matematik](/docs/i18n/tr/algorithms/clmm-math) — aralık oranı formülleri.

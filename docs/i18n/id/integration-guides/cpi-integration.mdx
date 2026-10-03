@@ -1,0 +1,437 @@
+---
+title: "CPI dari program kustom"
+description: "Pola komposisi untuk program on-chain yang memanggil Raydium — escrow, proxy agregator, vault auto-compounding — dengan contoh lengkap yang mencakup konstruksi akun, PDA signer, remaining accounts, dan budgeting compute-budget."
+---
+
+<Info>
+  **Halaman ini diterjemahkan secara otomatis oleh AI. Versi bahasa Inggris adalah acuan resmi.**
+
+  [Lihat versi bahasa Inggris →](/docs/en/integration-guides/cpi-integration)
+</Info>
+
+## Kapan CPI adalah alat yang tepat
+
+Program kustom masuk akal ketika pertukaran perlu terjadi secara atomik dengan perubahan state on-chain lainnya yang hanya program Anda yang bisa lakukan. Kasus umum:
+
+- **Program escrow / limit-order** — pengguna menyetor mint ke escrow Anda, program Anda memantau kondisi harga, dan ketika terpicu, program Anda secara atomik menukar melalui Raydium dan mengkreditkan akun pengguna.
+- **Proxy agregator** — satu instruksi yang merutekan swap melalui Raydium + satu atau lebih DEX lain, dengan semua hop di bawah satu slippage check yang dimiliki program Anda.
+- **Vault auto-compounding** — setor LP atau farm stake ke vault Anda, vault memanen reward sesuai jadwal, memasok kembali likuiditas, mengeluarkan share token.
+- **Vault strategi** — posisi LP leverage yang menyeimbangkan kembali dengan menukar melalui CLMM; liquidator yang menutup posisi dan menukar collateral dalam satu transaksi.
+- **Platform peluncuran token dengan vesting kustom** — program Anda memegang token vesting dan melepasnya ke pool Raydium sesuai jadwal.
+
+Jika Anda hanya ingin mengirim swap dari kode off-chain, CPI terlalu rumit — gunakan SDK. CPI hanya layak digunakan ketika atomisitas dengan state Anda sendiri adalah persyaratannya.
+
+## Pola komposisi
+
+### Pola 1: Proxy tipis
+
+Program Anda mengekspos satu instruksi yang memvalidasi beberapa kebijakan (misalnya pasangan mint yang di-whitelist, diskon biaya untuk pengguna terverifikasi) lalu meneruskan ke Raydium.
+
+```
+┌──────────────┐   user tx    ┌────────────────┐  CPI  ┌──────────┐
+│ user         │─────────────▶│ your program   │──────▶│ Raydium  │
+└──────────────┘              │  (validate)    │       │  (CPMM)  │
+                              └────────────────┘       └──────────┘
+```
+
+State hidup di ATA pengguna. Program Anda tidak memiliki token. Jejak kepercayaan minimal.
+
+### Pola 2: Escrow
+
+Program Anda memiliki PDA yang memegang input mint pengguna. Saat terpicu, PDA menandatangani CPI ke Raydium untuk menukar saldo miliknya sendiri.
+
+```
+           deposit                   trigger
+   user ───────────▶  PDA vault  ───────────────▶  Raydium swap
+                     (your prog)                    (signed by PDA)
+                                                            │
+                                                            ▼
+                                                    PDA vault (output mint)
+                                                            │
+                                                     withdraw ▼
+                                                         user
+```
+
+Detail kritis: PDA menandatangani melalui `CpiContext::new_with_signer`. Lihat [Signer seeds](#pda-signer-seeds).
+
+### Pola 3: Multi-hop komposisi
+
+Program Anda mengeluarkan beberapa CPI dalam satu instruksi, menegakkan batas slippage tunggal di semua. Instruksi swap Raydium masing-masing memiliki `minimum_amount_out` mereka sendiri, tetapi Anda menetapkannya ke 0 (atau floor yang sangat longgar) dan menegakkan minimum final yang ketat sendiri setelah hop terakhir.
+
+```
+instruction:
+  CPI swap: tokenA → tokenB   (raydium, loose min)
+  CPI swap: tokenB → tokenC   (raydium / third-party, loose min)
+  CPI swap: tokenC → tokenD   (raydium, loose min)
+  require(user.tokenD_ata.amount - pre_balance >= user_min_out)
+```
+
+Ini memberi Anda gerbang reverting tunggal untuk seluruh rute. Hanya gunakan pola ini ketika Anda mempercayai setiap hop untuk aman dari slippage; jika tidak, biarkan setiap hop menegakkan min-nya sendiri.
+
+### Pola 4: Vault / strategi
+
+Program Anda memegang LP token atau farm stake di PDA. Keeper (atau pengguna) memanggil `compound()`, yang:
+
+1. Memanen reward dari farm.
+2. Menukar reward untuk pool token (CPI ke CPMM atau CLMM).
+3. Menyetor hasil kembali ke LP (CPI lain).
+4. Stake LP baru (CPI lain).
+
+Semuanya dalam satu transaksi sehingga NAV vault bergerak secara atomik. Budget compute biasanya 600k–1M CU; address lookup table wajib.
+
+## Konstruksi daftar akun
+
+Struct `Accounts` program pemanggil mencerminkan urutan akun program Raydium, tetapi sebagian besar akun sisi Raydium adalah `UncheckedAccount` karena Raydium memvalidasinya sendiri. Anda hanya menambahkan constraint pada akun yang *Anda* miliki:
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_spl::token::{Token, TokenAccount};
+
+#[derive(Accounts)]
+pub struct EscrowSwap<'info> {
+    /// PDA escrow; memegang input mint dan menandatangani CPI.
+    #[account(
+        mut,
+        seeds = [b"escrow", user.key().as_ref()],
+        bump = escrow.bump,
+    )]
+    pub escrow: Account<'info, Escrow>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    // ----- Akun sisi Raydium, sebagian besar tidak dicentang -----
+
+    /// CHECK: divalidasi oleh CPMM
+    #[account(mut)] pub pool_state: UncheckedAccount<'info>,
+    /// CHECK: divalidasi oleh CPMM
+    pub amm_config: UncheckedAccount<'info>,
+    /// CHECK: divalidasi oleh CPMM
+    pub pool_authority: UncheckedAccount<'info>,
+    #[account(mut)] pub input_vault:  Account<'info, TokenAccount>,
+    #[account(mut)] pub output_vault: Account<'info, TokenAccount>,
+    /// CHECK: divalidasi oleh CPMM
+    #[account(mut)] pub observation_state: UncheckedAccount<'info>,
+
+    /// Input ATA escrow — dimiliki oleh PDA escrow.
+    #[account(
+        mut,
+        associated_token::mint = input_mint,
+        associated_token::authority = escrow,
+    )]
+    pub escrow_input_ata: Account<'info, TokenAccount>,
+
+    /// Output ATA escrow.
+    #[account(
+        mut,
+        associated_token::mint = output_mint,
+        associated_token::authority = escrow,
+    )]
+    pub escrow_output_ata: Account<'info, TokenAccount>,
+
+    pub input_mint:  Account<'info, anchor_spl::token::Mint>,
+    pub output_mint: Account<'info, anchor_spl::token::Mint>,
+
+    pub cpmm_program:       Program<'info, raydium_cp_swap::program::RaydiumCpSwap>,
+    pub token_program:      Program<'info, Token>,
+    pub token_program_2022: Program<'info, anchor_spl::token_2022::Token2022>,
+}
+```
+
+Asimetri — validasi ketat pada akun Anda, `UncheckedAccount` pada akun Raydium — bukan kemalasan. Penerima memvalidasi miliknya sendiri; double-validating di pemanggil hanya membakar CU dan berisiko keluar dari sinkronisasi ketika Raydium mengirim field layout struct baru.
+
+## Panggilan CPI itu sendiri
+
+```rust
+use raydium_cp_swap::cpi::{self, accounts::Swap as CpmmSwap};
+
+pub fn escrow_swap(
+    ctx: Context<EscrowSwap>,
+    amount_in: u64,
+    minimum_amount_out: u64,
+) -> Result<()> {
+    let user_key = ctx.accounts.user.key();
+    let bump     = ctx.accounts.escrow.bump;
+    let seeds: &[&[u8]] = &[b"escrow", user_key.as_ref(), &[bump]];
+    let signer: &[&[&[u8]]] = &[seeds];
+
+    let cpi_accounts = CpmmSwap {
+        // `payer` adalah akun yang tanda tangannya harus mencakup input ATA. ATA itu
+        // dimiliki oleh PDA escrow, jadi escrow — menandatangani melalui new_with_signer di bawah —
+        // masuk di sini, BUKAN `user`.
+        payer:                ctx.accounts.escrow.to_account_info(),
+        // `authority` adalah PDA vault CPMM sendiri di [b"vault_and_lp_mint_auth_seed"];
+        // CPMM menandatangani leg vault dengan itu sendiri. Melewatkan escrow Anda di sini gagal
+        // constraint seeds sebelum transfer apa pun berjalan.
+        authority:            ctx.accounts.pool_authority.to_account_info(),
+        amm_config:           ctx.accounts.amm_config.to_account_info(),
+        pool_state:           ctx.accounts.pool_state.to_account_info(),
+        input_token_account:  ctx.accounts.escrow_input_ata.to_account_info(),
+        output_token_account: ctx.accounts.escrow_output_ata.to_account_info(),
+        input_vault:          ctx.accounts.input_vault.to_account_info(),
+        output_vault:         ctx.accounts.output_vault.to_account_info(),
+        input_token_program:  ctx.accounts.token_program.to_account_info(),
+        output_token_program: ctx.accounts.token_program.to_account_info(),
+        input_token_mint:     ctx.accounts.input_mint.to_account_info(),
+        output_token_mint:    ctx.accounts.output_mint.to_account_info(),
+        observation_state:    ctx.accounts.observation_state.to_account_info(),
+    };
+
+    // Anchor 1.0 mengambil Pubkey program di sini, bukan AccountInfo-nya.
+    let cpi_ctx = CpiContext::new_with_signer(
+        *ctx.accounts.cpmm_program.key,
+        cpi_accounts,
+        signer,
+    );
+
+    cpi::swap_base_input(cpi_ctx, amount_in, minimum_amount_out)?;
+    Ok(())
+}
+```
+
+### PDA signer seeds
+
+CPI berhasil hanya jika PDA yang dilewatkan sebagai `authority` cocok dengan derivasi yang diklaim pemanggil. Keduanya harus setuju tentang:
+
+1. Urutan byte seed (di sini `[b"escrow", user.key().as_ref()]`).
+2. Bump.
+3. ID program pemanggil (program Anda, bukan Raydium).
+
+Perhatikan apa yang harus cocok dengan PDA. Slot `authority` CPMM adalah **PDA vault miliknya sendiri** — akun tetap yang luas program yang diturunkan dan ditandatangani dengan sendirinya, dan yang program Anda tidak kontrol atau substitusi. Akun yang seed PDA Anda harus selaras adalah **`payer`**: pemeriksaan terjadi di dalam helper `transfer_from_user_to_pool_vault` CPMM sendiri, yang memerlukan akun yang dilewatkan sebagai `payer` menjadi pemilik `input_token_account`.
+
+Bug umum: melewatkan `user` sebagai `payer` sementara `escrow_input_ata` dimiliki oleh PDA escrow. Program SPL Token menolak dengan `owner mismatch`. Selalu buat `payer` menjadi pemilik ATA — dan tandatangani untuk itu dengan `new_with_signer` ketika pemilik itu adalah PDA.
+
+## Remaining accounts
+
+Beberapa instruksi Raydium mengambil daftar akun dengan panjang variabel yang ditambahkan setelah yang tetap — **remaining accounts**.
+
+- **CLMM `SwapV2`**: 1–8 akun `TickArrayState` untuk tick array yang mungkin dilalui swap, dalam arah swap.
+- **Farm v6 `Deposit` / `Harvest` / `Withdraw`**: pasangan `(reward_vault, user_reward_ata)`, satu pasangan per slot reward aktif.
+- **Token-2022 transfer-hook mint**: program transfer-hook plus akun apa pun yang dibutuhkan hook.
+
+Helper CPI Anchor tidak type-check remaining accounts. Lewatkan melalui:
+
+```rust
+let cpi_ctx = CpiContext::new_with_signer(program_id, accounts, signer)
+    .with_remaining_accounts(ctx.remaining_accounts.to_vec());
+```
+
+**Urutan penting.** Untuk CLMM:
+
+```
+remaining = [
+    tick_array_in_direction_0,    // yang pertama dilintasi
+    tick_array_in_direction_1,
+    ...,
+]
+```
+
+Untuk farm v6 harvest:
+
+```
+remaining = [
+    reward_vault_0, user_reward_ata_0,
+    reward_vault_1, user_reward_ata_1,
+    // abaikan slot apa pun yang reward_state-nya Uninitialized
+]
+```
+
+Program pemanggil Anda harus melewatkan remaining accounts yang diterima dari klien tanpa perubahan. Jangan coba filter atau urutkan ulang.
+
+## Compute budget untuk panggilan komposisi
+
+CPI biaya ~1.500 CU untuk frame panggilan itu sendiri; penggunaan CU callee sendiri menumpuk di atas.
+
+Angka callee di bawah diukur dari transaksi mainnet aktif pada pool volume tinggi pada **2026-09-09**, dibaca dari baris log `Program <id> consumed N of M compute units` untuk invokasi program Raydium sendiri (jadi mencakup CPI token-program inner-nya):
+
+| Instruksi Callee | CU Terukur | Sampel |
+|------|----|----|
+| CPMM `swap_base_input` | ~23.000 | 22.721–23.052 (n=8) |
+| AMM v4 swap | ~26.000 | 25.215–26.002 |
+| CLMM `swap` (V1) | ~41.000 | 37.148–44.721 |
+| CLMM `swap_v2` | ~48.000 | 43.838–52.887 (n=6) |
+| CLMM `increase_liquidity_v2` | ~36.000 | 36.058 |
+
+Tambahkan ~1.500 untuk setiap frame CPI dan overhead program Anda sendiri di atas. Biaya swap CLMM berskala dengan tick crossing, jadi perlakukan angka itu sebagai floor. Token-2022 mint menambahkan biaya penanganan ekstensi dari transfer itu sendiri; ukur untuk mint Anda sendiri daripada menerapkan multiplier flat.
+
+<Warning>
+  Revisi sebelumnya dari halaman ini membawa perkiraan 5–7× lebih tinggi (swap CPMM ~150.000 CU, ~180.000
+  untuk CLMM). Itu tidak pernah diukur. Budget dari pembacaan `computeUnitsConsumed` Anda sendiri, bukan
+  dari angka terdokumentasi — dan perhatikan bahwa transaksi penuh biaya lebih dari instruksi Raydium saja
+  setelah pembuatan ATA, pembungkus wSOL dan instruksi compute-budget dihitung.
+</Warning>
+
+Selalu atur `ComputeBudgetProgram::set_compute_unit_limit` eksplisit:
+
+```ts
+import { ComputeBudgetProgram } from "@solana/web3.js";
+
+const tx = new Transaction().add(
+  ComputeBudgetProgram.setComputeUnitLimit({ units: 900_000 }),
+  ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFeeMicroLamports }),
+  yourInstruction,
+);
+```
+
+Ceiling default 200k CU akan diam-diam habis jauh sebelum panggilan komposisi selesai.
+
+## Propagasi error
+
+Program Raydium mengembalikan error Anchor dengan kode stabil. Program pemanggil Anda melihatnya sebagai `Err(ProgramError::Custom(code))`. Bubble through secara default:
+
+```rust
+cpi::swap_base_input(cpi_ctx, amount_in, minimum_amount_out)?;
+```
+
+Atau intercept untuk kode spesifik:
+
+```rust
+use anchor_lang::error::{Error, ERROR_CODE_OFFSET};
+use raydium_cp_swap::error::ErrorCode as CpmmErr;
+
+match cpi::swap_base_input(cpi_ctx, amount_in, minimum_amount_out) {
+    Ok(_) => {}
+    Err(Error::ProgramError(pe))
+        if pe.program_error
+            == ProgramError::Custom(CpmmErr::ExceededSlippage as u32 + ERROR_CODE_OFFSET) =>
+    {
+        // Program Anda mungkin ingin mencoba ulang pada slippage lebih besar, atau membatalkan state.
+        return err!(YourErr::PoolTooVolatile);
+    }
+    Err(err) => return Err(err),
+}
+```
+
+Perhatikan istilah `ERROR_CODE_OFFSET`: varian `#[error_code]` dipancarkan mulai dari 6000, jadi membandingkan dengan discriminant enum telanjang tidak pernah cocok. (Tidak ada helper `is_err` di `anchor-lang` atau di `raydium_cp_swap` — revisi sebelumnya dari halaman ini menggunakan yang tidak ada.)
+
+Pemetaan kode error ke makna stabil per kebijakan IDL ([`sdk-api/anchor-idl`](/docs/i18n/id/sdk-api/anchor-idl)); kode baru menambahkan di akhir, kode yang ada tidak pernah mengubah makna.
+
+## Contoh lengkap yang dikerjakan: escrow limit-order
+
+Alur:
+
+1. **`open_order`** — pengguna menyetor `amount_in` dari `input_mint` ke PDA escrow; catat target `min_amount_out` dan expiry.
+2. **`execute_order`** — siapa pun (keeper) memanggil dengan akun pool saat ini. Program memeriksa quote saat ini ≥ `min_amount_out`, lalu CPI swap Raydium dan menyimpan output di escrow.
+3. **`claim`** — pengguna menarik output mint dari escrow.
+
+```rust
+#[account]
+pub struct LimitOrder {
+    pub user:          Pubkey,
+    pub input_mint:    Pubkey,
+    pub output_mint:   Pubkey,
+    pub amount_in:     u64,
+    pub min_out:       u64,
+    pub expiry_unix:   i64,
+    pub state:         u8,    // 0 open, 1 filled, 2 cancelled, 3 expired
+    pub bump:          u8,
+}
+
+#[program]
+pub mod limit_orders {
+    use super::*;
+
+    pub fn execute_order(
+        ctx: Context<ExecuteOrder>,
+    ) -> Result<()> {
+        let order = &ctx.accounts.order;
+        require!(order.state == 0, OrderErr::NotOpen);
+        require!(Clock::get()?.unix_timestamp < order.expiry_unix, OrderErr::Expired);
+
+        let user_key = order.user;
+        let seeds: &[&[u8]] = &[b"order", user_key.as_ref(), &[order.bump]];
+        let signer: &[&[&[u8]]] = &[seeds];
+
+        let pre_out_balance = ctx.accounts.escrow_output_ata.amount;
+
+        let cpi_accounts = CpmmSwap {
+            // Input ATA escrow dimiliki oleh PDA `order`, jadi `order` harus
+            // `payer` — itu menandatangani melalui new_with_signer di bawah. Keeper hanya membayar
+            // biaya transaksi; itu bukan pemilik ATA.
+            payer:                ctx.accounts.order.to_account_info(),
+            // PDA vault CPMM sendiri di [b"vault_and_lp_mint_auth_seed"].
+            authority:            ctx.accounts.pool_authority.to_account_info(),
+            amm_config:           ctx.accounts.amm_config.to_account_info(),
+            pool_state:           ctx.accounts.pool_state.to_account_info(),
+            input_token_account:  ctx.accounts.escrow_input_ata.to_account_info(),
+            output_token_account: ctx.accounts.escrow_output_ata.to_account_info(),
+            input_vault:          ctx.accounts.input_vault.to_account_info(),
+            output_vault:         ctx.accounts.output_vault.to_account_info(),
+            input_token_program:  ctx.accounts.token_program.to_account_info(),
+            output_token_program: ctx.accounts.token_program.to_account_info(),
+            input_token_mint:     ctx.accounts.input_mint.to_account_info(),
+            output_token_mint:    ctx.accounts.output_mint.to_account_info(),
+            observation_state:    ctx.accounts.observation_state.to_account_info(),
+        };
+
+        let cpi_ctx = CpiContext::new_with_signer(
+            *ctx.accounts.cpmm_program.key,
+            cpi_accounts,
+            signer,
+        );
+
+        // Biarkan escrow menegakkan minimum — kami mempercayai slippage Raydium, tetapi kami
+        // juga memeriksa ulang delta post-swap kami sendiri untuk berjaga-jaga perubahan masa depan
+        // pernah melonggarkannya.
+        cpi::swap_base_input(cpi_ctx, order.amount_in, order.min_out)?;
+
+        ctx.accounts.escrow_output_ata.reload()?;
+        let delta = ctx.accounts.escrow_output_ata.amount
+            .checked_sub(pre_out_balance)
+            .ok_or(error!(OrderErr::AccountingError))?;
+        require!(delta >= order.min_out, OrderErr::InsufficientOutput);
+
+        let order = &mut ctx.accounts.order;
+        order.state = 1;
+        Ok(())
+    }
+}
+```
+
+Keeper membayar biaya transaksi (mereka mendapat keeper fee di tempat lain — tidak ditampilkan). PDA `order` menandatangani CPI sebagai `payer`, karena itu memiliki input ATA escrow; `ExecuteOrder` oleh karena itu juga memerlukan field `pool_authority: UncheckedAccount<'info>` untuk PDA vault CPMM sendiri. Baik pemeriksaan slippage sisi Raydium *dan* pemeriksaan delta escrow sendiri menegakkan floor — belt dan braces.
+
+## Pengujian
+
+Menarik program Raydium ke validator lokal untuk tes integrasi (dari `Anchor.toml`):
+
+```toml
+[test.validator]
+clone = [
+  { address = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C" }, # CPMM
+  { address = "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK" }, # CLMM
+  { address = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8" }, # AMM v4
+  { address = "FarmqiPv5eAj3j1GMdMCMUGXqPUvmquZtMy86QH6rzhG" }, # Farm v6
+]
+```
+
+Clone akun state pool juga sehingga tes Anda benar-benar dapat menjalankan swap; `anchor test` mengambilnya dari mainnet saat startup. Lihat [`sdk-api/rust-cpi`](/docs/i18n/id/sdk-api/rust-cpi#testing-a-cpi-flow).
+
+## Jebakan spesifik untuk komposisi
+
+### Reentrancy
+
+Solana tidak memiliki reentrancy sejati — CPI tidak dapat memanggil kembali ke program asal dalam invokasi yang sama. Tetapi Anda masih dapat membangun diri sendiri ke dalam reentrancy logis: CPI yang membaca state Anda, lalu kode Anda membacanya lagi dengan asumsi CPI tidak mengubahnya. Untuk Raydium, CPI tidak menyentuh state Anda, jadi ini kurang menjadi perhatian daripada misalnya konteks flash-loan. Tetapi jika Anda menggabungkan Raydium dengan protokol pinjaman, waspadai.
+
+### Account mutability drift
+
+Jika program Anda melewatkan akun sebagai `mut` tetapi Raydium mengharapkannya read-only (atau sebaliknya), runtime menolak invokasi dengan `InvalidAccountData`. Selalu periksa mutability yang diharapkan instruksi Raydium di IDL; `raydium_cp_swap::cpi::accounts::Swap` menetapkan mutability setiap akun untuk Anda, dari marker `#[account(mut)]` pada struct `Swap` CPMM sendiri — field yang diturunkan semuanya `AccountInfo<'info>` biasa, jadi impl `ToAccountMetas` yang diturunkan, bukan tipe field, yang membawa flag.
+
+### Token-2022 program field
+
+Input dan output mint mungkin berada di bawah program token yang berbeda — satu SPL Token, satu Token-2022. CPI memiliki field `input_token_program` dan `output_token_program` terpisah untuk alasan ini. Selalu periksa field `owner` setiap mint dan rutekan program yang benar ke setiap slot.
+
+### Versioned transactions
+
+Tx komposisi yang melakukan 2+ CPI Raydium plus pembuatan ATA jarang cocok dalam transaksi legacy (v0-without-LUT). Gunakan V0 dengan address lookup table; tarik LUT publik Raydium melalui `raydium.getRaydiumLutAddresses()`.
+
+## Penunjuk
+
+- [`sdk-api/rust-cpi`](/docs/i18n/id/sdk-api/rust-cpi) — mekanik CPI tingkat rendah.
+- [`integration-guides/priority-fee-tuning`](/docs/i18n/id/integration-guides/priority-fee-tuning) — sizing compute budget.
+- [`products/cpmm/code-demos`](/docs/i18n/id/products/cpmm/code-demos), [`products/clmm/code-demos`](/docs/i18n/id/products/clmm/code-demos), [`products/farm-staking/code-demos`](/docs/i18n/id/products/farm-staking/code-demos) — snippet CPI per-produk.
+
+Sumber:
+
+- [raydium-cp-swap CPI crate](https://github.com/raydium-io/raydium-cp-swap)
+- [raydium-clmm CPI crate](https://github.com/raydium-io/raydium-clmm)
+- [Anchor CPI docs](https://www.anchor-lang.com/docs/basics/cpi)

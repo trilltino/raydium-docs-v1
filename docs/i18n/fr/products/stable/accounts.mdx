@@ -1,0 +1,224 @@
+---
+title: "Comptes Stable AMM"
+description: "AmmInfo, ModelDataInfo, DataElement, Fees et disposition des vaults. L'inventaire complet des comptes d'un pool Stable AMM (un programme Raydium autonome et pur AMM)."
+---
+
+<Info>
+  **Cette page est traduite automatiquement par IA. La version anglaise fait foi.**
+
+  [Voir la version anglaise →](/docs/en/products/stable/accounts)
+</Info>
+
+<Info>
+  Stable AMM est son propre programme ; sa structure de comptes côté pool ressemble à AMM v4 (AmmInfo, vaults, autorité), et elle dispose en outre d'un compte `ModelDataInfo` qui stocke la table de consultation. Cette page couvre les deux.
+</Info>
+
+## Inventaire
+
+<Note>
+  **AMM pur.** Stable AMM détient toute la liquidité dans ses propres vaults et ne dépend pas d'OpenBook. Il a porté un chemin de tenue de marché OpenBook au début de sa vie, mais ce chemin est dormant depuis des années, et la [mise à jour du 2026-06-22](/docs/i18n/fr/reference/changelog) a supprimé le code restant. Les comptes de marché `serum_*` et `amm_open_orders` ci-dessous sont donc **hérités** : ils peuvent encore apparaître dans les anciennes transactions de disposition pour la compatibilité rétroactive, mais le programme ne les valide ni ne les lit, et les nouvelles instructions les omettent entièrement.
+</Note>
+
+L'inventaire actif est maintenant entièrement côté pool :
+
+| Catégorie | Compte | Propriétaire | Rôle |
+|----------|---------|-------|------|
+| Pool | `AmmInfo` | Programme Stable | État du pool, références aux vaults et au compte de données du modèle. |
+| Pool | `amm_authority` | Programme Stable | PDA détenu par le programme qui signe les mouvements de vault. Partagé entre tous les pools Stable AMM. |
+| Pool | `amm_target_orders` | Programme Stable | Compte de grille côté pool (conservé dans les dispositions ; ne pilote plus les ordres OpenBook). |
+| Pool | `pool_coin_token_account` | SPL Token | Vault côté coin du pool. |
+| Pool | `pool_pc_token_account` | SPL Token | Vault côté pc du pool. |
+| Pool | `lp_mint` | SPL Token | Mint LP fongible. |
+| Modèle | **`model_data_account`** | Programme Stable | **La table de consultation : 50 000 × DataElement.** |
+| Hérité | `amm_open_orders` | OpenBook | L'ancien compte `OpenOrders` OpenBook du pool. **Inutilisé.** |
+| Hérité | `serum_market` | OpenBook | Marché OpenBook. **Inutilisé.** |
+| Hérité | `serum_bids`, `serum_asks` | OpenBook | Files d'attente des offres/demandes. **Inutilisées.** |
+| Hérité | `serum_event_queue` | OpenBook | File d'attente des événements. **Inutilisée.** |
+| Hérité | `serum_coin_vault`, `serum_pc_vault` | SPL Token | Vaults au niveau du marché OpenBook. **Inutilisés.** |
+| Hérité | `serum_vault_signer` | OpenBook | Signataire de vault au niveau du marché. **Inutilisé.** |
+
+## `AmmInfo`
+
+Compte d'état racine. La disposition est presque identique à AMM v4 — paramètres du pool, décimales, frais, références aux vaults/mints — avec un ajout : un champ `model_data_key` pointant vers la table de consultation.
+
+```rust
+// raydium-stable/program/src/state.rs (abridged)
+pub struct AmmInfo {
+    pub account_type: u64,              // = 0 (AmmAccount)
+    pub status: u64,                    // bitmask: swap/deposit/withdraw/crank enabled
+    pub nonce: u64,                     // bump for amm_authority
+    pub order_num: u64,
+    pub depth: u64,
+    pub coin_decimals: u64,
+    pub pc_decimals: u64,
+    pub state: u64,                     // state machine (IdleState, etc.)
+    pub reset_flag: u64,
+    pub min_size: u64,
+    pub vol_max_cut_ratio: u64,
+    pub amount_wave: u64,
+    pub coin_lot_size: u64,             // mirrors OpenBook
+    pub pc_lot_size: u64,
+    pub min_price_multiplier: u64,
+    pub max_price_multiplier: u64,
+    pub sys_decimal_value: u64,
+    pub abort_trade_factor: u64,
+    pub price_tick_multiplier: u64,
+    pub price_tick: u64,
+    
+    pub fees: Fees,                     // see below
+    pub out_put: OutPutData,            // PnL, swaps, punish amounts
+    
+    pub coin_vault: Pubkey,
+    pub pc_vault: Pubkey,
+    pub coin_mint: Pubkey,
+    pub pc_mint: Pubkey,
+    pub lp_mint: Pubkey,
+    pub model_data_key: Pubkey,         // ← THE LOOKUP TABLE
+    pub open_orders: Pubkey,            // legacy: OpenBook OpenOrders (unused post-decoupling)
+    pub serum_market: Pubkey,           // legacy: unused post-decoupling
+    pub serum_program: Pubkey,          // legacy: unused post-decoupling
+    pub target_orders: Pubkey,
+    pub amm_admin: Pubkey,              // admin key
+    pub client_order_id: u64,
+    pub lp_amount: u64,                 // LP supply
+    pub lp_net: u64,                    // LP value metric
+    pub padding: [u64; 61],
+}
+
+pub struct Fees {
+    pub min_separate_numerator: u64,
+    pub min_separate_denominator: u64,
+    pub trade_fee_numerator: u64,       // 0 (legacy OpenBook field, unused)
+    pub trade_fee_denominator: u64,     // 10_000
+    pub pnl_numerator: u64,             // 12
+    pub pnl_denominator: u64,           // 100 → 12% of fee = 0.0024% of volume
+    pub swap_fee_numerator: u64,        // 2
+    pub swap_fee_denominator: u64,      // 10_000 → 0.02%
+}
+
+pub struct OutPutData {
+    pub need_take_pnl_coin: u64,        // accrued protocol fee (coin)
+    pub need_take_pnl_pc: u64,          // accrued protocol fee (pc)
+    pub total_pnl_pc: u64,
+    pub total_pnl_coin: u64,
+    pub pool_open_time: u64,
+    pub punish_pc_amount: u64,
+    pub punish_coin_amount: u64,
+    pub orderbook_to_init_time: u64,
+    pub swap_coin_in_amount: u128,
+    pub swap_pc_out_amount: u128,
+    pub swap_pc_in_amount: u128,
+    pub swap_coin_out_amount: u128,
+    pub swap_pc_fee: u64,
+    pub swap_coin_fee: u64,
+}
+```
+
+Champs clés pour les intégrateurs :
+
+- **`model_data_key`** — l'adresse de la table de consultation. Doit être passée à chaque instruction.
+- **`fees`** — *structure* identique à AMM v4, *valeurs* différentes : `swap_fee = 2 / 10_000` (0,02 %), `pnl = 12 / 100`, `trade_fee = 0`. Voir [`products/stable/fees`](/docs/i18n/fr/products/stable/fees).
+- **`coin_vault`**, **`pc_vault`** — les vaults du pool.
+- **`status`** — bitmask contrôlant swap/deposit/withdraw/crank.
+- **`out_put.need_take_pnl_*`** — balayés par `WithdrawPnl`.
+
+## `ModelDataInfo`
+
+La table de consultation. Un grand tableau creux de points prix/quantité.
+
+```rust
+// raydium-stable/program/src/state.rs
+pub const ELEMENT_SIZE: usize = 50000;
+
+pub struct DataElement {
+    pub x: u64,         // table X (e.g., coin amount)
+    pub y: u64,         // table Y (e.g., pc amount)
+    pub price: u64,     // price at (x, y)
+}
+
+pub struct ModelDataInfo {
+    pub account_type: u64,              // = 2 (ModleDataAccount)
+    pub status: u64,                    // Initialized or Uninitialized
+    pub multiplier: u64,                // scale factor for x, y (e.g., 10^6)
+    pub valid_data_count: u64,          // how many elements are populated
+    pub elements: [DataElement; 50000], // the table itself
+}
+```
+
+**Cycle de vie :**
+
+Les instructions de configuration qui ont construit ces tables — `InitModelData` (créé le compte) et `UpdateModelData` (éléments peuplés, définition de `valid_data_count`) — ont été **supprimées dans la mise à jour du 2026-06-22**. Les tables sur les pools existants sont maintenant **fixes**. À l'exécution, les instructions appelables restantes les consomment toujours :
+
+- **Swap / deposit / withdraw** appellent des fonctions de consultation qui font une recherche binaire et interpolent dans `elements[0..valid_data_count]`.
+
+## `DataElement`
+
+L'entrée atomique dans la table. Doit être triée (x croissant, y décroissant, prix croissant) pour que la recherche binaire fonctionne.
+
+```rust
+pub struct DataElement {
+    pub x: u64,         // X coordinate (e.g., token_a balance, scaled by multiplier)
+    pub y: u64,         // Y coordinate (e.g., token_b balance, scaled by multiplier)
+    pub price: u64,     // price (x/y in scaled form, scaled by multiplier)
+}
+```
+
+Lors du remplissage de la table, l'administrateur spécifie ces pré-mises à l'échelle. Le programme ne valide pas l'ordre de tri en chaîne (pour la vitesse), donc un tri incorrect provoque des devis incorrects.
+
+## Autorité et vaults
+
+Identique à AMM v4 :
+
+- **`amm_authority`** est un PDA unique au niveau du programme dérivé avec la graine `["amm authority"]`. Il possède tous les vaults du pool et signe leurs mouvements.
+- **Les vaults** sont des comptes SPL Token dont le propriétaire est `amm_authority`, pas des ATA.
+
+Token-2022 n'est **pas** supporté.
+
+## Bitmask de statut
+
+Identique à AMM v4. Contrôle si swap/deposit/withdraw/crank sont activés.
+
+## Suivi des frais et du PnL
+
+La structure `out_put` suit :
+
+- **`need_take_pnl_coin`**, **`need_take_pnl_pc`** — frais de protocole accumulés mais pas encore balayés. `WithdrawPnl` les déplace.
+- **`swap_coin_in_amount`**, `swap_pc_in_amount`, etc. — compteurs d'analyse.
+
+**Calcul des actifs du pool (post-découplage).** Parce qu'aucun fonds n'est plus séquestré en tant que commandes ouvertes OpenBook, les actifs totaux du pool sont maintenant calculés entièrement à partir des vaults :
+
+```
+Ancien : actifs totaux = soldes des vaults + fonds des ordres ouverts (native_coin_total / native_pc_total) − PnL en attente (need_take_pnl)
+Nouveau : actifs totaux = soldes des vaults − PnL en attente (need_take_pnl)
+```
+
+Les indexeurs et le code de cotation qui ont reconstruit la valeur du pool à partir des soldes OpenOrders doivent supprimer ce terme.
+
+## Taille du compte
+
+Le **`ModelDataInfo` est volumineux** (~1,2 Mo, puisque 50 000 éléments × 24 octets par élément). C'est pourquoi la création d'un pool Stable nécessite une pré-allocation explicite de loyer et de compte. Le SDK Raydium et les outils gèrent cela de manière transparente ; les intégrateurs ont rarement besoin d'allouer manuellement.
+
+## Dérivation des comptes à partir de zéro
+
+Comme AMM v4, Stable AMM utilise des **clés avec graine** (pas des PDA purs). L'identité canonique du pool est dérivée via :
+
+```
+ammId = createWithSeed(
+  owner: ammAuthority,
+  seed: marketPubkey.toBase58().slice(0, 32),
+  programId: STABLE_PROGRAM_ID,
+)
+```
+
+De même pour les vaults, le mint LP, les ordres cibles, etc. En pratique, utilisez le SDK ou l'API pour récupérer les adresses pré-calculées.
+
+## Où lire quoi
+
+- **Listes de comptes d'instruction** : [`products/stable/instructions`](/docs/i18n/fr/products/stable/instructions).
+- **Comment l'interpolation utilise la table** : [`products/stable/math`](/docs/i18n/fr/products/stable/math).
+- **Structure des frais et WithdrawPnl** : [`products/stable/fees`](/docs/i18n/fr/products/stable/fees).
+- **Le découplage OpenBook du 2026-06-22** : [`reference/changelog`](/docs/i18n/fr/reference/changelog).
+
+Sources :
+
+- [`reference/program-addresses`](/docs/i18n/fr/reference/program-addresses)

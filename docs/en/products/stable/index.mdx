@@ -1,0 +1,60 @@
+---
+title: "Stable AMM"
+description: "Standalone Raydium program with interpolated price curves from lookup tables. Powers liquidity for stablecoin pairs and other assets with known price relationships."
+---
+
+## What it is
+
+Stable AMM is a **standalone Raydium program** (its own deployment — not a mode of the AMM v4 program) designed for pairs with known, well-behaved price relationships — primarily stablecoin–stablecoin pairs (USDC-USDT, USDH-USDC) and collateralized-token pairs. Instead of a constant-product curve, it uses a **lookup table of (x, y, price) tuples** baked into each pool's `ModelDataInfo` account. Price discovery happens through interpolation within the table, producing lower slippage for small swaps.
+
+It is a **pure AMM**: all liquidity sits in the pool's own vaults. An early-life OpenBook market-making path has been dormant for years, and the [2026-06-22 upgrade](/docs/en/reference/changelog) removed the leftover market code. It shares the same `Fees` structure and fee model as AMM v4; the difference is purely the **pricing curve** — instead of x·y=k, you interpolate a pre-populated model.
+
+**Program ID:** see [reference/program-addresses](/docs/en/reference/program-addresses).
+
+**Token-2022:** not supported. Classic SPL tokens only.
+
+**Liquidity:** thin. Most user-facing integrations reach Stable pools through the [AMM Routing program](/docs/en/products/routing) for best-price routing across all Raydium AMMs. The SDK also supports Stable pools directly: pools surface as `version: 5` (`pooltype: "StablePool"`) on `ApiV3PoolInfoStandardItem`, and the standard `LiquidityModule` (`addLiquidity` / `removeLiquidity` / swap) auto-detects v5 and emits the right instructions — see [Code demos](/docs/en/products/stable/code-demos).
+
+## Chapter contents
+
+<CardGroup cols={2}>
+  <Card title="Overview" icon="circle-info" href="/docs/en/products/stable/overview">
+    Why a separate program, the lookup-table model, comparison to AMM v4 and CPMM.
+  </Card>
+  <Card title="Accounts" icon="database" href="/docs/en/products/stable/accounts">
+    AmmInfo, ModelDataInfo, DataElement fields, vault layout, fee structure.
+  </Card>
+  <Card title="Math" icon="function" href="/docs/en/products/stable/math">
+    How interpolation produces prices, pool-asset accounting, fee application identical to AMM v4.
+  </Card>
+  <Card title="Instructions" icon="terminal" href="/docs/en/products/stable/instructions">
+    The callable set — Deposit, Withdraw, SwapBaseIn, SwapBaseOut, WithdrawPnl — and the instructions removed in the 2026-06-22 upgrade.
+  </Card>
+  <Card title="Fees" icon="percent" href="/docs/en/products/stable/fees">
+    0.02% gross trade fee, split 0.0176% LP / 0.0024% protocol. No fund fee, no creator fee.
+  </Card>
+  <Card title="Code demos" icon="code" href="/docs/en/products/stable/code-demos">
+    Detect a Stable pool, swap / add / remove liquidity through the SDK's `LiquidityModule` (handles v5 natively), and use the off-chain stable-curve helpers.
+  </Card>
+</CardGroup>
+
+## When to read this
+
+- You are integrating a stablecoin or asset pair and find a Stable AMM pool with the best price.
+- You are building a routing engine and need to support Stable pools as a liquidity source.
+- You are maintaining liquidity in an existing Stable pool — learning the deposit / withdraw flow.
+- You are curious how AMM pricing can be made programmable via a lookup table.
+
+## Key facts
+
+| Aspect | Value |
+|--------|-------|
+| **Mainnet program ID** | `5quBtoiQqxF9Jv6KYKctB59NT3gtJD2Y65kdnB1Uev3h` |
+| **Devnet program ID** | `DRayDdXc1NZQ9C3hRWmoSf8zK4iapgMnjdNZWrfwsP8m` |
+| **Curve model** | Interpolated lookup table (not x·y=k) |
+| **OpenBook dependency** | None (market path long dormant; dead code removed 2026-06-22) |
+| **Trade fee** | 0.02% (not AMM v4's 0.25%) |
+| **LP share of fee** | 0.0176% (88% of the fee) |
+| **Protocol share of fee** | 0.0024% (12% of the fee) |
+| **Creator fee** | None |
+| **Fund fee** | None |

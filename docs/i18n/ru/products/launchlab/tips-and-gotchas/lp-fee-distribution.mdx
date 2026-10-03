@@ -1,0 +1,79 @@
+---
+title: "Распределение LP комиссий"
+description: "Как LaunchLab объединяет масштабы платформы и создателя в принадлежащий платформе заблокированный LP и сжигает оставшиеся токены CPMM LP."
+---
+
+<Info>
+  **Эта страница переведена с помощью ИИ. За эталон принимается английская версия.**
+
+  [Открыть английскую версию →](/docs/en/products/launchlab/tips-and-gotchas/lp-fee-distribution)
+</Info>
+
+Когда токен LaunchLab мигрирует на CPMM, пул выпускает токены LP. До обновления от 2026-08-17 `creatorScale` блокировался отдельно для создателя токена. Для миграций, выполненных после обновления, `migrateCpLockNftScale` по-прежнему хранит три поля, которые в сумме дают `1_000_000`, но во время выполнения создаются только два назначения.
+
+## Эффективное распределение
+
+| Поле | Обновленное поведение |
+|---|---|
+| `platformScale` | Включено в долю заблокированного LP, принадлежащую платформе. |
+| `creatorScale` | До обновления выпускал Fee Key, принадлежащий создателю. После обновления включено в долю заблокированного LP, принадлежащую платформе. |
+| `burnScale` | Сжигается навсегда. Никакой Fee Key не представляет эту долю. |
+
+```text
+effectivePlatformScale = platformScale + creatorScale
+platformLp = floor(totalLp × effectivePlatformScale / 1_000_000)
+burnLp = totalLp − platformLp
+```
+
+Когда `burnScale` равен нулю, платформа получает все единицы LP. Когда `effectivePlatformScale` равен нулю, весь LP сжигается и Fee Key платформы не создается.
+
+## Примеры
+
+```ts
+// @raydium-io/raydium-sdk-v2@0.2.64-alpha · mainnet-beta · verified 2026-08-13
+// 90% заблокированного LP, принадлежащего платформе, 10% сжигается.
+migrateCpLockNftScale: {
+  platformScale: new BN(900_000),
+  creatorScale: new BN(0),
+  burnScale: new BN(100_000),
+}
+
+// 100% заблокированного LP, принадлежащего платформе.
+migrateCpLockNftScale: {
+  platformScale: new BN(1_000_000),
+  creatorScale: new BN(0),
+  burnScale: new BN(0),
+}
+
+// 100% сжигается; Fee Key не создается.
+migrateCpLockNftScale: {
+  platformScale: new BN(0),
+  creatorScale: new BN(0),
+  burnScale: new BN(1_000_000),
+}
+
+// A stored value you may still READ off a pre-2026-08-17 config — not settable now.
+// Its 500_000 creator share is folded into the platform's locked LP at migration:
+// { platformScale: 400_000, creatorScale: 500_000, burnScale: 100_000 }
+```
+
+## Связь с комиссиями создателя CPMM
+
+Поля масштаба контролируют только владение LP. Они не устанавливают ставки комиссий за своп и не определяют получателя комиссии создателя CPMM. `cpConfigId` выбирает `AmmConfig` CPMM; `platformCpCreator` определяет, записывает ли пул CPMM исходного создателя запуска или адрес, выбранный платформой.
+
+## Обновление распределения
+
+Перед обновлением платформы:
+
+- Убедитесь, что три значения в сумме дают ровно `1_000_000`.
+- Представьте `platformScale + creatorScale` как эффективную долю платформы.
+- Не обещайте Fee Key создателю на основе `creatorScale`.
+- Сохраняйте владение Fee Key создателя, показанное миграциями, завершенными до обновления; эти записи не переписываются.
+- Объясните изменение перед будущими запусками с использованием обновленной конфигурации.
+
+## Ссылки
+
+- [Конфигурация платформы](/docs/i18n/ru/products/launchlab/platform-config)
+- [Burn & Earn](/docs/i18n/ru/user-flows/burn-and-earn)
+- [Справочник по комиссиям LaunchLab и CPMM](/docs/i18n/ru/products/launchlab/tips-and-gotchas/launchlab-cpmm-fee-reference)
+- [Комиссии создателя LaunchLab](/docs/i18n/ru/products/launchlab/creator-fees)

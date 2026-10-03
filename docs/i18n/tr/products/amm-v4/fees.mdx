@@ -1,0 +1,111 @@
+---
+title: "AMM v4 ücretleri"
+description: "%0,25 işlem ücreti, LP/protokol bölünmesi, OpenBook doldurulmalarından PnL oluşturma ve yöneticinin tahakkuk eden protokol ücretlerini nasıl topladığı."
+---
+
+<Info>
+  **Bu sayfa yapay zekâ tarafından otomatik olarak çevrilmiştir. İngilizce sürüm esas alınır.**
+
+  [İngilizce sürümü görüntüle →](/docs/en/products/amm-v4/fees)
+</Info>
+
+## Yayınlanan tek katman
+
+CPMM ve CLMM'den farklı olarak, AMM v4'ün **`AmmConfig` hesabı yoktur**. Ücretler doğrudan her havuzun `AmmInfo.fees` yapısında saklanır ve havuz oluşturma sırasında sabitlenir. Esasen tüm canlı AMM v4 havuzlarını kapsayan varsayılanlar:
+
+| Zincir üzerindeki alan | Varsayılan | Anlamı |
+|----------------|---------|---------|
+| `swap_fee_numerator / swap_fee_denominator` | `25 / 10_000` | **AMM yolu swaplarında brüt işlem ücreti: giriş hacminin %0,25'i.** |
+| `trade_fee_numerator / trade_fee_denominator` | `25 / 10_000` | OpenBook kaldırılmasından sonra kalıntı (tarihsel olarak limit sipariş fiyatlandırması için kullanılmıştır). Varsayılan olarak `swap_fee` ile aynı `%0,25`. |
+| `pnl_numerator / pnl_denominator` | `12 / 100` | **Protokolün işlem ücretinden aldığı pay: %12** — yani hacmin `%0,25 × %12 = %0,03`'ü. `need_take_pnl_*` sayaçlarına tahakkuk eder. |
+| `min_separate_numerator / min_separate_denominator` | `5 / 10_000` | Ücret bölünmesi yuvarlama mantığı tarafından kullanılan iç hassasiyet tabanı. |
+
+`pnl_numerator / pnl_denominator`'ın işlem hacminin değil, işlem ücretinin bir kesri olduğuna dikkat edin — bu yaygın bir yanlış okumadır. LP payı tamamlayıcıdır (ücretin `%88`'i = hacmin `%0,22`'si) ve örtülüdür; ayrı bir "LP payı" payı yoktur.
+
+Az sayıda erken havuz farklı paylarla oluşturulmuştur; her zaman alıntı yapmadan önce `AmmInfo.fees`'i okuyun.
+
+**Fon ücreti** ve **yaratıcı ücreti** satırı yoktur: bunlar AMM v4'ün orijinal ücret modelinde mevcut olmayan CPMM/CLMM icatlarıdır.
+
+## Bölünme nasıl hesaplanır
+
+Her swapte, havuz giriş miktarından brüt işlem ücretini alır, ardından şu şekilde dağıtır:
+
+```
+gross_fee   = ceil(amount_in * swap_fee_numerator / swap_fee_denominator)        // amount_in'in %0,25'i
+pnl_portion = gross_fee * pnl_numerator / pnl_denominator                        // gross_fee'nin %12'si
+lp_portion  = gross_fee − pnl_portion                                            // gross_fee'nin %88'i
+```
+
+- `lp_portion` kasada kalır ve sonraki `k`'ye katkıda bulunur. LP'ler bunu daha sonra LP tokenlerini geri alarak yakalarlar.
+- `pnl_portion`, swap giriş tarafına bağlı olarak `AmmInfo.state_data.need_take_pnl_coin` veya `need_take_pnl_pc`'yi artırır.
+
+CPMM ile aynı değişmez koruma hilesi: PnL miktarı fiziksel olarak kasada oturur ancak eğride kullanılan rezervlerden çıkarılır, bu nedenle `TakePnl` fiyatı kaydırmadan tokenları dışarı taşır.
+
+## OpenBook'tan PnL (tarihsel)
+
+<Note>
+  **Kaldırıldı.** OpenBook entegrasyonu programdan kaldırılmıştır, bu nedenle bu bölümde açıklanan *ikinci* PnL akışı artık oluşturulmamaktadır. `total_pnl_{coin,pc}` sayaçları artık kullanımdan kaldırılmış alanlar — dondurulmuş tarihsel değerleri taşırlar ve asla güncellenmezler. Yukarıdaki %0,03 protokol ücreti yolu etkilenmez ve hala etkindir.
+</Note>
+
+Tarihsel olarak, AMM v4'ün ikinci bir ücrete benzer gelir akışı vardı: OpenBook'taki limit siparişleri doldurulduğunda, havuz doldurmanın alıcı tarafında olabilir ve piyasanın yapıcı/alıcı spreadini kazanabilir veya ödeyebilir. Bu PnL olayları `MonitorStep` sırasında havuz kasalarına yerleşti ve program bunları bilgilendirici sayaçlar olarak `state_data.total_pnl_{coin,pc}`'ye kredi yaptı.
+
+- Havuzun yayınlanan ızgarası eğri fiyatı etrafında doğru şekilde kalibre edildiğinde, OpenBook doldurmaları havuz için **ücret pozitif** olma eğilimindeydi — AMM etkili bir şekilde OpenBook'ta piyasa yapıyordu ve yapıcı indirimler kazanıyordu.
+- OpenBook duraklatıldığında veya olay kuyruğu dolduğunda, havuz dezavantajlı fiyatlarla doldurulmuş eski siparişlerde oturabilir ve negatif PnL üretebilir. Bu operasyonel bağlantı, hibrit tasarımdan uzaklaşmanın motivasyonlarından biriydi.
+
+Bu OpenBook PnL, %0,03 protokol ücreti ile **aynı değildi**. OpenBook PnL havuz rezervlerini doğrudan şişirdi (LP'leri + protokolü ücret bölünmesine orantılı olarak faydalandırırken), %0,03 protokol ücreti özellikle yönetici taraması için etiketlenmişti. OpenBook tarafı kapalıyken, bugün tek ücret tahakkuku AMM swaplarında %0,25 ve onun 22/3 bölünmesidir.
+
+## Tahsil
+
+Yönetici (Raydium multisig), `need_take_pnl_*`'yi programın `AmmConfig`'inde yapılandırılan havuz düzeyindeki "PnL sahibi" hesaplarına taraması için `WithdrawPnl`'yi çağırır (farklı, programa kapsamlı bir config — per-pool CPMM tarzı AmmConfig değil). Tarama:
+
+1. `need_take_pnl_coin` / `need_take_pnl_pc`'yi havuz kasalarından PnL hedefine aktarır.
+2. Sayaçları sıfırlar.
+
+Artık OpenBook-settle adımı yoktur. Kasa bakiyesi tahakkuk eden PnL'yi karşılamaya yetmezse, talimat artık doğrudan `TakePnlError` döndürür. İşlem eğriyi hareket ettirmez — LP'ler bir `WithdrawPnl` çağrısı arasında herhangi bir fiyat değişikliği görmemelidir. `WithdrawPnl` hesap düzeni 2026-07 yükseltmesinde değiştiğini unutmayın (bkz. [talimatlar](/docs/i18n/tr/products/amm-v4/instructions#withdrawpnl-/-takepnl)).
+
+## LP ücreti geri ödeme
+
+Adanmış bir "LP ücretlerini topla" talimatı yoktur. LP ücretleri kasalarda birikir ve `k`'yi zaman içinde şişirir; LP'ler bunları `Withdraw` aracılığıyla LP tokenlerini yakarak gerçekleştirirler. Bir LP tokeninin değeri, `(coin_reserve_effective, pc_reserve_effective)` büyüdükçe monoton olarak büyür.
+
+## Görselleştirme: 1.000 USDC hacim nereye gider
+
+Varsayılan parametre havuzuna karşı 1.000 USDC'lik USDC ağırlıklı bir swapte:
+
+```
+Brüt işlem ücreti (%0,25):   $2,50
+  LP payı   (%0,22):       $2,20   → havuzda kalır, k'yi yükseltir
+  PnL payı  (%0,03):       $0,30   → need_take_pnl_pc, TakePnl tarafından taranır
+Kullanıcıya gönderilen kalan:   $997,50   (eğri tarafından yönlendirilen fiyat etkisinden az)
+```
+
+CPMM `AmmConfig[0]` ile karşılaştırın (%0,25 katmanı, yaratıcı ücreti yok): LP $2,10 alır, protokol $0,30, fon $0,10. CPMM, AMM v4'ün eşdeğer katmanında LP'nin payı olacak olanı keserek fon satırını tanıtır.
+
+## Karşılaştırma tablosu
+
+| | AMM v4 | CPMM `index=0` | CLMM `index=2` |
+|---|---|---|---|
+| İşlem ücreti | %0,25 | %0,25 | %0,25 |
+| LP | %0,22 | %0,21 | Emisyonlara göre değişir |
+| Protokol | %0,03 | %0,03 | Katman başına |
+| Fon | Yok | %0,01 | Katman başına |
+| Yaratıcı (isteğe bağlı) | Yok | Varsayılan olarak 0 | Yok |
+| Ücretlerin bulunduğu yer | Havuz kasası + need_take_pnl_* | Havuz kasası + protocol_fees_* + fund_fees_* | Genel + katman başına + konum başına |
+
+[`reference/fee-comparison`](/docs/i18n/tr/reference/fee-comparison) içinde tam matris.
+
+## Entegratör notları
+
+- **Alıntı.** SDK veya `api-v3.raydium.io/pools/info/ids` aracılığıyla `AmmInfo`'yu getirin. Rezervler artık yalnızca kasa olduğundan, doğrudan kasa bakiyelerine karşı alıntı yapabilirsiniz — `need_take_pnl_*`'yi çıkarmayı unutmayın (tahakkuk eden PnL kasada tutulur ancak eğriden hariç tutulur).
+- **Eski ücret parametreleri.** Prensipte `SetParams` `swap_fee_numerator`'ı değiştirebilir, ancak pratikte Raydium multisig herhangi bir canlı havuz için varsayılanları değiştirmemiştir. Yine de, sabit kodlamak yerine her zaman zincir üzerindeki durumdan okuyun.
+- **Ödüller yok.** AMM v4, havuz üzerindeki ödül emisyonlarını desteklemez. Eski ekosistem çiftlikleri (Farm v3 / v5 / v6) staking katmanı eşdeğeridir — bkz. [`products/farm-staking`](/docs/i18n/tr/products/farm-staking).
+
+## Sonraki adım
+
+- [`products/amm-v4/math`](/docs/i18n/tr/products/amm-v4/math) — eğri içindeki işlem ücreti türetmesi.
+- [`products/amm-v4/instructions`](/docs/i18n/tr/products/amm-v4/instructions) — `WithdrawPnl` / `SetParams` hesap listeleri.
+- [`reference/fee-comparison`](/docs/i18n/tr/reference/fee-comparison) — yan yana matris.
+
+Kaynaklar:
+
+- [Raydium AMM programı — `raydium-io/raydium-amm`](https://github.com/raydium-io/raydium-amm)
+- Zincir üzerindeki AMM v4 ücret-pay/payda alanları (mainnet `AmmInfo` hesaplarına karşı doğrulanmıştır).

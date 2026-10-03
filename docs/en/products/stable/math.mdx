@@ -1,0 +1,140 @@
+---
+title: "Stable AMM math"
+description: "Binary search and linear interpolation to quote prices from the lookup table. Fee application identical to AMM v4. Pure-AMM pool accounting after the OpenBook decoupling."
+---
+
+## The lookup-table curve
+
+Stable AMM replaces the formula x·y=k with a **sparse lookup table** of (x, y, price) tuples. When pricing a swap, the program:
+
+1. Computes the pool's current ratio from reserves.
+2. **Binary searches** the table to find the two entries that bracket that ratio.
+3. **Linearly interpolates** between them to get an intermediate price.
+4. Applies fees and returns the quote.
+
+This approach trades the determinism of a formula for **admin flexibility** in price shaping, and it's efficient enough to fit in Solana's compute budget.
+
+## Table layout and binary search
+
+The `ModelDataInfo` holds up to 50,000 `DataElement` entries, indexed by the admin. Only the first `valid_data_count` are live. Each entry:
+
+```
+DataElement {
+  x: u64,      // X coordinate (coin-side amount, scaled)
+  y: u64,      // Y coordinate (pc-side amount, scaled)
+  price: u64,  // price = x/y, scaled by multiplier
+}
+```
+
+To find a price at the current pool reserves (x_real, y_real):
+
+1. Compute the ratio: `target_ratio = (x_real * multiplier) / y_real`.
+2. Binary search for entries where `(element.x * multiplier) / element.y` brackets `target_ratio`.
+3. When a bracket `[min_idx, max_idx]` is found, interpolate.
+
+The program's binary search code spans ~150 lines in `state.rs::ModelDataInfo::get_mininum_range_by_xy_real`. The key invariant: **entries must be sorted** (x ascending, y descending, price ascending) for the search to work.
+
+## Linear interpolation
+
+Once two table points bracket the ratio, interpolation computes an intermediate price and reserve pair:
+
+```
+target = (x_real * multiplier) / y_real
+
+[x1, y1, p1] = table[min_idx]
+[x2, y2, p2] = table[max_idx]
+
+// Interpolate price
+p = p1 + (p2 - p1) * (target - ratio1) / (ratio2 - ratio1)
+
+// Interpolate reserve
+x = x1 + (x2 - x1) * (target - ratio1) / (ratio2 - ratio1)
+y = y1 + (y2 - y1) * (target - ratio1) / (ratio2 - ratio1)
+```
+
+The result is a piecewise-linear curve that smoothly connects the table points.
+
+## Scaling: the multiplier
+
+Pool reserves and prices are stored at different scales. The `multiplier` field on `ModelDataInfo` accounts for this. A common pattern:
+
+- Coin has 6 decimals, PC has 18 decimals.
+- Multiplier = 10^6 (or similar).
+- Table entries are stored at a reduced scale to fit u64 bounds.
+
+The program rescales on read/write via:
+
+```
+real_value = table_value * ratio / multiplier
+table_value = real_value * multiplier / ratio
+```
+
+## Swap pricing: `SwapBaseIn` and `SwapBaseOut`
+
+### SwapBaseIn (exact input)
+
+Given input amount `amount_in`:
+
+1. Get current ratio from `(coin_vault, pc_vault)`.
+2. Find bracketing table entries and interpolate to get the table-space ratio.
+3. Convert input to table space: `dx_table = amount_in * multiplier / ratio`.
+4. Query the table at the new X coordinate to find the new Y.
+5. `dy_table = y_old - y_new`.
+6. Convert back: `dy_real = dy_table * ratio / multiplier`.
+7. Apply trade fee: `dy_output = dy_real - (dy_real * trade_fee_numerator / trade_fee_denominator)`.
+8. Return `dy_output`.
+
+### SwapBaseOut (exact output)
+
+Symmetric: given desired `amount_out`, solve for the required `amount_in`.
+
+Both paths read effective reserves directly from the pool vaults. The pool has held no OpenBook open orders for years, so there is nothing to settle first — the vault balances are the whole story. (The [2026-06-22 upgrade](/docs/en/reference/changelog) removed the leftover market code.)
+
+## Fee application
+
+Same arithmetic as AMM v4 — see [`products/amm-v4/math`](/docs/en/products/amm-v4/math) for the full derivation — but with the Stable pools' own numbers.
+
+```
+gross_fee = amount_in * (swap_fee_numerator / swap_fee_denominator)    // 2/10_000 = 0.02%
+lp_portion = gross_fee - (gross_fee * pnl_numerator / pnl_denominator) // 88% of it = 0.0176%
+pnl_portion = gross_fee * (pnl_numerator / pnl_denominator)            // 12% of it = 0.0024%
+```
+
+The `pnl_portion` goes to `need_take_pnl_*` and is swept by the admin via `WithdrawPnl`. The `lp_portion` stays in the vault, inflating `k` and benefiting LP token holders.
+
+## Pool-asset accounting
+
+The formula historically added the funds the pool held as open orders in its OpenBook OpenOrders account. That term has been zero in practice since the pool stopped posting orders, and the 2026-06-22 upgrade dropped it from the formula entirely, leaving the vault-only calculation:
+
+```
+Old: total assets = vault balances + open-order funds (native_coin_total / native_pc_total) − pending PnL (need_take_pnl)
+New: total assets = vault balances − pending PnL (need_take_pnl)
+```
+
+This is the value the curve math treats as effective reserves (the accrued-but-unswept `need_take_pnl` portion sits physically in the vault but is excluded from pricing). Quoting code and indexers that previously read OpenOrders balances must drop that term.
+
+## MonitorStep (removed)
+
+`MonitorStep` was the **crank instruction** that settled pending OpenBook fills, recomputed `AmmInfo.target_orders`, and reposted the limit-order grid derived from the lookup table. The pool stopped posting orders to OpenBook years ago, so the crank had nothing left to do; it was **removed in the 2026-06-22 upgrade**. Integrators do not need to crank Stable pools.
+
+## Summary: why this works
+
+The lookup table + interpolation design is **efficient and flexible**:
+
+- **Efficiency:** Binary search is O(log 50,000) ≈ 16 iterations, each ~ 300–500 CU. Interpolation is a few multiplies/divides. Total quoting cost is ~5k–15k CU, much cheaper than recomputing a formula on every swap.
+- **Flexibility:** The admin can encode any piecewise-linear curve. Stablecoin pairs get high density around 1:1; collateralized pairs get custom curves.
+- **Self-contained liquidity:** All funds live in the pool vaults and pricing reads them directly — no crank, no external order book, fewer accounts per transaction.
+
+For deep dives into the interpolation logic, see `raydium-stable/program/src/state.rs`, methods `get_data_by_x`, `get_data_by_y`, `get_dy_by_dx_base_in`, etc.
+
+## Where to go next
+
+- [Accounts](/docs/en/products/stable/accounts) — `ModelDataInfo` and `DataElement` field reference.
+- [Instructions](/docs/en/products/stable/instructions) — the callable set (swap, deposit, withdraw, `WithdrawPnl`) and the removed instructions.
+- [Fees](/docs/en/products/stable/fees) — fee application and `WithdrawPnl`.
+- [`products/amm-v4/math`](/docs/en/products/amm-v4/math) — for the OpenBook fee-inclusive order pricing logic.
+
+Sources:
+
+- `raydium-stable/program/src/state.rs` (interpolation and binary search implementations)
+- `raydium-stable/program/src/math.rs` (calculator utilities)

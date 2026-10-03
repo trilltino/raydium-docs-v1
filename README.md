@@ -9,7 +9,7 @@ This repository is the source for the documentation site. Built on [Mintlify](ht
 - **171 pages** across 15 top-level chapters: Introduction, Protocol Overview, Getting Started, User Flows, Solana Fundamentals, Products (AMM v4 / CPMM / CLMM / Farm-Staking / Perps / Stable AMM / AMM Routing / LaunchLab — LaunchLab includes a Tips & Gotchas sub-folder), Algorithms, Quick Start, SDK & API, Integration Guides, Security, RAY token & Protocol revenues, API Reference, Reference, Resources.
 - **Three audience tracks** in parallel: developers/integrators, protocol researchers/auditors, and end users. Every chapter is tagged with the audience it primarily serves.
 - **Runnable code** for every instruction-level surface — TypeScript, Rust, and Python — pinned to specific SDK versions and program IDs.
-- **Multi-language.** Source of truth is English at the repo root. Thirteen locales (`zh`, `zh-Hant`, `ja`, `ko`, `ru`, `es`, `de`, `fr`, `pt`, `tr`, `vi`, `id`, `ar`) are mirrored under top-level locale folders; MDX content is kept in sync by Mintlify's auto-translation. Translators are welcome to PR corrections — see [`CONTRIBUTING.md § Translations`](./CONTRIBUTING.md#translations).
+- **Multi-language.** Source of truth is English under `docs/en`. Thirteen locales (`zh`, `zh-Hant`, `ja`, `ko`, `ru`, `es`, `de`, `fr`, `pt`, `tr`, `vi`, `id`, `ar`) are mirrored under `docs/i18n`; MDX content is kept in sync by Mintlify's auto-translation. Translators are welcome to PR corrections — see [`CONTRIBUTING.md § Translations`](./CONTRIBUTING.md#translations).
 
 ## Contributing
 
@@ -58,37 +58,41 @@ mint broken-links
 ├── favicon.svg
 │
 ├── ARCHITECTURE.mdx      # Source of truth for IA, audience model, per-product template
-├── index.mdx             # Landing page (English, default locale)
-├── introduction/         # English source content lives at the repo root
-├── protocol-overview/    # — the default locale has no path prefix.
-├── getting-started/
-├── user-flows/
-├── solana-fundamentals/
-├── products/             # AMM v4, CPMM, CLMM, Farm/Staking, Perps, Stable, Routing, LaunchLab
-├── algorithms/
-├── quick-start/
-├── sdk-api/
-├── integration-guides/
-├── security/
-├── ray/                  # RAY tokenomics, treasury, buybacks, staking, protocol revenues
-├── api-reference/        # Per-service API docs — overview pages + openapi/*.yaml
-├── reference/
-├── resources/
-│
-├── zh/                   # Locale mirrors — same tree, translated content.
-├── zh-Hant/              # MDX content is auto-translated by Mintlify;
-├── ja/                   # corrections via PR are welcome.
-├── ko/                   # Per-locale navigation (tab/group labels and page paths)
-├── ru/                   # is maintained by hand in docs.json.
-├── es/
-├── de/
-├── fr/
+├── docs/
+│   ├── en/               # English source content and default documentation tree
+│   │   ├── index.mdx
+│   │   ├── introduction/
+│   │   ├── protocol-overview/
+│   │   ├── getting-started/
+│   │   ├── user-flows/
+│   │   ├── solana-fundamentals/
+│   │   ├── products/     # AMM v4, CPMM, CLMM, Farm/Staking, Perps, Stable, Routing, LaunchLab
+│   │   ├── algorithms/
+│   │   ├── quick-start/
+│   │   ├── sdk-api/
+│   │   ├── integration-guides/
+│   │   ├── security/
+│   │   ├── ray/          # RAY tokenomics, treasury, buybacks, staking, protocol revenues
+│   │   ├── api-reference/# Per-service API docs — overview pages + openapi/*.yaml
+│   │   ├── reference/
+│   │   └── resources/
+│   └── i18n/             # Locale mirrors — same tree, translated content
+│       ├── zh/
+│       ├── zh-Hant/
+│       ├── ja/
+│       ├── ko/
+│       ├── ru/
+│       ├── es/
+│       ├── de/
+│       └── fr/
 │
 ├── images/               # Diagrams and illustrations (locale-agnostic)
 └── logo/                 # Site logo (locale-agnostic)
 ```
 
-URLs: the default locale (English) lives at the root, e.g. `/products/cpmm/overview`. Other locales are prefixed, e.g. `/zh/products/cpmm/overview`. Visitors with a matching browser preference are served the localized tree where pages are translated and the English version where they aren't. Legacy `/en/<path>` URLs redirect to `/<path>`.
+Local source/research checkouts should live beside this repo, not inside it. For example, use `C:\Users\isich\raydium-docs-research` locally so Mintlify only scans the docs project.
+
+URLs follow the content tree in `docs.json`, e.g. `/docs/en/products/cpmm/overview` for English and `/docs/i18n/zh/products/cpmm/overview` for Simplified Chinese. Visitors with a matching browser preference are served the localized tree where pages are translated and the English version where they aren't. Legacy `/en/<path>` URLs redirect to `/docs/en/<path>`.
 
 ## Editorial conventions
 

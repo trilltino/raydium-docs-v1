@@ -1,0 +1,440 @@
+---
+title: "Chaîne d'outils"
+description: "Configuration minimale pour lire l'état on-chain de Raydium, construire des transactions et développer contre les programmes. Solana CLI, Anchor, SDKs en TypeScript et Python, et conseils devnet/localnet."
+---
+
+<Info>
+  **Cette page est traduite automatiquement par IA. La version anglaise fait foi.**
+
+  [Voir la version anglaise →](/docs/en/solana-fundamentals/toolchain)
+</Info>
+
+<Info>
+  Toute la documentation suppose une chaîne d'outils Solana fonctionnelle. Cette page énumère les outils, les versions connues pour fonctionner avec Raydium en septembre 2026, et les pièges spécifiques à la configuration. Commencez ici avant d'exécuter les exemples de code des chapitres suivants.
+
+  **Deux ensembles de versions importent, et ils ne sont pas identiques.** Pour *construire ou forker* les programmes Raydium, vous avez besoin de la chaîne d'outils exacte qu'ils épinglent — Rust 1.91.0, Agave 3.1.10, Anchor 1.0.2 à partir de la mise à jour du 2026-09-09. Pour *intégrer* les programmes déployés depuis TypeScript ou Python, vous n'avez besoin que d'une bibliothèque client suffisamment récente pour communiquer avec eux, et les épingles sont consultatifs. Chaque section ci-dessous indique le cas qu'elle couvre.
+</Info>
+
+## Outils principaux
+
+### Solana CLI
+
+L'interface de ligne de commande canonique pour interagir avec les clusters Solana — gestion des portefeuilles, appels RPC, déploiement de programmes.
+
+Installation :
+
+```bash
+# La version contre laquelle les programmes Raydium sont construits et testés
+sh -c "$(curl -sSfL https://release.anza.xyz/v3.1.10/install)"
+
+# Ou suivre un canal au lieu d'une balise
+sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+```
+
+Vérification :
+
+```bash
+solana --version   # → solana-cli 3.1.10 (... client:Agave)
+```
+
+<Note>
+  **L'hôte d'installation a changé.** `release.solana.com` appartenait à Solana Labs ; le client est maintenant maintenu par Anza sous le nom **Agave**, et les versions sont servies depuis `release.anza.xyz`. Le binaire de mise à jour automatique est `agave-install` (`solana-install` est conservé comme alias hérité), donc `agave-install update` et `agave-install init <version>` sont les orthographes actuelles. La documentation de Solana propose également un installateur en une seule commande qui récupère la CLI, Rust et Anchor ensemble :
+
+  ```bash
+  curl --proto '=https' --tlsv1.2 -sSfL https://solana-install.solana.workers.dev | bash
+  ```
+
+  Cet installateur suit sa propre idée du courant et peut vous remettre un Anchor différent de celui que les programmes Raydium épinglent — vérifiez `anchor --version` après.
+</Note>
+
+Configuration pour mainnet :
+
+```bash
+solana config set --url https://api.mainnet-beta.solana.com
+solana config set --keypair ~/.config/solana/id.json
+solana-keygen new                           # créer un portefeuille si vous n'en avez pas
+solana address                              # votre clé publique
+```
+
+Pour les tests Raydium, vous voudrez presque toujours un portefeuille devnet financé :
+
+```bash
+solana config set --url https://api.devnet.solana.com
+solana airdrop 2                            # 2 SOL pour les tests
+```
+
+### SPL Token CLI
+
+La CLI officielle pour les opérations SPL Token / Token-2022 — création de mints, frappe de jetons, transferts.
+
+Installation (incluse avec Solana CLI) :
+
+```bash
+spl-token --version
+```
+
+Opérations courantes :
+
+```bash
+spl-token create-token                                  # créer un mint SPL Token
+spl-token create-token --program-id TOKEN_2022 ...      # créer un mint Token-2022
+spl-token create-account <MINT>                         # créer une ATA
+spl-token mint <MINT> 1000                              # frapper 1000 jetons dans votre ATA
+spl-token transfer <MINT> 100 <RECIPIENT>               # transférer 100
+spl-token display <ACCOUNT_OR_MINT>                     # inspecter
+```
+
+### Anchor CLI
+
+Nécessaire pour récupérer les IDLs Raydium, construire des clients et vérifier les programmes.
+
+Installation :
+
+```bash
+cargo install --git https://github.com/solana-foundation/anchor avm --locked --force
+avm install 1.0.2
+avm use 1.0.2
+anchor --version   # → anchor-cli 1.0.2
+```
+
+<Note>
+  **Anchor a changé de dépôt et de version majeure.** Le dépôt canonique est maintenant `github.com/solana-foundation/anchor` (c'était `coral-xyz/anchor`), et Anchor 1.0 est la première ligne de version que les programmes Raydium utilisent — CPMM et LaunchLab épinglent tous deux `anchor-lang`/`anchor-spl` `=1.0.2` à partir de la mise à jour du 2026-09-09, et CLMM suit lors de la mise à jour du 2026-09-30, tous passant de `0.32.1`. `avm` peut contenir plusieurs versions ; `avm use 1.0.2` est ce qui fait que `anchor build` reproduit les artefacts de Raydium. Anchor 1.1 et 1.2 existent et se construisent bien pour vos propres programmes, mais une caisse CPI compilée contre une mineure `anchor-lang` différente de celle que le programme cible épingle ne se liera pas — voir [`sdk-api/rust-cpi`](/docs/i18n/fr/sdk-api/rust-cpi).
+</Note>
+
+Opérations courantes :
+
+```bash
+anchor idl fetch <PROGRAM_ID> -o program.idl.json       # récupérer l'IDL on-chain
+anchor idl init -f idl.json <PROGRAM_ID>                # télécharger un IDL
+anchor build                                             # construire un programme à partir de la source
+```
+
+## Configuration TypeScript
+
+Le chemin d'intégration principal pour Raydium.
+
+### Paquets
+
+```bash
+npm install \
+  @solana/web3.js \
+  @solana/spl-token \
+  @anchor-lang/core \
+  @raydium-io/raydium-sdk-v2 \
+  bn.js \
+  decimal.js
+```
+
+Versions connues pour fonctionner ensemble en septembre 2026 :
+
+| Paquet | Version | Remarque |
+|---------|---------|------|
+| `@solana/web3.js` | `^1.95` | L'API 1.x. `2.x` / `3.x` sont une surface API différente et incompatible ; le SDK Raydium cible 1.x. |
+| `@solana/spl-token` | `^0.4.15` | 0.4.15 est ce qui expose `createUnwrapLamportsInstruction` — voir [reclaimable rent](/docs/i18n/fr/solana-fundamentals/rent-and-reclaimable-rent). |
+| `@anchor-lang/core` | `^1.0` (résout actuellement à `1.2.0`) | Le client TypeScript Anchor 1.x. Les propres dépôts de Raydium épinglent exactement `1.0.2` ; pour l'utilisation côté client, n'importe quel 1.x fonctionne, mais épinglez `1.0.2` si vous voulez correspondre à leurs suites de tests. |
+| `@raydium-io/raydium-sdk-v2` | `0.2.64-alpha` | L'épingle que chaque démo de code dans ces documents utilise. |
+
+<Note>
+  **`@coral-xyz/anchor` est gelé ; le paquet est maintenant `@anchor-lang/core`.** `@coral-xyz/anchor` s'est arrêté à `0.32.1` quand Anchor a quitté Coral. Anchor 1.x publie sous `@anchor-lang/core`, et les propres dépôts de programmes de Raydium ont basculé leurs suites de tests vers celui-ci lors des mises à jour du 2026-09-09 (CLMM le 2026-09-30). Les imports que vous utilisez réellement sont inchangés — `import { Program, BN, AnchorProvider } from "@anchor-lang/core"` — donc la migration est un renommage de paquet plus une mise à jour du fichier de verrouillage.
+
+  Deux remarques comportementales si vous passez de `0.3x` : `.accounts({...})` n'accepte maintenant que les comptes qu'Anchor ne peut pas résoudre lui-même, donc un constructeur qui passe l'ensemble complet doit appeler `.accountsPartial({...})` à la place ; et `@anchor-lang/core/dist/cjs/utils/token` est l'endroit où les aides telles que `ASSOCIATED_PROGRAM_ID` ont été déplacées.
+</Note>
+
+### Script minimal
+
+```ts
+import { Connection, Keypair } from "@solana/web3.js";
+import { Raydium } from "@raydium-io/raydium-sdk-v2";
+
+const connection = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
+const owner      = Keypair.fromSecretKey(/* your key */);
+
+const raydium = await Raydium.load({
+  connection,
+  owner,
+  cluster:      "mainnet",
+  disableFeatureCheck: true,
+});
+
+// `ids` est une liste séparée par des virgules, et l'appel retourne un tableau
+const [poolInfo] = await raydium.api.fetchPoolById({ ids: "..." });
+console.log(poolInfo);
+```
+
+Voir [`sdk-api/typescript-sdk`](/docs/i18n/fr/sdk-api/typescript-sdk) pour la référence complète du SDK.
+
+## Configuration Rust
+
+Pour l'intégration CPI et les programmes on-chain.
+
+### Chaîne d'outils
+
+```bash
+rustup install 1.91.0           # ce que les programmes Raydium épinglent
+rustup default 1.91.0
+rustup component add rustfmt clippy
+agave-install init 3.1.10       # chaîne d'outils SBF incluse
+```
+
+Construisez les programmes avec `cargo build-sbf` (l'ancienne orthographe `cargo build-bpf` a disparu).
+
+### Cargo.toml du programme pour une intégration CPI Raydium
+
+```toml
+# Intégration CPMM et/ou CLMM (Anchor 1.0) — une caisse peut prendre les deux
+[dependencies]
+anchor-lang     = "=1.0.2"
+anchor-spl      = "=1.0.2"
+raydium-cp-swap = { git = "https://github.com/raydium-io/raydium-cp-swap", branch = "chore/upgrade-anchor", features = ["cpi"] }
+raydium-clmm    = { git = "https://github.com/raydium-io/raydium-clmm",    branch = "chore/upgrade-anchor", features = ["cpi"] }
+```
+
+Épinglez `anchor-lang` et `anchor-spl` avec `=` à la version que le programme cible épingle. Sur leurs branches `chore/upgrade-anchor`, CPMM et CLMM épinglent tous deux `=1.0.2`, donc **une seule caisse peut faire un CPI dans les deux**. Les branches `master` des deux dépôts épinglent toujours `0.32.1`, et une caisse qui mélange une dépendance `master` avec une dépendance de branche de mise à niveau ne se construira pas. Voir [`sdk-api/rust-cpi`](/docs/i18n/fr/sdk-api/rust-cpi#cargo-dependencies).
+
+La fonctionnalité `"cpi"` importe le module `cpi` avec des aides CPI (donc vous pouvez `raydium_cp_swap::cpi::swap_base_input(...)`). Voir [`sdk-api/rust-cpi`](/docs/i18n/fr/sdk-api/rust-cpi).
+
+## Configuration Python
+
+Chemin d'intégration secondaire — courant pour les développeurs de bots.
+
+### Paquets
+
+```bash
+pip install solders solana anchorpy
+```
+
+Versions :
+
+| Paquet | Nom PyPI | Version |
+|---------|-----------|---------|
+| `solders` | `solders` | ≥0.29 |
+| solana-py | `solana` | ≥0.40 |
+| `anchorpy` | `anchorpy` | ≥0.21 |
+
+<Note>
+  Deux pièges de nommage. Le client RPC est importé sous `solana` mais le projet s'appelle **solana-py** — `pip install solana-py` n'installe rien d'utile. Et il n'y a **pas de paquet `raydium-py` sur PyPI** : l'aide Raydium communautaire est un dépôt que vous clonez, [`AL-THE-BOT-FATHER/raydium_py`](https://github.com/AL-THE-BOT-FATHER/raydium_py), pas une distribution publiée. Les révisions antérieures de cette page listaient une ligne `pip install raydium-py` qui n'a jamais fonctionné.
+</Note>
+
+### Script minimal
+
+```python
+from solana.rpc.async_api import AsyncClient
+from solders.keypair import Keypair
+from anchorpy import Provider, Wallet, Program
+
+async def main():
+    conn = AsyncClient("https://api.mainnet-beta.solana.com")
+    owner = Keypair()
+    wallet = Wallet(owner)
+    provider = Provider(conn, wallet)
+
+    # Charger l'IDL et le programme
+    with open("cpmm.idl.json") as f:
+        idl = json.load(f)
+    program = Program(idl, CPMM_PROGRAM_ID, provider)
+
+    pool = await program.account["PoolState"].fetch(pool_id)
+    print(pool)
+```
+
+Voir [`sdk-api/python-integration`](/docs/i18n/fr/sdk-api/python-integration).
+
+## Points de terminaison RPC
+
+Le RPC mainnet public (`api.mainnet-beta.solana.com`) est fortement limité en débit et s'étouffe sous toute charge. Pour une utilisation non triviale, obtenez un point de terminaison privé :
+
+| Fournisseur | Remarques |
+|----------|-------|
+| Helius | Le plus populaire ; niveau gratuit généreux. |
+| Triton | Entreprise ; tarification premium, stable. |
+| QuickNode | Solide ; latence sub-par-seconde. |
+| Votre propre nœud RPC | Coûte ~\$500/mois en matériel ; contrôle total. |
+
+Configuration :
+
+```ts
+const connection = new Connection("https://mainnet.helius-rpc.com/?api-key=...");
+```
+
+Certaines opérations RPC nécessitent des capacités étendues :
+
+- `getProgramAccounts` — les analyses sans restriction sont coûteuses ; certains fournisseurs les limitent ou facturent par analyse.
+- `getPriorityFeeEstimate` — point de terminaison spécifique à Helius ; les autres ont des équivalents.
+- `geyser` / diffusion WebSocket — nécessaire pour les bots à faible latence ; tous les fournisseurs ne l'exposent pas.
+
+## Devnet et localnet
+
+### Devnet
+
+Le cluster de test public de Solana. Raydium a un déploiement devnet partiel :
+
+- Certains pools CPMM existent pour les tests.
+- AMM v4 a des pools devnet historiques.
+- CLMM a quelques pools de démonstration.
+- Farm v6 est déployé.
+
+```bash
+solana config set --url https://api.devnet.solana.com
+solana airdrop 2
+```
+
+Le SDK supporte devnet via `cluster: "devnet"` :
+
+```ts
+const raydium = await Raydium.load({ connection, owner, cluster: "devnet" });
+```
+
+**Mise en garde** : les pools devnet ont une liquidité faible et peuvent avoir un état obsolète. Ne comptez pas sur devnet pour la découverte de prix ; utilisez-le uniquement pour construire et tester les flux d'instructions.
+
+### Localnet avec un état mainnet forké
+
+Pour des tests réalistes, forkez l'état mainnet dans un validateur local :
+
+```bash
+solana-test-validator \
+  --url https://api.mainnet-beta.solana.com \
+  --clone CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C \
+  --clone CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK \
+  --clone <SOME_POOL_ID> \
+  --clone <SOME_MINT_ID>
+```
+
+Cela clone l'état spécifique du programme/compte vers localhost, où vous pouvez effectuer des transactions librement. Idéal pour :
+
+- Tester unitairement votre intégration CPI contre un vrai programme Raydium.
+- Rejouer une transaction avec un paramètre modifié pour déboguer.
+- Tester la charge avec de grands volumes synthétiques.
+
+L'équipe de Raydium utilise largement le localnet forké pour les tests de régression avant le déploiement sur mainnet.
+
+## Modèles de projet
+
+### Démarreur d'intégration TypeScript
+
+```
+my-raydium-app/
+├── package.json
+├── tsconfig.json
+├── src/
+│   ├── swap.ts           # exemple de swap
+│   ├── add-liquidity.ts
+│   └── read-pool.ts
+└── .env                  # URL RPC, chemin du portefeuille
+```
+
+`package.json` minimal :
+
+```json
+{
+  "name": "my-raydium-app",
+  "type": "module",
+  "scripts": { "swap": "tsx src/swap.ts" },
+  "dependencies": {
+    "@raydium-io/raydium-sdk-v2": "0.2.64-alpha",
+    "@solana/web3.js": "^1.95",
+    "@solana/spl-token": "^0.4.15"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsx": "^4",
+    "typescript": "^5"
+  }
+}
+```
+
+### Démarreur de programme CPI Anchor
+
+```
+my-raydium-cpi/
+├── Anchor.toml
+├── Cargo.toml
+├── programs/
+│   └── my-cpi/
+│       ├── Cargo.toml
+│       └── src/lib.rs
+└── tests/
+    └── my-cpi.ts
+```
+
+Avec Anchor 1.0 :
+
+```bash
+anchor init my-raydium-cpi
+cd my-raydium-cpi
+# ajouter raydium-cp-swap à Cargo.toml avec features = ["cpi"]
+anchor build
+anchor test
+```
+
+## Utilitaires CLI utiles
+
+### `solana-keygen`
+
+```bash
+solana-keygen new --outfile ./wallet.json          # générer une clé
+solana-keygen pubkey ./wallet.json                 # afficher la clé publique
+```
+
+### Lire n'importe quel compte
+
+```bash
+solana account <ADDRESS> --output json-compact
+```
+
+Utile pour examiner l'état du pool sans décodeur.
+
+### Journaux du programme
+
+```bash
+solana logs | grep CPMMoo8                         # suivre les journaux tx liés à CPMM
+```
+
+### Inspection des transactions
+
+```bash
+solana confirm <TX_SIGNATURE> -v                   # affiche les journaux joliment
+```
+
+Ou via [explorer](https://explorer.solana.com) — collez la signature et regardez l'onglet « Program Logs ».
+
+## Hygiène de l'environnement
+
+### Portefeuilles séparés par objectif
+
+- **Portefeuille de développement** : contient SOL testnet, utilisé pour la construction.
+- **Portefeuille de production** : contient du vrai SOL, utilisé uniquement pour les déploiements / soumissions multisig.
+- **Portefeuille chaud pour les bots** : petit solde, permissions étroites.
+
+Les clés ne doivent jamais être codées en dur. Utilisez des variables d'environnement ou des gestionnaires de secrets.
+
+### Modèle `.env`
+
+```
+# .env (non commité)
+SOLANA_RPC_URL=https://mainnet.helius-rpc.com/?api-key=...
+WALLET_PATH=/Users/you/.config/solana/id.json
+```
+
+```ts
+import { config } from "dotenv";
+config();
+
+const connection = new Connection(process.env.SOLANA_RPC_URL!);
+```
+
+### Épinglage des versions
+
+Verrouillez toutes les dépendances de l'écosystème Solana. L'écosystème se déplace rapidement ; une mise à jour de version mineure de `@solana/web3.js` a précédemment introduit des changements de rupture. Utilisez `package-lock.json` / `Cargo.lock` religieusement.
+
+## Pointeurs
+
+- [`sdk-api/typescript-sdk`](/docs/i18n/fr/sdk-api/typescript-sdk) — Référence du SDK TypeScript.
+- [`sdk-api/rust-cpi`](/docs/i18n/fr/sdk-api/rust-cpi) — Utilisation de CPI Rust.
+- [`sdk-api/python-integration`](/docs/i18n/fr/sdk-api/python-integration) — Configuration Python.
+- [`solana-fundamentals/programs-and-anchor`](/docs/i18n/fr/solana-fundamentals/programs-and-anchor) — Contexte Anchor.
+
+Sources :
+
+- [Documentation d'installation Solana](https://solana.com/docs/intro/installation) et [Installation de la CLI Agave](https://docs.anza.xyz/cli/install).
+- [Installation d'Anchor](https://www.anchor-lang.com/docs/installation).
+- [Dépôt du SDK Raydium v2](https://github.com/raydium-io/raydium-sdk-V2).

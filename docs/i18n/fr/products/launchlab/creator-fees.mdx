@@ -1,0 +1,72 @@
+---
+title: "Frais de créateur LaunchLab"
+description: "Comment les frais de créateur s'accumulent avant la graduation et via le pool CPMM du créateur après la graduation, séparément du LP verrouillé détenu par la plateforme."
+---
+
+<Info>
+  **Cette page est traduite automatiquement par IA. La version anglaise fait foi.**
+
+  [Voir la version anglaise →](/docs/en/products/launchlab/creator-fees)
+</Info>
+
+<Info>
+  Les revenus de créateur LaunchLab peuvent provenir de deux compteurs de frais : le coffre des frais de créateur de la courbe de liaison avant la graduation et les frais de créateur CPMM après la graduation. Avant la mise à jour du 2026-08-17, `creator_scale` produisait également une clé de frais LP détenue par le créateur. Les migrations exécutées après la mise à jour attribuent cette part de LP verrouillé à la plateforme à la place.
+</Info>
+
+## Avant la migration : accumulation directe des frais
+
+Pendant qu'un token s'échange sur la courbe de liaison, chaque achat et vente peut facturer un composant de frais de créateur. Il s'accumule dans un coffre par créateur, par quote-mint.
+
+- Les frais sont libellés dans le token de cotation.
+- `PlatformConfig.creator_fee_rate` définit le taux.
+- Le créateur peut réclamer via `ClaimCreatorFee` avant ou après la graduation.
+- La graduation arrête la nouvelle accumulation de la courbe de liaison mais n'efface pas un solde non réclamé.
+
+## Après la migration : frais de créateur CPMM
+
+Chaque nouveau lancement passe à CPMM. Le `AmmConfig.creator_fee_rate` et `PoolState.creator_fee_on` du CPMM sélectionné déterminent si les frais de créateur s'accumulent sur les swaps CPMM.
+
+Le créateur du pool CPMM est :
+
+- le créateur de lancement original quand `PlatformConfig.platform_cp_creator` est la clé publique par défaut ; ou
+- le `platform_cp_creator` configuré sinon.
+
+Ce créateur CPMM enregistré possède les compteurs de frais de créateur. Il peut utiliser l'instruction de collection signée par le créateur, et n'importe quel payeur peut déclencher le chemin sans permission contraint par la destination qui paie les ATA canoniques du créateur. Voir [`products/cpmm/fees`](/docs/i18n/fr/products/cpmm/fees).
+
+## Le LP verrouillé est un droit de plateforme séparé
+
+Lors de la migration CPMM, LaunchLab valide toujours :
+
+```text
+platform_scale + creator_scale + burn_scale = 1_000_000
+```
+
+Avant la mise à jour du 2026-08-17, LaunchLab verrouillait `creator_scale` séparément et frappait la clé de frais correspondante au créateur du token. Pour les migrations exécutées après la mise à jour, il combine `platform_scale + creator_scale`. Si la part combinée est non nulle, le programme LP-Lock crée une clé de frais NFT pour `platform_nft_wallet`. Le reste `burn_scale` est brûlé.
+
+Le champ `creator_scale` conservé n'est donc pas un flux de revenus de créateur pour les migrations exécutées sous le programme mis à jour. Il contribue au montant du LP verrouillé de la plateforme. Pour les pools historiques, lisez les enregistrements réels de clé de frais et de liquidité verrouillée plutôt que de déduire la propriété de la règle actuelle.
+
+Les clés de frais créées par les migrations terminées avant la mise à jour ne sont pas réaffectées ni modifiées. Un lancement créé avant la mise à jour mais migré après utilise la nouvelle distribution détenue par la plateforme.
+
+## Chemins de réclamation
+
+| Revenu | Bénéficiaire | Chemin de réclamation |
+|---|---|---|
+| Frais de créateur de courbe de liaison | Créateur de lancement original | LaunchLab `ClaimCreatorFee` |
+| Frais de créateur CPMM | `pool_creator` CPMM | Collection signée par le créateur CPMM ou sans permission |
+| Frais de trading LP verrouillé, migration pré-mise à jour | Détenteur actuel de la clé de frais de créateur ou de plateforme créée à cette migration | Flux de récolte LP-Lock / Burn & Earn |
+| Frais de trading LP verrouillé, migration mise à jour | Détenteur actuel de la clé de frais de plateforme | Flux de récolte LP-Lock / Burn & Earn |
+
+## Liste de contrôle pour les intégrateurs
+
+- Lisez `platform_cp_creator` pour identifier le bénéficiaire des frais de créateur CPMM après la graduation.
+- Pour les migrations mises à jour, n'affichez pas `creator_scale` comme pourcentage de clé de frais de créateur. Pour les migrations historiques, lisez l'enregistrement réel de la clé de frais.
+- Suivez le coffre de la courbe de liaison et les compteurs de frais de créateur CPMM séparément.
+- Traitez la clé de frais de plateforme comme un droit de frais LP, pas une accréditation de frais de créateur CPMM.
+- Actualisez l'IDL déployé avant d'activer le générateur de migration mis à jour.
+
+## Références
+
+- [`products/launchlab/platform-config`](/docs/i18n/fr/products/launchlab/platform-config) — champs d'échelle et de créateur d'enregistrement.
+- [`products/launchlab/tips-and-gotchas/lp-fee-distribution`](/docs/i18n/fr/products/launchlab/tips-and-gotchas/lp-fee-distribution) — répartition exacte du LP.
+- [`products/cpmm/fees`](/docs/i18n/fr/products/cpmm/fees) — accumulation et collection des frais de créateur CPMM.
+- [`user-flows/burn-and-earn`](/docs/i18n/fr/user-flows/burn-and-earn) — mécanique des clés de frais.

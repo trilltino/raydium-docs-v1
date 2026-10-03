@@ -1,0 +1,79 @@
+---
+title: "Distribution des frais LP"
+description: "Comment LaunchLab combine les échelles de plateforme et de créateur en LP verrouillé détenu par la plateforme et brûle les jetons LP CPMM restants."
+---
+
+<Info>
+  **Cette page est traduite automatiquement par IA. La version anglaise fait foi.**
+
+  [Voir la version anglaise →](/docs/en/products/launchlab/tips-and-gotchas/lp-fee-distribution)
+</Info>
+
+Lorsqu'un jeton LaunchLab migre vers CPMM, le pool crée des jetons LP. Avant la mise à jour du 2026-08-17, `creatorScale` était verrouillé séparément pour le créateur du jeton. Pour les migrations exécutées après la mise à jour, `migrateCpLockNftScale` stocke toujours trois champs qui s'ajoutent à `1_000_000`, mais l'exécution ne produit que deux destinations.
+
+## Répartition effective
+
+| Champ | Comportement mis à jour |
+|---|---|
+| `platformScale` | Inclus dans la part LP verrouillée détenue par la plateforme. |
+| `creatorScale` | Avant la mise à jour, créait une Fee Key détenue par le créateur. Après la mise à jour, elle est incluse dans la part LP verrouillée détenue par la plateforme. |
+| `burnScale` | Brûlé définitivement. Aucune Fee Key ne représente cette part. |
+
+```text
+effectivePlatformScale = platformScale + creatorScale
+platformLp = floor(totalLp × effectivePlatformScale / 1_000_000)
+burnLp = totalLp − platformLp
+```
+
+Lorsque `burnScale` est zéro, la plateforme reçoit toutes les unités LP. Lorsque `effectivePlatformScale` est zéro, tout le LP est brûlé et aucune Fee Key de plateforme n'est créée.
+
+## Exemples
+
+```ts
+// @raydium-io/raydium-sdk-v2@0.2.64-alpha · mainnet-beta · verified 2026-08-13
+// 90% LP verrouillé détenu par la plateforme, 10% brûlé.
+migrateCpLockNftScale: {
+  platformScale: new BN(900_000),
+  creatorScale: new BN(0),
+  burnScale: new BN(100_000),
+}
+
+// Sous le programme mis à jour, cela produit 100% LP verrouillé détenu par la plateforme.
+migrateCpLockNftScale: {
+  platformScale: new BN(1_000_000),
+  creatorScale: new BN(0),
+  burnScale: new BN(0),
+}
+
+// 100% brûlé ; aucune Fee Key.
+migrateCpLockNftScale: {
+  platformScale: new BN(0),
+  creatorScale: new BN(0),
+  burnScale: new BN(1_000_000),
+}
+
+// A stored value you may still READ off a pre-2026-08-17 config — not settable now.
+// Its 500_000 creator share is folded into the platform's locked LP at migration:
+// { platformScale: 400_000, creatorScale: 500_000, burnScale: 100_000 }
+```
+
+## Relation avec les frais créateur CPMM
+
+Les champs d'échelle contrôlent uniquement la propriété du LP. Ils ne définissent pas les taux de frais de swap ni n'identifient le bénéficiaire des frais créateur CPMM. `cpConfigId` sélectionne la `AmmConfig` CPMM ; `platformCpCreator` détermine si le pool CPMM enregistre le créateur de lancement original ou une adresse sélectionnée par la plateforme.
+
+## Mise à jour de la répartition
+
+Avant de mettre à jour une plateforme :
+
+- Confirmez que les trois valeurs s'ajoutent exactement à `1_000_000`.
+- Présentez `platformScale + creatorScale` comme la part effective de la plateforme.
+- Ne promettez pas une Fee Key créateur basée sur `creatorScale`.
+- Préservez la propriété de la Fee Key créateur affichée par les migrations complétées avant la mise à jour ; ces enregistrements ne sont pas réécrits.
+- Expliquez le changement avant que les futurs lancements utilisent la configuration mise à jour.
+
+## Ressources
+
+- [Configuration de plateforme](/docs/i18n/fr/products/launchlab/platform-config)
+- [Burn & Earn](/docs/i18n/fr/user-flows/burn-and-earn)
+- [Référence des frais LaunchLab & CPMM](/docs/i18n/fr/products/launchlab/tips-and-gotchas/launchlab-cpmm-fee-reference)
+- [Frais créateur LaunchLab](/docs/i18n/fr/products/launchlab/creator-fees)

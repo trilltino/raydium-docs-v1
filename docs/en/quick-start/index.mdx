@@ -1,0 +1,72 @@
+---
+title: "Quick start"
+description: "Three scripts that swap, create a CPMM pool, and create a CLMM pool with an initial position — real on-chain output, minimum config. The swap and CPMM scripts are paste-and-go; the CLMM flow takes a few extra steps."
+---
+
+<Info>
+  **What this chapter is.** Three end-to-end scripts that each perform a real on-chain operation against Raydium. The swap and CPMM scripts are single files you paste, configure with env vars, and run. The CLMM script is a multi-file flow — see its own page for what that involves. Use these to validate your setup before building anything bigger.
+
+  **What this chapter is not.** Reference documentation. For the full builder API, parameter reference, and corner cases, see [SDK & API](/docs/en/sdk-api) and the per-product `code-demos` pages.
+</Info>
+
+## Prerequisites
+
+Run this once:
+
+```bash icon="terminal"
+mkdir raydium-quickstart && cd raydium-quickstart
+npm init -y
+npm install @raydium-io/raydium-sdk-v2 @solana/web3.js @solana/spl-token bn.js
+```
+
+You need:
+
+- **Node 18+** with ESM support (`"type": "module"` in `package.json` or `.mjs` extension).
+- **A Solana keypair** at `~/.config/solana/id.json` (or anywhere — set `KEYPAIR`). See [`solana-fundamentals/toolchain`](/docs/en/solana-fundamentals/toolchain#solana-cli) for generating a keypair.
+- **A funded wallet.** The swap script needs only its input amount plus a small cushion — a CPMM swap costs ~0.0015 SOL in network fees (see [`reference/fee-comparison`](/docs/en/reference/fee-comparison#network-fees-per-typical-operation)), plus one-time rent if the swap has to open a token account for you. Creating a pool costs more: the CPMM script alone carries a ~0.15 SOL one-time pool-creation fee before seed liquidity or rent. See each script's own Setup section for the current figure before funding your wallet.
+- **An RPC URL.** Free public RPC works for testing; for anything more than a smoke test, use a paid provider.
+
+Set these once per shell:
+
+```bash icon="terminal"
+export RPC_URL="https://api.mainnet-beta.solana.com"
+export KEYPAIR="$HOME/.config/solana/id.json"
+```
+
+<Info>
+  **Cluster.** All three scripts default to mainnet. Devnet needs `RPC_URL=https://api.devnet.solana.com` plus `cluster: "devnet"` inside the script — for the two pool-creation scripts, that's not the only change; see each script's own Setup section for what else has to move. Be aware that pool seed liquidity on devnet is sparse; expect to mint your own test tokens.
+</Info>
+
+## The three scripts
+
+<CardGroup cols={3}>
+  <Card title="Swap from CLI" icon="right-left" href="/docs/en/quick-start/swap-from-cli">
+    Quote and execute a swap through a CPMM pool — the fastest way to confirm your setup works.
+  </Card>
+  <Card title="Deploy a CPMM pool" icon="droplet" href="/docs/en/quick-start/deploy-cpmm-pool">
+    Create a new CPMM pool for a token pair you choose, seeded with initial liquidity at the 0.25% fee tier.
+  </Card>
+  <Card title="Deploy a CLMM pool" icon="chart-line" href="/docs/en/quick-start/deploy-clmm-pool">
+    Create a new CLMM pool and open an initial concentrated position, at the lowest fee tier by default.
+  </Card>
+</CardGroup>
+
+## After this chapter
+
+Each script prints its on-chain result — a swap quote and transaction link, new pool addresses, or a new position and its NFT — and a single line pointing at the next page in the [SDK & API](/docs/en/sdk-api) chapter for the operation it performed. When you're ready to write your own integration:
+
+- **Backends and bots** → [Trade API](/docs/en/sdk-api/trade-api).
+- **Frontends and full-control apps** → [TypeScript SDK](/docs/en/sdk-api/typescript-sdk).
+- **On-chain composition** → [Rust CPI](/docs/en/sdk-api/rust-cpi).
+- **Picking among them** → the comparison table at the top of [SDK & API](/docs/en/sdk-api).
+
+## Version banner
+
+```text
+SDK:       @raydium-io/raydium-sdk-v2@0.2.64-alpha   (pin advanced 2026-09-09)
+Programs:  see /reference/program-addresses
+Cluster:   mainnet-beta (also runs on devnet with the change noted above)
+Verified:  2026-09-09 (checked against 0.2.64-alpha source and the demo repo)
+```
+
+If a script breaks on a newer SDK version, check the SDK's release notes — the builder return shapes have evolved between minor releases.

@@ -1,0 +1,183 @@
+---
+title: "Oracle- und Token-Risiken"
+description: "Wie Raydium Oracle-Eingaben verarbeitet und welche spezifischen Risiken Token-2022-Erweiterungen mit sich bringen — Freeze Authority, Transfer Hook, Permanent Delegate, Default-Frozen — einschließlich dessen, was die Programme schützen und was Benutzer akzeptieren müssen."
+---
+
+<Info>
+  **Diese Seite wurde mit KI automatisch übersetzt. Maßgeblich ist stets die englische Version.**
+
+  [Englische Version ansehen →](/docs/en/security/oracle-and-token-risks)
+</Info>
+
+<Info>
+  Raydiums Kernprodukte sind nicht auf externe Oracles für die Preisbestimmung angewiesen — der Pool-Status *ist* das Oracle. Die API und das SDK verwenden jedoch externe Oracles für USD-Preise, die Benutzern angezeigt werden, und Token-2022-Mints bringen eine umfangreichere Kontrolle als SPL Token mit sich, von denen einige das Vertrauensmodell eines Pools grundlegend verändern. Diese Seite dokumentiert beides.
+</Info>
+
+## Oracles in Raydium
+
+### Intern: Der Pool ist das Oracle
+
+Für AMM v4, CPMM und CLMM wird die Preisdefinition des Protokolls ausschließlich aus dem Pool-Status abgeleitet:
+
+- AMM v4 / CPMM: `price = vaultB_balance / vaultA_balance` (unter Berücksichtigung der Dezimalstellen).
+- CLMM: `price = (sqrtPriceX64 / 2^64)^2 × 10^(decimalsA - decimalsB)`.
+
+Während eines Swaps, einer Einzahlung oder einer Auszahlung wird kein externes Oracle konsultiert. Dies ist der „vertrauenslose" Teil des AMM-Designs: Wenn die Pool-Mathematik korrekt ist, kann keine externe Manipulation eines Price Feeds sie beschädigen.
+
+### CLMM `ObservationState` als TWAP-Oracle
+
+CLMM-Pools verwalten ein `ObservationState`-Konto, das historische `sqrt_price`-Snapshots aufzeichnet. Andere Programme können damit zusammenarbeiten, um einen manipulationsresistenten zeitgewichteten Durchschnittspreis abzuleiten:
+
+```rust
+// Ein vereinfachter TWAP: Durchschnitt von (aktuell, N Slots zurück).
+let obs_now  = load_observation(pool, Clock::slot());
+let obs_past = load_observation(pool, Clock::slot() - 300);  // ~2 min zurück
+let twap = (obs_now.price_cumulative - obs_past.price_cumulative)
+         / (obs_now.slot - obs_past.slot);
+```
+
+Dies ist das gleiche Muster, das Uniswap V3 verwendet. Eine kurzfristige Preismanipulation (ein Wal drückt den Pool vorübergehend) beschädigt den TWAP nicht, da er über Hunderte von Slots gemittelt wird.
+
+Programme, die einen sichereren Price Feed für CLMM-Mints benötigen (Liquidationsoracles, Optionspreisgestaltung usw.), sollten ObservationState-TWAPs anstelle von Sofortpreisen verwenden.
+
+**Verwenden Sie keine sofortigen CLMM-Preise für Zusammensetzung.** Ein einzelner großer Swap kann den Spotpreis um 10%+ auf einem flachen Pool verschieben; der TWAP dämpft dies. Siehe [`products/clmm/accounts#observation-state`](/docs/i18n/de/products/clmm/accounts) für das Datenlayout.
+
+### Extern: USD-Preisgestaltung auf Frontend/API
+
+Raydiums Frontend und `api-v3.raydium.io` zeigen USD-Werte an (TVL, Fee APR, $ Volume). Diese stammen von:
+
+- **Pyth** als primäres Oracle für große Mints.
+- **Jupiters Aggregator-Preis** als Fallback.
+- **Pool-abgeleiteter Preis** für Long-Tail-Mints ohne externe Oracle-Abdeckung.
+
+USD-Anzeigen sind rein kosmetisch — On-Chain-Operationen lesen niemals Pyth, und keine Pool-Mathematik verwendet USD. Wenn Pyth die Datenbereitstellung für einen Mint einstellt, zeigt die UI „—"; der Pool funktioniert weiter.
+
+### Oracle-Manipulation ist nicht auf Raydium-Pools anwendbar
+
+Da der Pool-Status das Oracle ist, gibt es keinen „Oracle-Angriff" im Sinne der Bug-Bounty-Literatur — keine externe manipulierbare Datenquelle, die der Angreifer beschädigen kann. Wirtschaftliche Angriffe auf den Pool-Status (Flash-Loan-ähnliche Manipulation) werden in [`security/attack-vectors`](/docs/i18n/de/security/attack-vectors) behandelt.
+
+## Token-2022-Erweiterungsrisiken
+
+SPL Token-2022 (auch „Token Extensions" genannt) fügt Mints über Erweiterungen konfigurierbares Verhalten hinzu. Einige Erweiterungen ändern die Vertrauenseigenschaften von Pools, die sie enthalten. Raydium-Programme verarbeiten einige automatisch und zeigen andere als Benutzerwarnungen an.
+
+### Transfer Fee
+
+**Was es ist:** Eine konfigurierbare Gebühr (Prozentsatz der Übertragung, bis zu einer `maximum_fee`-Obergrenze in absoluten Begriffen), die der Absender bei jeder Übertragung an die Mint-Autorität zahlt.
+
+**Risiko:** Die Gebühr kann von der Fee-Config-Autorität des Mints geändert werden. Wenn Sie Liquidität einzahlen, wenn die Gebühr 1% beträgt, und die Autorität erhöht sie auf 50%, erhalten nachfolgende Swaps viel weniger als erwartet.
+
+**Risikominderung in Raydium:** Pools lesen die aktuelle `transferFeeConfig` zum Swap-Zeitpunkt und passen die Mathematik an. Der Pool selbst wird nicht beschädigt, aber Benutzer sehen schlechtere Ausgaben. Die Fee-Autorität kann auch eine verzögerte Gebührenänderung planen; Raydiums UI kennzeichnet Pools mit bevorstehenden Gebührenänderungen.
+
+**Verbleibendes Risiko:** Wenn eine böswillige Fee-Autorität die Gebühr während Ihres laufenden Swaps ändert, schützt Ihr `minimumAmountOut` die Unterseite — die Transaktion wird rückgängig gemacht. Wenn Sie dem Mint-Aussteller vertrauen, ist dies in Ordnung; wenn nicht, LP nicht.
+
+### Transfer Hook
+
+**Was es ist:** Eine Übertragung ruft ein separates Programm (den „Hook") auf, um benutzerdefinierte Validierung oder Nebenwirkungen auszuführen.
+
+**Risiko:** Der Hook kann jede Übertragung blockieren, einschließlich der internen Übertragungen des Pools während eines Swaps. Ein aktualisierbarer Hook kann später böswillig werden — was zum Zeitpunkt der Einzahlung sicher war, kann zum Zeitpunkt der Auszahlung nicht mehr austauschbar sein.
+
+**Risikominderung in Raydium:** Raydium listet eine Hook-Programm-ID im Pool-Status auf. Integrationen sollten die Hook-Programm-ID Benutzern anzeigen, damit sie überprüfen können, dass es sich um das erwartete (nicht aktualisierbare, geprüfte) Programm handelt.
+
+**Verbleibendes Risiko:** Wenn ein Hook aktualisierbar ist und seine Autorität feindselig wird, kann der Pool eingefroren werden. Raydium blockiert Pools mit Transfer Hooks nicht, kennzeichnet sie aber. LP in einen Transfer-Hook-Pool nur, wenn der Hook als sicher verifiziert ist.
+
+### Freeze Authority
+
+**Was es ist:** Die Freeze Authority eines Mints kann jedes Token-Konto, das diesen Mint hält, einfrieren und alle Übertragungen verhindern.
+
+**Risiko:** Eine Freeze Authority mit der Möglichkeit, das Vault-Konto des Pools einzufrieren, schaltet den Pool effektiv aus — Benutzer können nicht abheben, Trader können nicht swappen. Dies gilt für SPL Token *und* Token-2022; es ist nicht neu mit Token-2022, aber es ist immer noch ein Risiko.
+
+**Risikominderung in Raydium:** Keine auf Programmebene — SPL Tokens Freeze ist für den Pool undurchsichtig. Raydiums UI warnt vor Pools mit gefrierbaren Mints. Benutzer, die einzahlen, sollten überprüfen, dass die Freeze Authority null oder ein Multisig ist, dem sie vertrauen (USDC hat eine Freeze Authority; es ist der Aussteller Circle).
+
+**Verbleibendes Risiko:** Akzeptieren Sie, dass gefrierbaren Mints eingefroren werden können. Große Mints (USDC, USDT, USDY) haben Freeze Authorities, die vom Aussteller gehalten und nur für behördliche Compliance verwendet werden; dies ist normalerweise akzeptabel.
+
+#### CLMM Positionen mit eingeschränkter Aussteller-NFT
+
+CLMM wendet eine zusätzliche Kontrolle für ausgewählte KYC-eingeschränkte Aussteller-Freeze-Authorities an. Wenn die Freeze Authority eines der Pool-Mints mit der hardcodierten Liste des Programms übereinstimmt, haben neue Positionen, die über `OpenPositionV2` oder `OpenPositionWithToken22Nft` geöffnet werden, ihr NFT-Token-Konto sofort eingefroren. Das entsprechende Pool-PDA ist die Freeze Authority des Position-NFT-Mints.
+
+Dies verhindert, dass die Position auf ein nicht genehmigtes Wallet übertragen wird oder dass der Token-Konto-Besitzer geändert wird. Es gibt dem zugrunde liegenden Token-Aussteller **keine** Kontrolle über die Position-NFT: Nur das CLMM-Pool-PDA ist die Freeze Authority der Position-NFT, und das Programm verwendet es, um nur als Teil von `ClosePosition` vor dem Burn zu tauen. Liquiditätsverwaltung und Gebühren- oder Belohnungserfassung erfordern weiterhin den NFT-Besitzer.
+
+Bestehende Positionen bleiben aufgetaut. Integratoren müssen Übertragbarkeit als positionsspezifischen Status behandeln und das `isFrozen`-Flag des NFT-Token-Kontos lesen.
+
+### Permanent Delegate
+
+**Was es ist:** Eine Token-2022-Erweiterung, die einen permanenten Delegaten bestimmt, der Token von jedem Inhaber ohne Genehmigung übertragen kann.
+
+**Risiko:** Der permanente Delegat kann das Vault des Pools jederzeit leeren.
+
+**Risikominderung in Raydium:** CPMM und CLMM **weigern sich, Pools zu erstellen** mit Mints, die einen permanenten Delegaten haben. Die Initialisierung wird rückgängig gemacht. Kein laufender Raydium-Pool hat einen Mint mit permanentem Delegaten.
+
+**Verbleibendes Risiko:** Null (solange die Überprüfung korrekt ist, was beide Audits bestätigt haben).
+
+### Non-transferable
+
+**Was es ist:** Mints, die von Inhabern nicht übertragen werden können.
+
+**Risiko:** Pools hängen von Übertragbarkeit ab, um Token zwischen Benutzer-ATAs und Pool-Vaults zu verschieben. Nicht übertragbare Mints brechen Pools trivial.
+
+**Risikominderung in Raydium:** Die Pool-Erstellung wird bei nicht übertragbaren Mints rückgängig gemacht. Farmen weigern sich auch, nicht übertragbare Staking-Mints zu verwenden.
+
+### Default-frozen / Close-Authority / Interest-Bearing
+
+Weniger kritische Erweiterungen, die von Raydium verarbeitet werden:
+
+- **Default-frozen**: Neue Token-Konten müssen vor der Verwendung aufgetaut werden. Raydium verarbeitet dies transparent bei der ATA-Erstellung.
+- **Close-authority**: Eine bestimmte Autorität kann Token-Konten schließen. Pool-Vaults werden von der programmabgeleiteten Autorität des Pools besessen, daher gilt Close-Authority auf dem *Mint* nicht für den Vault.
+- **Interest-bearing**: Der angezeigte Saldo sammelt Zinsen an; `amount` bleibt fest, aber `uiAmount` wächst. Raydium-Pool-Mathematik verwendet `amount`, nicht Zinsen; die Anzeige wird separat angepasst.
+
+### Mint Authority
+
+Kein Token-2022-spezifisches Risiko, aber erwähnenswert: Wenn ein Mint die Mint Authority behält, kann der Inhaber die Versorgung nach Belieben erhöhen. Für gestartete Token verdünnt dies LPs zum aktuellen Pool-Preis. LaunchLab weigert sich, Launches zu erstellen, es sei denn, die Mint Authority ist null.
+
+## Risiko-Labels in der UI
+
+Raydiums Frontend kennzeichnet jeden Pool mit anwendbaren Risiko-Tags:
+
+- **TRANSFER_FEE** — Nicht-Null-Transfergebühr.
+- **TRANSFER_HOOK** — Transfer-Hook-Erweiterung aktiv.
+- **FREEZE** — Mint hat eine Freeze Authority.
+- **MINT** — Mint hat eine Mint Authority (Versorgung kann erhöht werden).
+- **CLOSE** — Mint hat eine Close Authority.
+
+Aggregatoren, die Raydiums API nutzen, sollten diese Labels Benutzern anzeigen.
+
+## Integrator-Checkliste
+
+Vor der Zusammensetzung mit einem Raydium-Pool:
+
+- [ ] Überprüfen Sie die Erweiterungen jedes Mints über `getMint(mint, TOKEN_2022_PROGRAM_ID)`.
+- [ ] Überspringen Sie Pools, bei denen ein Mint permanent_delegate oder non_transferable hat (diese sollten in Raydium nicht existieren, aber Verteidigungstiefe).
+- [ ] Überprüfen Sie die Freeze Authority für beide Mints; nur null oder vertrauenswürdige Autorität.
+- [ ] Bevor Sie Position-Übertragung, Escrow oder Burn & Earn anbieten, bestätigen Sie, dass das CLMM-Position-NFT-Token-Konto nicht eingefroren ist.
+- [ ] Überprüfen Sie für Transfer-Hook-Pools die Hook-Programm-ID gegen eine Whitelist.
+- [ ] Dimensionieren Sie die Exposition gegen Transfer-Fee-Szenarien (was ist, wenn die Gebühr auf Maximum geht?).
+- [ ] Verwenden Sie CLMM TWAP (ObservationState) anstelle von Spotpreis für Derivate-Preisgestaltung.
+
+## Erklärung zur Akzeptanz verbleibender Risiken
+
+Raydiums Programme erzwingen, was auf Programmebene erzwungen werden kann:
+
+- Pool-Erstellung weigert sich, Mints mit permanentem Delegaten / nicht übertragbar zu erstellen.
+- Swap-Mathematik passt sich korrekt an aktuelle Transfergebühren an.
+- ObservationState bietet ein manipulationsresistentes Oracle.
+
+Verbleibende Risiken, die Benutzer akzeptieren müssen:
+
+- Die Freeze Authority eines Mints kann den Pool einfrieren.
+- Die Fee Authority eines Mints kann die Transfergebühr (bis zur `maximum_fee`-Obergrenze) jederzeit erhöhen.
+- Ein Transfer-Hook-Programm kann auf böswilligen Code aktualisiert werden.
+- Die Abzinsungsrate eines Interest-Bearing-Mints kann geändert werden.
+
+Die richtige Verteidigung ist Sorgfalt vor dem LP: Zahlen Sie nicht in Pools mit Mints ein, die konzentrierte Authorities haben, denen Sie nicht vertrauen. Raydium kann diese Vertrauensfrage nicht für Sie entscheiden; es kann nur die relevanten Fakten anzeigen.
+
+## Verweise
+
+- [`algorithms/token-2022-transfer-fees`](/docs/i18n/de/algorithms/token-2022-transfer-fees) — Mathematische Anpassungen für Transfer-Fee-Mints.
+- [`security/attack-vectors`](/docs/i18n/de/security/attack-vectors) — Wie sich diese Risiken als konkrete Angriffe manifestieren.
+- [`integration-guides/wallet-integration`](/docs/i18n/de/integration-guides/wallet-integration) — Anzeige von Token-2022-Risiko-Labels.
+- [`products/clmm/accounts`](/docs/i18n/de/products/clmm/accounts) — ObservationState-Layout.
+
+Quellen:
+
+- [SPL Token-2022 Extensions Dokumentation](https://www.solana-program.com/docs/token-2022/extensions).
+- Pool-Initialisierungs-Validierungslogik: `src/raydium/cpmm/instrument.ts`, `src/raydium/clmm/instrument.ts`.
+- [Pyth](https://pyth.network) — Externes Price Oracle, das auf dem Frontend verwendet wird.

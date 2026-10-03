@@ -1,0 +1,204 @@
+---
+title: "TypeScript SDK"
+description: "@raydium-io/raydium-sdk-v2 엔드-투-엔드 — 설치, 네 가지 모듈 파사드, 트랜잭션 빌딩, 그리고 모든 신규 통합자가 마주치는 함정들."
+---
+
+<Info>
+  **이 페이지는 AI 자동 번역입니다. 모든 내용은 영문판을 기준으로 합니다.**
+
+  [영문판 보기 →](/docs/en/sdk-api/typescript-sdk)
+</Info>
+
+<Info>
+  **버전 배너.** 이 페이지는 `@raydium-io/raydium-sdk-v2@0.2.64-alpha`를 문서화합니다. 이 사이트의 모든 코드 데모가 이 버전을 고정합니다. SDK는 1.0 이전 버전이며 타입 표면이 릴리스 간에 변경되었습니다 — 버전을 고정하세요.
+
+  버전 고정은 2026-09-09에 `0.2.42-alpha`에서 `0.2.64-alpha`로 업그레이드되었으며, 프로그램 업그레이드와 함께 진행되었습니다. [`raydium-sdk-V2-demo`](https://github.com/raydium-io/raydium-sdk-V2-demo) 저장소는 `0.2.62-alpha`를 설치하므로, 데모를 그대로 따라가는 경우 둘 중 하나를 고정하세요. 이 페이지의 데모는 마지막으로 `0.2.42-alpha` (2026-04)에 대해 **실행**되었습니다. 호출 서명은 2026-09-09에 `0.2.64-alpha` 소스에 대해 다시 확인되었지만, 불일치가 있으면 문서 버그로 취급하고 [이슈를 열어주세요](https://github.com/raydium-io/raydium-docs-v1/issues/new).
+</Info>
+
+## 설치
+
+```bash
+npm install @raydium-io/raydium-sdk-v2 @solana/web3.js @solana/spl-token
+# 또는
+pnpm add @raydium-io/raydium-sdk-v2 @solana/web3.js @solana/spl-token
+```
+
+SDK는 TypeScript로 작성되었으며 JS 아티팩트와 함께 `.d.ts`를 제공합니다. 최소 도구 체인: Node 18+, TypeScript 5.0+, `moduleResolution: "bundler"` 또는 `"node16"`.
+
+## 초기화
+
+진입점은 `Raydium.load`입니다:
+
+```ts
+import { Raydium } from "@raydium-io/raydium-sdk-v2";
+import { Connection, Keypair, clusterApiUrl } from "@solana/web3.js";
+
+const connection = new Connection(process.env.RPC_URL ?? clusterApiUrl("mainnet-beta"));
+const owner      = Keypair.fromSecretKey(/* ... */);
+
+const raydium = await Raydium.load({
+  owner,
+  connection,
+  cluster: "mainnet",           // "mainnet" | "devnet"
+  disableFeatureCheck: true,    // SDK의 시작 기능 감지 API 호출 건너뛰기
+  blockhashCommitment: "confirmed",
+});
+```
+
+`Raydium.load`는 기본적으로 `api-v3.raydium.io`에서 토큰 목록(`raydium.token.load()`)을 로드하기 때문에 비동기입니다. 그 페치를 건너뛰려면 `disableLoadToken: true`를 전달하세요. 가용성 기능 검사는 `/v3/main/AvailabilityCheckAPI`에 대한 별도 호출이며, `disableFeatureCheck: false`를 명시적으로 전달하지 않는 한 **이미 건너뜁니다**. 수수료 구성은 로드 시점에 전혀 페치되지 않습니다 — 첫 사용 시 `raydium.api.getCpmmConfigs()` / `getClmmConfigs()`에서 지연 로드됩니다.
+
+## 모듈 파사드
+
+로드되면 `raydium` 객체는 열 개의 모듈 파사드와 API 클라이언트를 노출합니다:
+
+```ts
+raydium.cpmm       // CPMM pools: createPool, addLiquidity, withdrawLiquidity, swap, ...
+raydium.clmm       // CLMM pools: createPool, openPositionFromBase, increasePositionFromBase,
+                   //             decreaseLiquidity, harvestAllRewards, swap, limit orders, ...
+raydium.liquidity  // AMM v4 pools: computeAmountOut, swap, addLiquidity, removeLiquidity, ...
+raydium.farm       // Farm v3/v5/v6: deposit, withdraw, harvestAllRewards, create,
+                   //                restartReward(s), addNewRewardToken(s)
+raydium.launchpad  // LaunchLab: createLaunchpad, buyToken, buyTokenExactOut, sellToken,
+                   //            claimCreatorFee, curve-rule and platform-config builders, ...
+raydium.tradeV2    // Multi-pool routing: route discovery, compute, route-execution
+raydium.marketV2   // OpenBook market creation (legacy)
+raydium.utils1216  // One-off historical-claim helpers
+raydium.token      // Token list + metadata: load(), getTokenInfo()
+raydium.account    // Wallet token accounts, ATA lookup and creation
+raydium.api        // The REST client (fetchPoolById, getCpmmConfigs, fetchLaunchConfigs, ...)
+```
+
+## 트랜잭션 빌더
+
+모든 변경 함수는 즉시 실행하지 않고 빌더를 반환합니다:
+
+```ts
+import { Percent } from "@raydium-io/raydium-sdk-v2";
+
+const { execute, builder, transaction, instructionTypes, signers, extInfo } =
+  await raydium.cpmm.addLiquidity({
+    poolInfo,
+    inputAmount,              // BN — one side, not a pair
+    baseIn: true,
+    slippage: new Percent(1, 100),   // a Percent, not a number
+    txVersion: TxVersion.V0,
+  });
+```
+
+반환된 필드:
+
+- **`execute`** — 서명 + 전송하는 편의 함수입니다. `builder.execute`와 동등합니다.
+- **`builder`** — 모든 명령어와 서명자가 누적된 `TxBuilder` 인스턴스입니다. `builder.build()`는 `transaction`이 단일 레거시 `Transaction`인 `TxBuildData`를 반환하고, `builder.buildV0()`은 단일 `VersionedTransaction`을 담은 `TxV0BuildData`를 반환합니다. 배열을 만드는 것은 `buildMultiTx` / `buildMultiTxV0`뿐입니다.
+- **`transaction`** — 빌드된 `Transaction` / `VersionedTransaction`입니다.
+- **`instructionTypes`** / **`signers`** — 누적된 명령어 라벨과 서명자 집합입니다.
+- **`extInfo`** — 제품별 추가 정보입니다. 예를 들어 `cpmm.createPool`은 `extInfo.address.{poolId, lpMint, vaultA, vaultB}`를 반환하고, `launchpad.createLaunchpad`는 `extInfo.address`(`LaunchpadPoolInfo`와 `poolId`)를 반환합니다.
+
+<Note>
+  반환 타입에는 `innerTransactions` 필드가 없습니다 — 이를 구조 분해하면 TypeScript 오류가
+  발생합니다. 반환 타입이 `MakeMultiTxData`인 빌더(예: `clmm.harvestAllRewards`,
+  `farm.harvestAllRewards`, `tradeV2.swap`, `launchpad.createLaunchpad`)는 대신
+  `transactions`를 노출하며, 그 `execute`는 `{ sequentially: boolean }`을 **요구**하고
+  `{ txId }`가 아니라 `{ txIds }`로 해석됩니다.
+</Note>
+
+`txVersion`은 레거시 vs V0 트랜잭션 형식을 제어합니다. V0 (주소 조회 테이블)이 기본 권장사항입니다 — 더 큰 스왑이 단일 트랜잭션에 맞을 수 있게 합니다.
+
+### 왜 비동기 빌더인가요?
+
+거의 모든 빌더는 내부적으로 온체인 상태를 가져옵니다: 풀 정보 (견적용), 토큰 프로그램 소유권 (Token-2022 vs SPL 라우팅용), 계정 렌트 면제 (ATA 생성용) 등. SDK는 적극적으로 캐시하지만 새로운 풀에 대한 첫 호출은 RPC 왕복을 포함합니다. 재가져오기를 피하려면 오래 지속되는 `raydium` 인스턴스를 유지하세요.
+
+## CLMM 모듈 추가 (최신 릴리스)
+
+CLMM 파사드는 새로운 동적 수수료, 단측 수수료, 그리고 지정가 주문 기능을 위한 표면을 얻었습니다:
+
+- **`raydium.clmm.createCustomizablePool`** — `collectFeeOn`과 `dynamicFeeConfig`(구성 계정의 `PublicKey`)를 허용하는 `createPool`의 상위 집합입니다. `dynamicFeeConfig`를 제공하는 것이 곧 동적 수수료를 활성화하는 것이며, 별도의 `enableDynamicFee` 플래그도 `dynamicFeeConfigId`도 없습니다. 클래식 `createPool`은 기본 수수료 풀에 계속 작동합니다.
+- **`raydium.clmm.openLimitOrder`** — 단일 틱 지정가 주문을 엽니다. `poolInfo`, `baseIn`(방향), `orderTick`, `amount`, 그리고 선택적으로 `tickArrayBitmap`, `noneIndex`, `ownerInfo`를 받습니다. 틱을 양자화하려면 내보내진 `getOrderTick({ baseIn, mintADecimal, mintBDecimal, tickSpacing, price })` 헬퍼를 사용하세요.
+- **`raydium.clmm.increaseLimitOrder` / `decreaseLimitOrder`** — 기존 주문의 미체결 부분을 조정합니다. 둘 다 `{ poolInfo, limitOrder, amount }`를 받으며, `decreaseLimitOrder`는 선택적 `slippage`를 추가합니다. 완전히 체결된 주문에서 감소하면 `InvalidOrderPhase`로 되돌립니다.
+- **`raydium.clmm.settleLimitOrder` / `settleAllLimitOrder`** — 체결된 출력을 소유자의 ATA로 스윕합니다. `settleLimitOrder`는 `{ limitOrder }`만 받으며 `poolInfo`는 받지 않습니다. 주문의 소유자 또는 프로그램의 `limit_order_admin` 키퍼가 호출할 수 있습니다.
+- **`raydium.clmm.closeLimitOrder` / `closeAllLimitOrder`** — 완전히 정산된 주문을 닫아 렌트를 회수합니다.
+- **`raydium.api.getClmmDynamicConfigs()`** — 새로운 `/main/clmm-dynamic-config` 엔드포인트를 호출하는 REST 헬퍼입니다. (지정가 주문 구성 헬퍼나 엔드포인트는 없습니다: 지정가 주문은 풀별 구성 계정이 아니라 틱으로 키가 지정됩니다.)
+
+패키지는 서브패스 내보내기를 선언하지 않으므로 `@raydium-io/raydium-sdk-v2/<anything>`은 어떤 표기로도 해석되지 않습니다 — 모든 것을 최상위 배럴에서 임포트하세요. (내부적으로 `src/raydium/clmm/utils/`가 `src/raydium/clmm/libraries/`로 이름이 바뀌었지만, 그것은 애초에 공개 진입점이 아니었습니다.)
+
+엔드-투-엔드 TypeScript 연습은 [`products/clmm/code-demos`](/docs/i18n/ko/products/clmm/code-demos)에 있습니다.
+
+## 일반적인 함정
+
+### 1. 클러스터 불일치
+
+SDK의 시작 구성은 클러스터별입니다. `cluster: "mainnet"`을 devnet `Connection`과 혼합하면 자동 라우팅이 잘못됩니다: SDK는 mainnet `AmmConfig`에 대해 견적을 하지만 devnet으로 전송합니다. 항상 둘 다 전달하세요.
+
+### 2. ATA 사전 생성 잊기
+
+민트와의 첫 상호작용에서 사용자의 Associated Token Account가 존재하지 않을 수 있습니다. SDK는 누락된 ATA를 감지할 때 `AssociatedTokenAccount::create` 명령어를 자동으로 앞에 추가하며, 이는 작은 렌트 비용이 듭니다. 지갑의 SOL이 부족하면 이것이 자동으로 실패합니다. 재시도하기 전에 확인하고 자금을 조달하세요.
+
+### 3. 오래된 `poolInfo`
+
+`poolInfo`는 캐시된 스냅샷입니다. 가져온 이후 풀 상태가 변경되었다면 (큰 거래가 가격을 이동했다고 하면), 스왑의 `minAmountOut`은 이전 상태에 대해 계산될 수 있으며 온체인 출력량 아래로 내려가 되돌립니다. 높은 가치 트랜잭션을 빌드하기 직전에 `poolInfo`를 다시 가져오거나, 예약을 다시 쿼리하는 SDK의 `computeAmountOut`을 사용하세요.
+
+### 4. 우선순위 수수료
+
+SDK는 기본적으로 계산 단위 가격을 추가하지 않습니다. 높은 거래량 기간 (새 풀 출시, 밈 코인 이벤트)에는 트랜잭션이 많은 다른 트랜잭션과 경쟁하며 도착하지 않을 수 있습니다. 명시적 `computeBudgetConfig`를 제공하세요:
+
+```ts
+const { execute } = await raydium.cpmm.swap({
+  poolInfo,
+  baseIn,                    // required: which side inputAmount is denominated in
+  inputAmount: new BN(...),
+  swapResult: ...,           // required: from CurveCalculator.swapBaseInput/Output
+  slippage: 0.005,
+  txVersion: TxVersion.V0,
+  computeBudgetConfig: {
+    units: 250_000,          // CU 제한
+    microLamports: 50_000,   // CU당 우선순위 수수료
+  },
+});
+```
+
+크기 조정 지침은 [`integration-guides/priority-fee-tuning`](/docs/i18n/ko/integration-guides/priority-fee-tuning)을 참조하세요.
+
+### 5. 슬리피지 허용치는 풀 유형과 일치해야 합니다
+
+CPMM과 AMM v4는 CPMM 수학입니다 (정상 거래에서 낮은 영향). CLMM은 구간별입니다 (영향이 틱 교차에서 점프). CPMM 예제에서 0.5% 슬리피지 허용치를 복사하여 여러 틱을 교차하는 CLMM 스왑에 붙여넣으면 트랜잭션이 되돌릴 가능성이 높습니다. SDK의 `computeAmountOut`은 `priceImpact`를 반환합니다. 허용치를 그 위에 크기 조정하세요.
+
+### 6. `BN` vs `number`
+
+SDK의 모든 금액 필드는 `bn.js` `BN` 인스턴스입니다 — JavaScript `number`가 아닙니다. `.toNumber()`를 통해 금액 값을 변환하면 `2^53`에서 자동으로 잘립니다. 약 9천조 이상의 값 (9소수 민트에서 흔하지 않음)의 경우 잘못된 결과를 생성합니다. 최종 UI 렌더링까지 모든 것을 `BN`으로 유지하세요.
+
+## 버전 관리 정책
+
+- `@raydium-io/raydium-sdk-v2`는 Raydium이 유지하는 유일한 SDK입니다. 모든 문서, 데모, 통합 지침이 이를 대상으로 합니다.
+- 이전 v1 패키지 (`@raydium-io/raydium-sdk`)는 역사적 이유로 npm에 존재합니다. 유지보수는 CPMM과 LaunchLab이 출시된 후 종료되었습니다 (v1은 둘 다 지원을 얻지 못했음). 2024년 이후 v1 릴리스가 없었습니다. v1을 수명 종료로 취급하세요: 새 코드에 사용하지 마세요. 남은 v1 통합을 v2로 마이그레이션하세요.
+- SDK v2는 1.0 이전입니다. 0.x 마이너 릴리스 간에 주요 변경이 가능합니다. 검증한 버전을 고정하고 업그레이드할 때 GitHub 릴리스 노트를 확인하세요.
+
+## 업그레이드
+
+SDK 마이너 버전 간에 업그레이드할 때:
+
+1. 모든 변경 호출의 반환 타입을 다시 확인하세요 — 형태 변경 (예: `extInfo`)이 자주 발생합니다.
+2. `poolInfo` 가져오기 서명을 다시 생성하세요 — 필드가 이름 변경되었을 수 있습니다.
+3. 슬리피지 처리를 다시 검증하세요. SDK는 릴리스에 걸쳐 자동 바운드와 옵트인 바운드 동작 사이를 전환해 왔습니다.
+4. `raydium.tradeV2`(라우팅)를 사용한다면 경로 형태를 다시 검증하세요 — 표면에서 가장 불안정한 부분입니다. 파사드 이름이 `trade`에서 `tradeV2`로 변경되었으며 기존 이름은 더 이상 존재하지 않는다는 점에 유의하세요.
+
+## 도움 받기
+
+SDK 및 API 질문의 경우:
+
+- **GitHub 이슈** — 버그 및 기능 요청은 [github.com/raydium-io/raydium-sdk-V2/issues](https://github.com/raydium-io/raydium-sdk-V2/issues)에 제출하세요. Raydium 팀이 적극적으로 모니터링합니다.
+- **Discord** — [discord.gg/raydium](https://discord.gg/raydium)의 `#dev-support` 채널에서 동기식 도움을 받으세요.
+- **Telegram** — [raydium.io](https://raydium.io)에서 연결된 개발자 채팅 (검증되지 않은 Telegram 그룹 피하기).
+
+보안 문제의 경우 공개 채널에 게시하지 **마세요** — [`security/disclosure`](/docs/i18n/ko/security/disclosure)를 참조하세요.
+
+## 포인터
+
+- [`sdk-api/rest-api`](/docs/i18n/ko/sdk-api/rest-api) — SDK의 HTTP 보완.
+- [`sdk-api/trade-api`](/docs/i18n/ko/sdk-api/trade-api) — 서버 구축 스왑 트랜잭션.
+- [`sdk-api/anchor-idl`](/docs/i18n/ko/sdk-api/anchor-idl) — 프로그램 IDL에서 직접 클라이언트 재생성.
+- [`sdk-api/python-integration`](/docs/i18n/ko/sdk-api/python-integration) — `solana-py`를 통한 Python 동등물.
+- [`integration-guides/priority-fee-tuning`](/docs/i18n/ko/integration-guides/priority-fee-tuning) — `computeBudgetConfig` 크기 조정.
+
+출처:
+
+- [Raydium SDK v2 소스](https://github.com/raydium-io/raydium-sdk-V2)
+- Raydium SDK 릴리스 노트.

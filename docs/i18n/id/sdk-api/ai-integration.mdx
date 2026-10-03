@@ -1,0 +1,168 @@
+---
+title: "Integrasi AI"
+description: "Hubungkan dokumentasi Raydium ke agen coding atau alur kerja LLM Anda — server MCP, indeks llms.txt, salinan per halaman, dan file konteks yang sudah dibangun."
+---
+
+<Info>
+  **Halaman ini diterjemahkan secara otomatis oleh AI. Versi bahasa Inggris adalah acuan resmi.**
+
+  [Lihat versi bahasa Inggris →](/docs/en/sdk-api/ai-integration)
+</Info>
+
+<Info>
+  Dokumentasi ini dirancang untuk dikonsumsi oleh alat AI maupun manusia. Jika Anda membangun dengan agen coding (Claude Code, Cursor, Windsurf, Continue, dll.) atau menjalankan RAG atas dokumentasi, permukaan di bawah ini memungkinkan Anda menghubungkan dokumentasi Raydium tanpa perlu scraping khusus.
+</Info>
+
+## Apa yang tersedia
+
+| Permukaan | Pola URL | Gunakan ketika |
+|---|---|---|
+| **Server MCP** | `https://docs.raydium.io/mcp` | Anda ingin editor AI Anda (Claude Code, Cursor, Windsurf, dll.) untuk menanyakan dan mengutip dokumentasi Raydium secara native. |
+| **Indeks `llms.txt`** | `https://docs.raydium.io/llms.txt` | Anda membangun pipeline RAG dan memerlukan indeks datar dari setiap halaman. |
+| **Badan `llms-full.txt`** | `https://docs.raydium.io/llms-full.txt` | Anda menginginkan corpus lengkap sebagai satu file yang digabungkan untuk pengindeksan offline. |
+| **Menu salinan per halaman** | Tombol `Copy page` di bagian atas setiap halaman isi | Anda menempel satu halaman ke dalam chat dengan LLM. |
+| **Deep-link per halaman** | `View as Markdown`, `Open in ChatGPT`, `Open in Claude`, `Open in Cursor`, `Open in VS Code` | Handoff satu klik dari halaman dokumentasi ke alat pilihan Anda. |
+
+Tombol `Copy page` dan menu deep-link berada di bagian atas-kanan setiap halaman (di sebelah judul halaman). Keduanya didukung oleh menu kontekstual platform dokumentasi.
+
+## Server MCP
+
+Server MCP (Model Context Protocol) memungkinkan klien AI untuk menanyakan dokumentasi Raydium sebagai alat. Setelah dikonfigurasi, agen Anda dapat bertanya "cari dokumentasi Raydium untuk parameter `addLiquidity`" dan mendapatkan jawaban yang berwibawa dengan kutipan kembali.
+
+### Claude Code
+
+```bash
+claude mcp add --transport http raydium-docs https://docs.raydium.io/mcp
+```
+
+Setelah menambahkan, minta Claude Code untuk "cari dokumentasi Raydium untuk X" dan itu akan menggunakan alat tersebut.
+
+### Cursor
+
+Tambahkan ke pengaturan Cursor Anda (`Cmd/Ctrl + ,` → MCP):
+
+```json
+{
+  "mcpServers": {
+    "raydium-docs": {
+      "url": "https://docs.raydium.io/mcp"
+    }
+  }
+}
+```
+
+### Windsurf, Continue, klien generik
+
+Klien apa pun yang kompatibel dengan MCP dapat menunjuk ke `https://docs.raydium.io/mcp`. Endpoint itu *adalah* permukaan penemuannya — sebuah `GET` mengembalikan konfigurasi server (nama, versi, transport, instruksi dan daftar tool), jadi tidak ada file manifest terpisah yang dibutuhkan atau dilayani.
+
+### Apa yang diekspos server
+
+Server MCP dokumentasi Raydium mengekspos satu alat utama, `search_docs(query: string)`, yang mengembalikan bagian dengan peringkat tertinggi untuk kueri beserta URL kanoniknya. Agen bertanggung jawab untuk mengutip URL yang digunakan; kami tidak melacak atau membatasi laju per agen.
+
+## `llms.txt` untuk RAG
+
+`llms.txt` adalah standar yang berkembang untuk "indeks dokumentasi yang dapat dibaca mesin". Raydium menerbitkan:
+
+- `https://docs.raydium.io/llms.txt` — daftar datar setiap halaman dengan judul dan ringkasan satu baris, diatur berdasarkan bab.
+- `https://docs.raydium.io/llms-full.txt` — badan Markdown lengkap dari setiap halaman, digabungkan, dengan batas halaman dipertahankan sebagai judul.
+
+Varian `full` dihasilkan ulang pada setiap penerapan dokumentasi. Tariknya sesuai jadwal (harian sudah cukup) atau ambil sesuai permintaan.
+
+```bash
+# Masukkan corpus lengkap ke dalam pipeline penyerapan RAG Anda.
+curl -sSL https://docs.raydium.io/llms-full.txt -o raydium-docs.md
+```
+
+## Menu handoff per halaman
+
+Setiap halaman isi memiliki menu kontekstual (atas-kanan, di sebelah judul) dengan tindakan satu klik ini:
+
+- **Copy** — salin halaman sebagai Markdown biasa.
+- **View as Markdown** — buka sumber `.md` di tab baru sehingga Anda dapat menyimpannya.
+- **Open in ChatGPT / Claude / Perplexity** — pra-muat konten halaman ke dalam prompt chat untuk alat bernama.
+- **Open in Cursor / VS Code** — buka buffer di editor bernama dengan konten halaman.
+
+Ini adalah permukaan yang tepat ketika Anda ingin mengajukan pertanyaan model tentang satu halaman tanpa menyiapkan MCP.
+
+## File konteks yang sudah dibangun untuk agen coding
+
+Jika Anda mengintegrasikan Raydium dan ingin agen Anda memiliki pengetahuan dasar yang tepat dari awal, masukkan file ini ke dalam proyek Anda:
+
+### `.cursorrules` / `.windsurfrules` / prompt sistem agen
+
+```text
+You are integrating with Raydium, a Solana DeFi protocol with five product
+surfaces: AMM v4, CPMM, CLMM, Farm, and LaunchLab. Authoritative docs live
+at docs.raydium.io. The official SDK is `@raydium-io/raydium-sdk-v2` (pin
+the version you've verified against). For server-built swaps, prefer the
+Trade API at transaction-v1.raydium.io. Always:
+
+- Pass a `Connection` and `cluster` that match.
+- Keep all amounts as `BN` instances; never call `.toNumber()` on amounts.
+- Pre-fund the user's wallet for ATA creation rent.
+- Pass an explicit `computeBudgetConfig` for any tx that may compete in
+  high-volume windows.
+- Re-fetch `poolInfo` immediately before high-value transactions; cached
+  state goes stale.
+
+When uncertain about an instruction's accounts list, defer to
+`docs.raydium.io/products/<product>/accounts` and the on-chain IDL.
+```
+
+Simpan sebagai `.cursorrules` (Cursor), `.windsurfrules` (Windsurf), atau `CLAUDE.md` (Claude Code) — atau tempel ke dalam prompt sistem agen Anda. Nama file dan lokasi yang tepat bervariasi menurut versi alat, jadi periksa dokumentasi pengaturan alat Anda jika tidak mengambil file secara otomatis.
+
+### Daftar konteks yang disematkan
+
+Untuk agen coding yang menerima daftar halaman "selalu sertakan", daftar ini adalah konteks minimum yang berguna untuk sebagian besar integrasi Raydium:
+
+```text
+https://docs.raydium.io/sdk-api/typescript-sdk
+https://docs.raydium.io/sdk-api/trade-api
+https://docs.raydium.io/products/cpmm/instructions
+https://docs.raydium.io/products/clmm/instructions
+https://docs.raydium.io/integration-guides/priority-fee-tuning
+https://docs.raydium.io/reference/program-addresses
+https://docs.raydium.io/reference/error-codes
+```
+
+Sesuaikan berdasarkan produk mana yang Anda integrasikan.
+
+## Resep pengindeksan
+
+Jika Anda membangun RAG Anda sendiri dan tidak ingin menggunakan `llms-full.txt`, berikut adalah resep kanonik:
+
+```ts
+import { fetch } from "undici";
+
+const INDEX_URL = "https://docs.raydium.io/llms.txt";
+const BASE      = "https://docs.raydium.io";
+
+const index    = await (await fetch(INDEX_URL)).text();
+const pageUrls = [...index.matchAll(/^- \[(.+?)\]\((.+?)\)/gm)].map(m => m[2]);
+
+for (const path of pageUrls) {
+  const md = await (await fetch(`${BASE}${path}.md`)).text();
+  // ingest md into your vector store, keyed by path
+}
+```
+
+Setiap halaman disajikan di jalur kanoniknya dengan akhiran `.md` ditambahkan (misalnya `/sdk-api/typescript-sdk` → `/sdk-api/typescript-sdk.md`).
+
+## Peringatan
+
+- **Jangan tempel status pribadi ke dalam prompt.** Server MCP hanya mengetahui apa yang ada dalam dokumentasi publik. Kunci dompet, kredensial RPC, dan rahasia serupa tidak boleh pernah memasuki konteks agen.
+- **Output AI bukan otoritatif.** Model mengalami halusinasi alamat program, nama instruksi, dan daftar akun dengan mudah yang mengkhawatirkan. Selalu verifikasi terhadap dokumentasi dan IDL sebelum mempercayai transaksi yang dihasilkan agen.
+- **Penyimpangan versi.** SDK v2 adalah pra-1.0; agen yang dilatih pada rilis yang lebih lama dapat memancarkan kode yang tidak dikompilasi terhadap versi yang Anda tetapkan. Sertakan versi SDK yang disematkan dalam prompt sistem agen Anda.
+
+## Penunjuk
+
+- [`sdk-api/typescript-sdk`](/docs/i18n/id/sdk-api/typescript-sdk) — referensi SDK utama.
+- [`sdk-api/trade-api`](/docs/i18n/id/sdk-api/trade-api) — transaksi swap yang dibangun server, ideal untuk integrasi yang ramah agen.
+- [`reference/program-addresses`](/docs/i18n/id/reference/program-addresses) — ID program yang diverifikasi.
+- [Model Context Protocol](https://modelcontextprotocol.io) — spesifikasi MCP upstream.
+- [`llms.txt` proposal](https://llmstxt.org) — konteks pada standar indeks.
+
+Sumber:
+
+- [Dukungan `llms.txt` Mintlify](https://www.mintlify.com/docs/ai/llmstxt) dan [penyerapan AI](https://mintlify.com/docs/ai-ingestion).
+- Penerapan dokumentasi Raydium.

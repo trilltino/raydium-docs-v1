@@ -1,0 +1,75 @@
+---
+title: "建立者費用如何運作"
+description: "LaunchLab 建立者費用在聯合曲線上和 CPMM 畢業後如何累積，與平台擁有的費用金鑰分開。"
+---
+
+<Info>
+  **本頁內容由 AI 自動翻譯，所有內容以英文版本為準。**
+
+  [查看英文版 →](/docs/en/user-flows/how-creator-fees-work)
+</Info>
+
+<Info>
+  建立者費用有兩個獨立階段。鎖定流動性費用金鑰是第三種機制。在 2026-08-17 升級之前，建立者規模產生了建立者費用金鑰。升級後執行的遷移會將該份額分配給平台。
+</Info>
+
+<Warning>
+  費用設定取決於平台和 CPMM 配置。簽署前請驗證鏈上數值。本頁僅說明機制，不構成財務、法律、稅務或投資建議。
+</Warning>
+
+## 階段 1：聯合曲線建立者費用
+
+當你的代幣在聯合曲線上交易時，平台可以在買入和賣出時收取建立者費用成分。
+
+- 以報價代幣（通常是 SOL）累積。
+- 平台設定費率。
+- 你可以透過 LaunchLab 建立者費用領取流程領取。
+- 畢業停止新的聯合曲線累積。任何現有餘額仍可領取。
+
+## 階段 2：CPMM 建立者費用
+
+每個新初始化的啟動都會畢業到 CPMM。CPMM 建立者費用僅在選定的 `AmmConfig` 具有非零建立者費率時累積。
+
+預設情況下，啟動建立者成為 CPMM 池建立者。平台可以改為設定 `platform_cp_creator`，在這種情況下該地址接收 CPMM 建立者費用權利。
+
+記錄的 CPMM 建立者可以直接領取。另一個支付者也可以觸發無需許可的收集，但 CPMM 將目的地固定為建立者的規範代幣帳戶。
+
+## 流動性提供者代幣會發生什麼
+
+平台配置儲存 `platformScale`、`creatorScale` 和 `burnScale`。在 2026-08-17 升級之前，`creatorScale` 建立了建立者擁有的費用金鑰。對於升級後執行的遷移，LaunchLab 將其與 `platformScale` 合併：
+
+```text
+platform locked LP = platformScale + creatorScale
+burned LP          = burnScale
+```
+
+如果鎖定份額非零，一個費用金鑰 NFT 會進入平台配置的 NFT 錢包。此 NFT 控制流動性提供者費用收穫。它不控制 CPMM 建立者費用收集。升級前完成的遷移中的建立者費用金鑰保留在其現有持有者手中。
+
+## 費用流程摘要
+
+```text
+聯合曲線
+  建立者費用 → 啟動建立者金庫
+
+畢業到 CPMM
+  升級前 → 平台費用金鑰 + 建立者費用金鑰 + 銷毀份額
+  升級後 → 合併平台費用金鑰份額 + 銷毀份額
+
+CPMM 交易
+  建立者費用 → 記錄的 CPMM 池建立者
+  流動性提供者費用 → 鎖定份額的平台費用金鑰持有者
+```
+
+## 啟動前
+
+- 檢查聯合曲線 `creator_fee_rate`。
+- 檢查 `platform_cp_creator` 是否將你替換為 CPMM 建立者記錄。
+- 對於升級後執行的遷移，不要將 `creatorScale` 視為承諾的建立者費用金鑰分配。對於較早的遷移，驗證現有費用金鑰記錄。
+- 檢查 CPMM 配置的建立者費率和費用設定。
+
+## 相關連結
+
+- [LaunchLab 建立者費用](/docs/i18n/zh-Hant/products/launchlab/creator-fees) — 技術參考。
+- [流動性提供者費用分配](/docs/i18n/zh-Hant/products/launchlab/tips-and-gotchas/lp-fee-distribution) — 有效規模計算。
+- [CPMM 費用](/docs/i18n/zh-Hant/products/cpmm/fees) — 畢業後費用計數器和收集。
+- [LaunchLab 平台](/docs/i18n/zh-Hant/user-flows/launchlab-platforms) — 要檢查的平台設定。

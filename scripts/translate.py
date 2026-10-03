@@ -2,9 +2,9 @@
 """
 Batch translator for Raydium docs.
 
-Walks the English source tree at the repo root, sends each .mdx page (and each
+Walks the English source tree under docs/en, sends each .mdx page (and each
 OpenAPI .yaml file) to the Anthropic API for translation into the eight target
-locales, and writes the result to <locale>/<same path>.
+locales, and writes the result to docs/i18n/<locale>/<same path below docs/en>.
 
 USAGE
 =====
@@ -60,8 +60,9 @@ WHAT IT LEAVES ALONE
 
 INTERNAL LINKS
 ==============
-  Internal links of the form "(/<path>)" are rewritten to "(/<locale>/<path>)"
-  on translated pages so navigation stays inside the locale.
+  Internal links of the form "(/docs/en/<path>)" are rewritten to
+  "(/docs/i18n/<locale>/<path>)" on translated pages so navigation stays
+  inside the locale.
 
 SAFETY
 ======
@@ -115,6 +116,8 @@ except ImportError:
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+EN_DOCS_ROOT = Path("docs/en")
+I18N_DOCS_ROOT = Path("docs/i18n")
 
 # ---------- Locale config ---------------------------------------------------
 
@@ -277,7 +280,7 @@ LOCALES = {
     },
 }
 
-# Subdirectories that hold English source content (relative to repo root).
+# Subdirectories that hold English source content (relative to docs/en).
 # Anything under these is a candidate for translation if it matches a
 # translatable extension (.mdx for prose, .yaml for OpenAPI specs).
 SOURCE_DIRS = [
@@ -286,7 +289,7 @@ SOURCE_DIRS = [
     "sdk-api", "integration-guides", "security",
     "api-reference", "reference", "resources", "ray",
 ]
-ROOT_FILES = ["index.mdx", "ARCHITECTURE.mdx"]
+ROOT_FILES = [EN_DOCS_ROOT / "index.mdx", Path("ARCHITECTURE.mdx")]
 
 # Extensions we know how to translate.
 TRANSLATABLE_EXTS = {".mdx", ".yaml", ".yml"}
@@ -319,7 +322,7 @@ PRESERVE EXACTLY (do not translate, do not reformat):
 - Inline code spans `like this` — stay English.
 - Frontmatter keys (everything before the first `---`). Translate ONLY the values of `title` and `description`. Keep `locale`, `mode`, `hidden`, and any other key intact.
 - JSX component names: <Info>, <Tip>, <Warning>, <Note>, <CardGroup>, <Card>, <Tabs>, <Tab>, <Steps>, <Step>, <Accordion>, <AccordionGroup>, <Frame>, <CodeGroup>, <Expandable>.
-- JSX prop names and prop values that are URLs, identifiers, icon names, hrefs, or numeric. Examples to leave untouched: `cols={{2}}`, `icon="circle-info"`, `href="/products/cpmm/overview"`.
+- JSX prop names and prop values that are URLs, identifiers, icon names, hrefs, or numeric. Examples to leave untouched: `cols={{2}}`, `icon="circle-info"`, `href="/docs/en/products/cpmm/overview"`.
 - Solana program IDs, mint addresses, PDAs, account names, instruction names, struct field names, type names, file paths.
 - URL paths inside markdown links and JSX `href` props (the URL itself). Translate only the visible link text.
 - HTML entities (e.g. `&amp;`), the literal characters `<`, `>`, `=`, `{{`, `}}`, `\\`.
@@ -341,10 +344,10 @@ TRANSLATE:
 - Frontmatter `title` and `description` values.
 
 INTERNAL LINK REWRITING:
-- Markdown links and JSX hrefs that begin with a single slash (e.g. `/products/cpmm/overview`) are internal documentation links. Rewrite them by inserting `/{locale_code}` after the leading slash, so `/products/cpmm/overview` becomes `/{locale_code}/products/cpmm/overview`.
+- Markdown links and JSX hrefs that begin with `/docs/en/` are internal English documentation links. Rewrite them by replacing `/docs/en/` with `/docs/i18n/{locale_code}/`, so `/docs/en/products/cpmm/overview` becomes `/docs/i18n/{locale_code}/products/cpmm/overview`.
 - DO NOT rewrite external links (those starting with `http://`, `https://`, `mailto:`, or anything containing `://`).
 - DO NOT rewrite anchor-only links (`#section`).
-- DO NOT rewrite paths that already start with `/{locale_code}/` or any other locale code (`/zh/`, `/ja/`, `/de/`, etc.).
+- DO NOT rewrite paths that already start with `/docs/i18n/{locale_code}/` or any other locale code (`/docs/i18n/zh/`, `/docs/i18n/ja/`, `/docs/i18n/de/`, etc.).
 - DO NOT rewrite paths inside fenced code blocks or inline code.
 
 AI-TRANSLATION BANNER:
@@ -614,7 +617,7 @@ def english_pages() -> list[Path]:
     """All English source files we know how to translate (relative paths)."""
     out: list[Path] = []
     for sub in SOURCE_DIRS:
-        base = REPO_ROOT / sub
+        base = REPO_ROOT / EN_DOCS_ROOT / sub
         if not base.exists():
             continue
         for ext in TRANSLATABLE_EXTS:
@@ -625,6 +628,26 @@ def english_pages() -> list[Path]:
             out.append(Path(f))
     out = sorted(set(out))
     return out
+
+
+def source_payload_path(en_rel: Path) -> Path:
+    """Return the path below the language root for an English source path."""
+    try:
+        return en_rel.relative_to(EN_DOCS_ROOT)
+    except ValueError:
+        return en_rel
+
+
+def normalize_source_arg(p: str) -> Path:
+    """Accept either docs/en/<path> or the old short <path> CLI form."""
+    rel = Path(p.strip())
+    if not rel.parts:
+        return rel
+    if rel.parts[:2] == ("docs", "en"):
+        return rel
+    if rel.name == "ARCHITECTURE.mdx":
+        return rel
+    return EN_DOCS_ROOT / rel
 
 
 def is_stub(target: Path) -> bool:
@@ -778,7 +801,7 @@ def translate_one(
     dry_run: bool,
 ) -> tuple[Path, str]:
     """Translate one English file into one locale. Returns (target, status)."""
-    target = REPO_ROOT / locale / en_rel
+    target = REPO_ROOT / I18N_DOCS_ROOT / locale / source_payload_path(en_rel)
     src = REPO_ROOT / en_rel
     ext = en_rel.suffix.lower()
 
@@ -831,7 +854,7 @@ def main():
             sys.exit(f"unknown locale: {l}. valid: {','.join(LOCALES)}")
 
     if args.paths:
-        rels = [Path(p.strip()) for p in args.paths.split(",") if p.strip()]
+        rels = [normalize_source_arg(p) for p in args.paths.split(",") if p.strip()]
     else:
         rels = english_pages()
 

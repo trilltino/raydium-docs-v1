@@ -1,0 +1,264 @@
+---
+title: "Comptes LaunchLab"
+description: "PoolState (racine par lancement), les coffres de base et de cotation, l'autorité PDA, et le graphe des comptes par lancement. GlobalConfig au niveau du protocole et PlatformConfig au niveau de la plateforme se trouvent sur leurs propres pages."
+---
+
+<Info>
+  **Cette page est traduite automatiquement par IA. La version anglaise fait foi.**
+
+  [Voir la version anglaise →](/docs/en/products/launchlab/accounts)
+</Info>
+
+<Info>
+  Cette page documente le graphe des comptes **par lancement** : le `PoolState` (le compte d'état racine pour un lancement), ses deux coffres, l'autorité PDA, et les références post-graduation qu'il acquiert lors du règlement du lancement.
+
+  Pour la configuration au niveau du protocole qui encadre chaque lancement, consultez [`products/launchlab/global-config`](/docs/i18n/fr/products/launchlab/global-config). Pour la surcouche par plateforme, consultez [`products/launchlab/platform-config`](/docs/i18n/fr/products/launchlab/platform-config). Pour les comptes de vesting (`VestingSchedule` sur `PoolState`, `VestingRecord` par bénéficiaire), consultez [`products/launchlab/vesting`](/docs/i18n/fr/products/launchlab/vesting).
+</Info>
+
+## Inventaire des comptes
+
+| Compte | Propriétaire | Objectif |
+|---------|-------|---------|
+| [`GlobalConfig`](/docs/i18n/fr/products/launchlab/global-config) | Programme LaunchLab | Règles au niveau du protocole : frais, planchers d'approvisionnement, portefeuilles de migration. Un par `(curve_type, index)`. |
+| [`PlatformConfig`](/docs/i18n/fr/products/launchlab/platform-config) | Programme LaunchLab | Surcouche par plateforme : branding, frais de plateforme, répartition NFT à la graduation, commutateur de paramètres de lancement et gestionnaire de règles. Fixe 944 octets. |
+| `PoolState` | Programme LaunchLab | État racine par lancement : mints, coffres, paramètres de courbe, compteurs de ventes, compteurs de frais, calendrier de vesting, statut de graduation. |
+| `authority` | Programme LaunchLab | PDA unique à la graine `[b"vault_auth_seed"]` qui possède les coffres sur tous les lancements et signe le CPI post-graduation. |
+| `base_vault` | SPL Token / Token-2022 | Coffre par lancement contenant les jetons de base invendus. |
+| `quote_vault` | SPL Token / Token-2022 | Coffre par lancement contenant les jetons de cotation accumulés. Suit le programme qui possède le mint de cotation. |
+| [`VestingRecord`](/docs/i18n/fr/products/launchlab/vesting) | Programme LaunchLab | Enregistrement par bénéficiaire de falaise + déverrouillage linéaire. Optionnel. |
+| `creator_fee_vault` | SPL Token / Token-2022 | Coffre par créateur + par mint de cotation contenant les frais de créateur accumulés, vidé par `ClaimCreatorFee`. Suit le programme du mint de cotation. |
+| `platform_fee_vault` | SPL Token / Token-2022 | Coffre par plateforme + par mint de cotation contenant les frais de plateforme accumulés, vidé par `ClaimPlatformFeeFromVault`. Suit le programme du mint de cotation. |
+| [`PlatformAllowConfig`](/docs/i18n/fr/products/launchlab/platform-config) | Programme LaunchLab | Permission gérée par la plateforme optionnelle pour une paire `(PlatformConfig, GlobalConfig)`. Vérifiée uniquement lorsque la plateforme active la restriction. |
+| [`PlatformCurveRule`](/docs/i18n/fr/products/launchlab/curve-rules) | Programme LaunchLab | Règle de paramètres de lancement gérée par la plateforme optionnelle pour une paire `(PlatformConfig, GlobalConfig)`. Vérifiée uniquement lorsque la plateforme définit `restrict_curve_param`. Taille variable, 150 octets vide. |
+| (post-graduation) `cpmm_pool_state` | Programme CPMM | Pool créé par `MigrateToCpswap` pour chaque nouveau lancement. L'état hérité peut toujours référencer une graduation AMM v4. |
+| (post-graduation) Fee Key NFT | Programme LP-Lock | Avant la mise à jour du 2026-08-17, les échelles de plateforme et de créateur pouvaient produire des Fee Keys séparées. Les migrations exécutées après combinent les deux échelles en une seule Fee Key de plateforme. |
+
+Le SDK lit ceci avec `raydium.launchpad.getRpcPoolInfo({ poolId })`, qui retourne le `PoolState` décodé avec la `GlobalConfig` liée attachée en tant que `configInfo` (`getRpcPoolsInfo({ poolIdList })` pour la forme groupée). Il n'existe pas de `getLaunchById`. L'id du pool lui-même est une PDA de `(programId, mintA, mintB)` — `getPdaLaunchpadPoolId`.
+
+## `PoolState`
+
+L'état racine par lancement. Les noms de champs ci-dessous correspondent à la structure Rust on-chain (`states/pool.rs`) ; certaines valeurs sont simplifiées pour la lisibilité — consultez la source pour la disposition exacte de la mémoire.
+
+```rust
+// states/pool.rs (abridged)
+pub struct PoolState {
+    pub epoch:                     u64,        // recent_epoch tracker
+    pub auth_bump:                 u8,
+    pub status:                    u8,         // PoolStatus enum
+    pub base_decimals:             u8,
+    pub quote_decimals:            u8,
+    pub migrate_type:              u8,         // 0 = AMM v4, 1 = CPMM
+    pub supply:                    u64,        // total base tokens (no decimals)
+    pub total_base_sell:           u64,        // base supply allocated to the curve
+    pub virtual_base:              u64,        // virtual-reserve seed
+    pub virtual_quote:             u64,        // virtual-reserve seed
+    pub real_base:                 u64,        // base sold so far
+    pub real_quote:                u64,        // quote raised so far (excl. fees)
+    pub total_quote_fund_raising:  u64,        // graduation threshold in quote
+
+    pub quote_protocol_fee:        u64,        // accrued, pending CollectFee
+    pub platform_fee:              u64,        // accrued, pending ClaimPlatformFee
+    pub migrate_fee:               u64,        // accrued, pending CollectMigrateFee
+    pub vesting_schedule:          VestingSchedule,
+
+    pub global_config:             Pubkey,
+    pub platform_config:           Pubkey,
+    pub base_mint:                 Pubkey,
+    pub quote_mint:                Pubkey,
+    pub base_vault:                Pubkey,
+    pub quote_vault:               Pubkey,
+    pub creator:                   Pubkey,     // NOTE: last of the seven pubkeys, not third
+
+    pub token_program_flag:        u8,         // bit0 = base mint, bit1 = quote mint; 0 = SPL Token, 1 = Token-2022
+    pub amm_creator_fee_on:        u8,         // 0 = QuoteToken, 1 = BothToken (CPMM-only)
+    pub platform_vesting_share:    u64,        // the platform's slice of total_locked_amount
+    pub padding:                   [u8; 54],
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct VestingSchedule {
+    pub total_locked_amount:    u64,
+    pub cliff_period:           u64,
+    pub unlock_period:          u64,
+    pub start_time:             u64,           // set at graduation
+    pub allocated_share_amount: u64,           // running sum across VestingRecords
+}
+```
+
+Valeurs de `PoolStatus` (les noms de variantes de l'IDL sont `Fund` / `Migrate` / `Trade`) :
+
+```
+0 = Fund            — accepte les achats / ventes ; en dessous de total_quote_fund_raising
+1 = Migrate         — seuil atteint ; en attente de MigrateToAmm / MigrateToCpswap
+2 = Trade           — migration effectuée ; trading AMM post-graduation, horloge de vesting en cours
+```
+
+Champs visibles pour les intégrateurs :
+
+- **`status`** — trois valeurs, monotones (`Fund` → `Migrate` → `Trade`). Les lectures sont toujours sûres ; les écritures sont contrôlées. `ClaimVestedToken` exige `Trade`.
+- **`real_base`**, **`real_quote`** — état actuel de la courbe. Combinés avec `virtual_base` / `virtual_quote`, ils suffisent pour calculer le prix spot sans toucher aux coffres. Consultez [`bonding-curve`](/docs/i18n/fr/products/launchlab/bonding-curve).
+- **`total_base_sell`** vs `real_base` — ratio « progression vers la graduation » pour les interfaces utilisateur.
+- **`migrate_type`** — l'initialisation nouvelle nécessite `1` (`CPSWAP`). Un `0` stocké reste significatif uniquement pour un lancement existant créé avant l'application obligatoire de CPMM.
+- **`amm_creator_fee_on`** — choisit `creator_fee_on = OnlyQuoteToken` (`0`) ou `BothToken` (`1`) sur le pool CPMM post-graduation. Il ne choisit pas la cible de migration. Consultez [`creator-fees`](/docs/i18n/fr/products/launchlab/creator-fees).
+- **`token_program_flag`** — un champ de bits, pas un booléen. Bit0 est le mint de base et bit1 est le mint de cotation, chacun `0` pour SPL Token et `1` pour Token-2022, donc l'octet prend quatre valeurs : `0` (les deux hérités), `1` (Token-2022 base), `2` (Token-2022 cotation), `3` (les deux Token-2022). Lisez un mint avec `(token_program_flag >> bit) & 1`. Comparer l'octet entier à `0` pour classer le mint de base résout `2` au mauvais programme. Bit1 était constant `0` jusqu'à ce que les mints de cotation Token-2022 soient supportés.
+- **`quote_protocol_fee` / `platform_fee` / `migrate_fee`** — trois compteurs de frais indépendants. Chacun a sa propre instruction de réclamation ; consultez [`instructions`](/docs/i18n/fr/products/launchlab/instructions).
+- **`vesting_schedule`** — présent sur chaque `PoolState` mais inactif lorsque `total_locked_amount == 0`. Consultez [`vesting`](/docs/i18n/fr/products/launchlab/vesting) pour le cycle de vie complet.
+
+## L'autorité PDA
+
+LaunchLab utilise une **seule** autorité PDA sur tous les lancements, dérivée sans graine par lancement :
+
+```ts
+const LAUNCHLAB_PROGRAM_ID = new PublicKey("<LAUNCHLAB_ID>"); // voir reference/program-addresses
+
+const [authority, bump] = PublicKey.findProgramAddressSync(
+  [Buffer.from("vault_auth_seed")],
+  LAUNCHLAB_PROGRAM_ID,
+);
+```
+
+Ce PDA unique est :
+
+- L'autorité sur chaque `base_vault` et `quote_vault` du lancement.
+- Rien sur le `base_mint` — l'autorité de mint est révoquée avant que `InitializeV2` ne retourne (voir ci-dessous).
+- Le signataire sur le CPI de graduation CPMM, et sur la graduation AMM v4 hérité pour l'état existant.
+- Le signataire sur les transferts `ClaimVestedToken` hors du coffre de base.
+- Le `transfer_fee_config_authority` sur la `TransferFeeConfig` d'un mint de base Token-2022, pour toute la phase pré-graduation — et son `withdraw_withheld_authority` aussi, mais uniquement lorsque la plateforme n'a pas défini `PlatformConfig.transfer_fee_extension_auth`.
+
+Le `mint_authority` est révoqué dans l'instruction **initialize**, pas à la graduation : `InitializeV2` et `InitializeWithToken2022` frappent l'approvisionnement complet dans `base_vault` puis définissent `MintTokens` à `None` dans la même instruction. L'approvisionnement est donc fixe à partir du moment où le lancement existe, et la migration n'a pas d'étape d'autorité de mint. Un effet secondaire : personne ne peut signer pour le mint de base, donc son loyer ne peut pas être réclamé par [`CollectExcessLamports`](/docs/i18n/fr/products/launchlab/instructions#collectexcesslamports).
+
+Deux PDA supplémentaires contrôlent les coffres de frais :
+
+```ts
+const [creatorFeeVaultAuthority] = PublicKey.findProgramAddressSync(
+  [Buffer.from("creator_fee_vault_auth_seed")],
+  LAUNCHLAB_PROGRAM_ID,
+);
+
+const [platformFeeVaultAuthority] = PublicKey.findProgramAddressSync(
+  [Buffer.from("platform_fee_vault_auth_seed")],
+  LAUNCHLAB_PROGRAM_ID,
+);
+```
+
+Ceux-ci signent le transfert hors du coffre de frais correspondant lors de `ClaimCreatorFee` et `ClaimPlatformFeeFromVault`.
+
+## Mint de base
+
+Créé en ligne par `Initialize` avec :
+
+- `mint_authority = authority` (révoquée à la graduation).
+- `freeze_authority = None`.
+- `supply = supply`, entièrement frappé dans `base_vault`.
+- `decimals` choisi par le créateur à `Initialize` (généralement 6).
+
+Puisque l'approvisionnement complet est pré-frappé, `base_mint.supply` est constant pour la durée de vie du lancement. Les achats de courbe déplacent les jetons de `base_vault` vers l'acheteur, mais n'appellent pas `mint_to`.
+
+`Initialize` / `InitializeV2` créent des mints de base SPL Token. L'instruction dédiée `InitializeWithToken2022` permet au mint de base d'être un mint Token-2022 (avec `TransferFeeConfig` optionnel). Les trois chemins d'initialisation nécessitent une graduation CPMM.
+
+Lorsque `InitializeWithToken2022` attache une `TransferFeeConfig`, le mint est créé avec `transfer_fee_config_authority = authority` et `withdraw_withheld_authority = PlatformConfig.transfer_fee_extension_auth`, revenant à `authority` lorsque la plateforme n'a pas défini ce champ. Les deux autorités sont réassignées à la clé de plateforme à la graduation, le côté retrait uniquement si le PDA le détient toujours. Consultez [`platform-config`](/docs/i18n/fr/products/launchlab/platform-config#token-2022-transfer-fee-authorities).
+
+Le mint de cotation est indépendant du mint de base et peut lui-même être un mint Token-2022 — `InitializeV2` et `InitializeWithToken2022` acceptent l'un ou l'autre programme dans leur slot de programme de cotation. Le `Initialize` déprécié ne le fait pas : son compte de programme de cotation est toujours typé pour SPL Token, donc une configuration dont le mint de cotation est Token-2022 ne peut être lancée que par les deux autres. Le mint de cotation n'est jamais créé par LaunchLab ; c'est ce que `GlobalConfig.quote_mint` nomme. Consultez [`global-config`](/docs/i18n/fr/products/launchlab/global-config#token-2022-quote-mints) et [`reference/token-2022-support`](/docs/i18n/fr/reference/token-2022-support#launchlab-quote-mints).
+
+## Coffres
+
+Les deux `base_vault` et `quote_vault` sont des comptes de jetons possédés par le PDA LaunchLab `authority`, chacun créé sur le programme qui possède son propre mint — donc un lancement peut avoir un coffre de base hérité et un coffre de cotation Token-2022, ou toute autre combinaison. `token_program_flag` enregistre lequel est lequel. Les adresses sont stockées sur `PoolState` et peuvent également être dérivées :
+
+```ts
+const [baseVault] = PublicKey.findProgramAddressSync(
+  [Buffer.from("pool_vault"), poolState.toBuffer(), baseMint.toBuffer()],
+  LAUNCHLAB_PROGRAM_ID,
+);
+const [quoteVault] = PublicKey.findProgramAddressSync(
+  [Buffer.from("pool_vault"), poolState.toBuffer(), quoteMint.toBuffer()],
+  LAUNCHLAB_PROGRAM_ID,
+);
+```
+
+(Vérifiez les préfixes de graine exacts à partir de la structure des comptes `Initialize` de la source avant de vous fier à une dérivation en production.)
+
+## Coffres de frais
+
+Deux PDA agrègent les frais sur les lancements :
+
+- **Coffre de frais de créateur** — PDA aux graines `[creator, quote_mint]`. Chaque lancement qui gagne les mêmes frais de créateur sur le même mint de cotation verse dans le même coffre. Le créateur le vide via `ClaimCreatorFee`.
+- **Coffre de frais de plateforme** — PDA aux graines `[platform_config, quote_mint]`. Chaque lancement acheminé par la même plateforme qui utilise le même mint de cotation verse dans le même coffre. Le `platform_fee_wallet` de la plateforme le vide via `ClaimPlatformFeeFromVault`. Il y a aussi une variante de vidage par lancement (`ClaimPlatformFee`) qui tire du `quote_vault` du lancement directement sans passer par le coffre agrégé.
+
+Les deux sont créés paresseusement lors du premier swap qui accumule un frais, sur le programme qui possède le mint de cotation. Un créateur ou une plateforme qui exécute des lancements contre à la fois un mint de cotation hérité et un Token-2022 se retrouve avec un coffre par mint, comme c'était déjà le cas pour deux mints hérités différents.
+
+Le modèle de coffre agrégé est ce qui permet à un créateur ou une plateforme à haut volume d'amortir le coût du loyer de l'accumulation de frais sur de nombreux lancements.
+
+## Quote vault ↔ `real_quote`
+
+`quote_vault.balance` et `PoolState.real_quote` doivent rester synchronisés. Ils peuvent dériver d'au maximum la somme des trois compteurs de frais en attente (`quote_protocol_fee`, `platform_fee`, `migrate_fee`), qui se trouvent dans le coffre mais appartiennent aux compteurs de frais et non à la réserve de courbe. Les mathématiques de courbe utilisent toujours `real_quote`, jamais le solde brut du coffre.
+
+Invariant pré-graduation :
+
+```
+quote_vault.balance ==
+   real_quote
+ + quote_protocol_fee
+ + platform_fee
+ + migrate_fee
+```
+
+## `PlatformCurveRule`
+
+Un compte par paire `(PlatformConfig, GlobalConfig)`, contenant les formes de lancement que cette plateforme permet sur cette configuration. Les graines PDA sont `[b"platform_curve_rule", platform_config, global_config]`.
+
+```rust
+#[account]
+pub struct PlatformCurveRule {
+    pub bump:            u8,
+    pub version:         u8,
+    pub platform_config: Pubkey,
+    pub global_config:   Pubkey,
+    pub epoch:           u64,
+    pub padding:         [u64; 8],
+    pub groups:          Vec<CurveRuleGroup>,   // up to 10
+}
+
+pub struct CurveRuleGroup {
+    pub group_id:    u16,                       // stable id, used to update or remove the group
+    pub epoch:       u64,
+    pub constraints: Vec<ParamConstraint>,      // up to 25, ANDed
+}
+
+pub struct ParamConstraint {
+    pub field: u8,                              // which launch parameter
+    pub op:    u8,                              // 0 Eq, 1 Gte, 2 Lte, 3 Neq
+    pub value: u128,
+}
+```
+
+Le compte est créé sans groupe et redimensionné à chaque changement de groupe, donc sa longueur est `150 + Σ(14 + 18 × constraints)` et les décodeurs ne doivent pas supposer une taille fixe. Les groupes sont ORés : un lancement est autorisé dès que les contraintes d'un groupe tiennent toutes. Zéro groupe signifie aucune restriction.
+
+Lisez-le uniquement lorsque le `PlatformConfig.restrict_curve_param` propriétaire est `1` — à `0` le programme ignore le compte, et une règle obsolète peut bien être assise là. Les IDs de champ, les opérateurs et les playbooks sont dans [`products/launchlab/curve-rules`](/docs/i18n/fr/products/launchlab/curve-rules).
+
+## Transitions de comptes du cycle de vie
+
+| Événement | Statut | `real_base` | `real_quote` | Pool post-graduation |
+|-------|--------|-------------|--------------|----------------------|
+| `Initialize` | Funding | 0 | 0 | — |
+| `BuyExactIn` / `BuyExactOut` | Funding | `+base_out` | `+quote_in_after_fee` | — |
+| `SellExactIn` / `SellExactOut` | Funding | `−base_in` | `−quote_out_before_fee` | — |
+| `MigrateToCpswap` (ou `MigrateToAmm` hérité) | Funding → Migrate → Migrated | (gelé) | (gelé) | créé ; LP CPMM est divisé en LP verrouillé détenu par la plateforme et LP brûlé |
+| `ClaimCreatorFee` / `ClaimPlatformFee*` | any | — | — | vide un coffre de frais |
+| `CreateVestingAccount` | Funding | — | — | augmente `vesting_schedule.allocated_share_amount` |
+| `ClaimVestedToken` | Migrated only | — | — | vide `base_vault` |
+| `CollectExcessLamports` | any | — | — | — (déplace uniquement les lamports, jamais les soldes de jetons) |
+
+## Où aller ensuite
+
+- [`products/launchlab/bonding-curve`](/docs/i18n/fr/products/launchlab/bonding-curve) — les mathématiques derrière `real_base` ↔ `real_quote`.
+- [`products/launchlab/instructions`](/docs/i18n/fr/products/launchlab/instructions) — listes de comptes par instruction.
+- [`products/launchlab/global-config`](/docs/i18n/fr/products/launchlab/global-config) — liaison au niveau du protocole.
+- [`products/launchlab/platform-config`](/docs/i18n/fr/products/launchlab/platform-config) — surcouche de plateforme.
+- [`products/launchlab/vesting`](/docs/i18n/fr/products/launchlab/vesting) — mécaniques d'approvisionnement verrouillé.
+- [`products/cpmm/accounts`](/docs/i18n/fr/products/cpmm/accounts) — à quoi ressemble le `cpmm_pool_state` post-graduation.
+
+Sources :
+
+- `raydium-launch/programs/launchpad/src/states/pool.rs` — `PoolState`, `PoolStatus`, `VestingSchedule`, `AmmCreatorFeeOn`.
+- `raydium-launch/programs/launchpad/src/lib.rs` — constantes de graine PDA (`AUTH_SEED`, `CREATOR_FEE_VAULT_AUTH_SEED`, `PLATFORM_FEE_VAULT_AUTH_SEED`).
+- [Module `launchpad` du SDK Raydium v2](https://github.com/raydium-io/raydium-sdk-V2).

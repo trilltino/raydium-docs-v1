@@ -1,0 +1,82 @@
+---
+title: "Tổng quan về Stable AMM"
+description: "Stable AMM là một chương trình Raydium độc lập thay thế đường cong constant-product bằng bảng tra cứu nội suy, giảm slippage cho các tài sản tương quan."
+---
+
+<Info>
+  **Trang này được dịch tự động bằng AI. Phiên bản tiếng Anh là bản chính thức.**
+
+  [Xem bản tiếng Anh →](/docs/en/products/stable/overview)
+</Info>
+
+## Tóm tắt một đoạn
+
+Stable AMM là một **chương trình Raydium độc lập** — triển khai riêng, không phải chế độ của AMM v4 — thay thế công thức đường cong bằng một **bảng tra cứu được điền sẵn**. Thay vì sử dụng x·y=k, pool lưu trữ một mảng thưa các điểm (x, y, price) và sử dụng **tìm kiếm nhị phân + nội suy tuyến tính** để báo giá. Thiết kế này hoạt động tốt với các cặp stablecoin và các tài sản khác có mối quan hệ giá đã biết: các swap giữa các token được gắn 1-to-1 có slippage gần như bằng không. Đây là một **AMM thuần túy**: tất cả thanh khoản nằm trong các vault của chính pool. (Nó từng có một đường dẫn market-making OpenBook vào đầu cuộc đời, nhưng đường dẫn đó đã không hoạt động trong nhiều năm; [bản nâng cấp 2026-06-22](/docs/i18n/vi/reference/changelog) cuối cùng đã loại bỏ mã market chết). Thanh khoản hiện tại khá mỏng; hầu hết các nhà tích hợp tiếp cận các pool Stable thông qua [chương trình AMM Routing](/docs/i18n/vi/products/routing).
+
+## Tại sao sử dụng bảng tra cứu thay vì xy=k
+
+Các AMM constant-product phải chịu slippage cao trên các cặp có dải giá chặt. Một swap USDC-USDT gần như không tốn chi phí; trên một pool constant-product, k=x·y buộc phải có sự thay đổi giá ngay cả với khối lượng nhỏ. Bảng tra cứu cho phép quản trị viên pool thể hiện *mối quan hệ giá thực tế*:
+
+- Đối với stablecoin: tập trung mật độ bảng xung quanh 1:1 để các micro-swap có chi phí ~0 slippage.
+- Đối với các cặp có tài sản đảm bảo: mã hóa tỷ lệ mục tiêu và để lưới định hình bề mặt phí/khuyến khích.
+
+Bảng hiện tại **cố định** — nó được điền lịch sử thông qua lệnh `UpdateModelData`, lệnh này đã bị loại bỏ, vì vậy các pool hiện tại giữ nguyên bảng của chúng. Chi phí on-chain chỉ là tìm kiếm nội suy — rẻ hơn nhiều so với tính toán lại công thức.
+
+## Cách hoạt động: tài khoản model-data
+
+Pool giữ một tài khoản `ModelDataInfo` — một **mảng 50.000 phần tử** của các struct `DataElement`. Mỗi phần tử chứa:
+
+```
+DataElement {
+  x: u64,           // tọa độ X của bảng
+  y: u64,           // tọa độ Y của bảng
+  price: u64,       // giá tại (x, y)
+}
+```
+
+Chỉ `valid_data_count` phần tử đầu tiên được điền; phần còn lại được đặt thành zero. Khi swap, chương trình:
+
+1. **Tính toán một tỷ lệ** từ các dự trữ pool hiện tại và sử dụng tìm kiếm nhị phân để tìm hai phần tử bảng nào đặt ngoặc tỷ lệ đó.
+2. **Nội suy tuyến tính** giữa hai điểm đặt ngoặc để lấy giá báo giá.
+3. **Áp dụng phí** (0.02% trừ khỏi số tiền đầu vào) và trả kết quả cho người dùng.
+
+Trường `multiplier` trên bảng tính đến khả năng x và y được lưu trữ ở tỷ lệ giảm (ví dụ: với 6 chữ số thập phân thay vì 18). Khám phá giá rescale tương ứng.
+
+## So sánh: Stable AMM vs. AMM v4 vs. CPMM
+
+| Khía cạnh | Stable AMM | AMM v4 | CPMM |
+|-----------|-----------|--------|------|
+| Đường cong | Bảng tra cứu + nội suy | Constant product (xy=k) | Constant product |
+| Trường hợp sử dụng chính | Stablecoin, cặp được gắn | Cặp chung, thanh khoản sâu cũ | Cặp chung, triển khai mới |
+| Phụ thuộc OpenBook | **Không** (đường dẫn market lâu không hoạt động; mã chết bị loại bỏ 2026-06) | **Có** | Không |
+| Token-2022 | Không | Không | Có |
+| Hồ sơ slippage | Tối thiểu ở 1:1 | Cao ở tỷ lệ chặt | Vừa phải trên toàn dải |
+| Đường cong có thể điều chỉnh bởi quản trị viên | Không còn (`UpdateModelData` bị loại bỏ; bảng hiện cố định) | Không (`SetParams` chỉ) | Không |
+| Kích thước bảng | ~50k phần tử × 24 byte | N/A | N/A |
+| Tính toán trên mỗi swap | ~5k–15k CU (tìm kiếm nhị phân + nội suy) | ~150k–200k CU | ~60k–100k CU |
+| Số lượng tài khoản trên mỗi swap | 9 (bố cục mới; 18 tương thích cũ) | ~18 (AMM + OpenBook) | ~11 |
+
+## Mô hình tư duy
+
+Một pool Stable AMM là một **AMM bảng tra cứu nội suy** giữ tất cả thanh khoản của nó trong các vault riêng. Sự khác biệt chính so với pool constant-product là đường cong khám phá giá không được mã hóa cứng — nó là một mảng thưa được nướng vào tài khoản `ModelDataInfo` của pool. Các hoạt động có thể gọi hiện tại là **swap trực tiếp** (người dùng ↔ pool), **deposit / withdraw** (hoạt động LP), và **`WithdrawPnl`** (quét phí quản trị viên). Crank OpenBook (`MonitorStep`) — lâu không hoạt động kể từ khi pool ngừng đăng đơn — và các lệnh thiết lập pool/quản trị viên đã bị loại bỏ.
+
+## Khi nào Stable AMM là lựa chọn đúng
+
+- Bạn vận hành một cặp stablecoin hoặc tài sản tương quan khác và muốn định giá chặt chẽ, có thể dự đoán được.
+- Bạn có kiến thức sâu về mối quan hệ giá của cặp của mình và muốn mã hóa nó trực tiếp dưới dạng đường cong.
+- Bạn đã có tích hợp cho AMM v4 và chỉ cần một biến thể đường cong khác.
+
+Đối với một pool mới, mục đích chung mà không có yêu cầu tương quan chặt chẽ, [CPMM](/docs/i18n/vi/products/cpmm) là mặc định đơn giản hơn và có thanh khoản hơn.
+
+## Bước tiếp theo
+
+- [Tài khoản](/docs/i18n/vi/products/stable/accounts) — tham chiếu trường `AmmInfo`, `ModelDataInfo`, `DataElement`.
+- [Toán học](/docs/i18n/vi/products/stable/math) — tìm kiếm nhị phân, nội suy và áp dụng phí.
+- [Lệnh](/docs/i18n/vi/products/stable/instructions) — tập hợp có thể gọi (swap, deposit, withdraw, `WithdrawPnl`) và các lệnh bị loại bỏ.
+- [Phí](/docs/i18n/vi/products/stable/fees) — phí 0.02% và cách chia 88 / 12 của nó.
+- [Bản demo mã](/docs/i18n/vi/products/stable/code-demos) — routing và tích hợp trực tiếp.
+
+Nguồn:
+
+- [`reference/program-addresses`](/docs/i18n/vi/reference/program-addresses) cho ID chương trình chính thức
+- [`reference/changelog`](/docs/i18n/vi/reference/changelog) cho bản nâng cấp loại bỏ mã market 2026-06-22

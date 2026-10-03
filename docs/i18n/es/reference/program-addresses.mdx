@@ -1,0 +1,297 @@
+---
+title: "Direcciones de programas"
+description: "IDs de programas canónicos de Raydium y PDAs compartidas en Solana mainnet-beta y devnet. Todas las demás páginas enlazan aquí en lugar de codificar direcciones."
+---
+
+<Info>
+  **Esta página fue traducida automáticamente por IA. La versión en inglés es la fuente autorizada.**
+
+  [Ver versión en inglés →](/docs/en/reference/program-addresses)
+</Info>
+
+<Info>
+  **Fuente de verdad.** Esta página es el único lugar en la documentación que lista direcciones de programas textualmente. Otras páginas enlazan aquí. Si un ID cambia, actualízalo **solo aquí** y todas las referencias en el sitio permanecerán consistentes.
+
+  Siempre verifica los valores contra la API en vivo (`https://api-v3.raydium.io/main/info`) antes de firmar transacciones reales.
+</Info>
+
+## Mainnet-beta
+
+<Tip>
+  Regla de oro: si un ID de programa en la naturaleza no coincide con la tabla siguiente, **no firmes la transacción.** Un ID de programa que no coincide es la forma más fácil de perder fondos en Solana.
+</Tip>
+
+### Programas en cadena
+
+| Programa | ID del programa | Fuente |
+|---------|------------|--------|
+| **AMM v4** (AMM híbrido + OpenBook) | `675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8` | [raydium-amm](https://github.com/raydium-io/raydium-amm) |
+| **CPMM** (AMM estándar) | `CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C` | [raydium-cp-swap](https://github.com/raydium-io/raydium-cp-swap) |
+| **CLMM** (Liquidez concentrada) | `CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK` | [raydium-clmm](https://github.com/raydium-io/raydium-clmm) |
+| **Stable AMM** (curva estilo StableSwap) | `5quBtoiQqxF9Jv6KYKctB59NT3gtJD2Y65kdnB1Uev3h` | fuente no disponible públicamente |
+| **Farm v3** (staking RAY heredado) | `EhhTKczWMGQt46ynNeRX1WfeagwwJd7ufHvCDjRxjo5Q` | fuente no disponible públicamente |
+| **Farm v5** (granjas de ecosistema heredadas) | `9KEPoZmtHUrBbhWN1v1KWLMkkvwY6WLtAVUCPRtRjP4z` | fuente no disponible públicamente |
+| **Farm v6** (granjas de ecosistema actuales) | `FarmqiPv5eAj3j1GMdMCMUGXqPUvmquZtMy86QH6rzhG` | fuente no disponible públicamente |
+| **LaunchLab** | `LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj` | fuente no disponible públicamente |
+| **AMM Routing** (enrutador en cadena de Raydium) | `routeUGWgWzqBWFcrCfv8tritsqukccJPu3q5GPP3xS` | fuente no disponible públicamente |
+| **Burn & Earn / LP Lock** | `LockrWmn6K5twhz3y9w1dQERbmgSaRkfnTeTKbpofwE` | fuente no disponible públicamente |
+
+Notas:
+
+- AMM v4 y Farm v3/v5 se **retienen para pools y posiciones existentes**. La interfaz de usuario de Raydium y el SDK enrutan la creación de nuevos pools y nuevas granjas de ecosistema a CPMM, CLMM y Farm v6 respectivamente — ver [`protocol-overview/versions-and-migration`](/docs/i18n/es/protocol-overview/versions-and-migration).
+- El ID de Farm v3 anterior también funciona como el programa de staking de activo único \$RAY. El comportamiento es idéntico a Farm v3 para staking de LP.
+- **Stable AMM** es un programa separado que el programa AMM Routing puede dirigirse junto con AMM v4, CPMM y CLMM. La liquidez es escasa en comparación con los otros tres programas y el SDK no expone una API de primera clase para él; los integradores que enrutan a través de él generalmente lo hacen a través del enrutador.
+- **Disponibilidad del código fuente.** De los programas en cadena anteriores, solo `raydium-amm` (AMM v4), `raydium-cp-swap` (CPMM) y `raydium-clmm` (CLMM) se distribuyen con repositorios de código fuente públicos bajo [`github.com/raydium-io`](https://github.com/raydium-io). Stable AMM, LaunchLab, AMM Routing, Burn & Earn / LP Lock y los programas Farm no están disponibles públicamente — verifica contra la API en vivo, el bytecode en cadena y los IDLs publicados en [`raydium-io/raydium-idl`](https://github.com/raydium-io/raydium-idl) en su lugar.
+
+### Autoridad de administrador compartida
+
+Cada programa de Raydium — incluyendo AMM v4 — comparte una única `Pubkey` de administrador codificada para control de acceso a nivel de instrucción en rutas de administrador. Es `config_feature::amm_owner::ID` en AMM v4 (controlando `SetParams`, `CreateConfigAccount` y `UpdateConfigAccount`, y usado como `pnl_owner` predeterminado) e `admin::ID` en los programas Anchor — CLMM, CPMM, LaunchLab, Lock — controlando rutas como `CreateAmmConfig` o `UpdatePoolStatus`:
+
+| Cluster | Administrador |
+|---------|-------|
+| mainnet-beta | `GThUX1Atko4tqhN2NaiTazWSeFWMuiUvfFnyJyUghFMJ` |
+| devnet | `DRayqG9RXYi8WHgWEmRQGrUWRWbhjYWYkCRJDd6JBBak` |
+
+Las autoridades operacionales a nivel de cuenta (p. ej. `protocol_owner`, `fund_owner` en `AmmConfig` de CPMM/CLMM, o las billeteras de migración en `GlobalConfig` de LaunchLab) se almacenan en cadena y pueden diferir del administrador del programa. Léelas directamente de la cuenta de configuración relevante antes de enviar transacciones de alto riesgo.
+
+### Autoridad creadora de PDA de permisos de CPMM
+
+`CreatePermissionPda` acepta el administrador del programa compartido anterior o un propietario dedicado. Desde la actualización de CPMM de 2026-09, `ClosePermissionPda` acepta los mismos dos firmantes; antes era solo administrador.
+
+| Cluster | Propietario dedicado de `CreatePermissionPda` |
+|---------|----------------------------------------|
+| mainnet-beta | `RayqjDRsNEFuPcDE4JpEScwJvwusmHYuNZ3MgET4D7U` |
+| devnet | `DRayJkSKsijbcEqdooK4uUGcT6gjbEuwUh7V6Nmqct7M` |
+
+### Autoridades del registro de mints de soporte
+
+`CreateSupportMintAssociated` y `CloseSupportMintAssociated` aceptan el administrador del programa compartido o el propietario dedicado del programa a continuación. Registrar un mint lo admite más allá de la lista de permitidos de extensión Token-2022 de ese programa — ver [`reference/token-2022-support`](/docs/i18n/es/reference/token-2022-support#the-one-bypass-the-per-mint-registry). CPMM y CLMM mantienen cada uno su propio PDA de registro y su propia autoridad; ninguna clave funciona en el otro programa.
+
+| Programa | Cluster | Propietario de soporte-mint dedicado |
+|---------|---------|------------------------------|
+| CPMM | mainnet-beta | `Rayv2LG4tFSMizZhMP8aSUYxDPjV8qJtx2NQY9RKYZy` |
+| CPMM | devnet | `DRaypyeDL6y1dUusMgwyeDM5JebjhsSi8aRXobKQ9DcQ` |
+| CLMM | mainnet-beta | `RayVyjyJQz9vAi126A4sGexKnSU1XeZaHTRcM1mZMPY` |
+| CLMM | devnet | `rayf3nEbb3bnfN6RDGFpqPbjc5uUa3tRUzu6UVYrRx5` |
+
+### Billeteras propietarias de comisiones de CPMM
+
+Desde la actualización de CPMM de 2026-09, `CreateAmmConfig` escribe estas claves fijas en `protocol_owner` y `fund_owner` de la nueva configuración en lugar de copiar la clave del firmante administrador. `CollectProtocolFee` y `CollectFundFee` aceptan la clave almacenada en la configuración **o** el administrador del programa compartido (`|| crate::admin::ID`), por lo que el administrador sigue siendo un firmante aceptado — lo que cambió es solo dónde van los ingresos por defecto.
+
+| Cluster | `protocol_fee_owner` | `fund_fee_owner` |
+|---------|----------------------|------------------|
+| mainnet-beta | `ProCXqRcXJjoUd1RNoo28bSizAA6EEqt9wURZYPDc5u` | `FUNDduJTA7XcckKHKfAoEnnhuSud2JUCUZv6opWEjrBU` |
+| devnet | `DRay33UmULQCeawH3dVpJfN3uqLj6Qtq4ymSRx2pAgGK` | `DRay33UmULQCeawH3dVpJfN3uqLj6Qtq4ymSRx2pAgGK` |
+
+<Warning>
+  Estos son los valores que el programa *escribe en nuevas configuraciones*, no una descripción de las existentes. Las cuentas `AmmConfig` creadas antes de la actualización mantienen lo que está almacenado en ellas. Siempre lee `protocol_owner` / `fund_owner` de la cuenta antes de construir una transacción de recopilación.
+</Warning>
+
+### Billeteras propietarias de comisiones de CLMM
+
+Desde la actualización de CLMM de 2026-09-30, `CreateAmmConfig` escribe estas claves fijas en `owner` y `fund_owner` de la nueva configuración. Antes, copiaba la clave del firmante administrador. `CollectProtocolFee` / `CollectFundFee` aceptan la clave almacenada en la configuración **o** el administrador del programa compartido, por lo que el administrador sigue siendo un firmante aceptado.
+
+| Cluster | `protocol_fee_owner` → `owner` | `fund_fee_owner` → `fund_owner` |
+|---------|--------------------------------|---------------------------------|
+| mainnet-beta | `projjosVCPQH49d5em7VYS7fJZzaqKixqKtus7yk416` | `FundHfY8oo8J9KYGyfXFFuQCHe7Z1VBNmsj84eMcdYs4` |
+| devnet | `DRayDktajVnqaNPyuYATWmZXyiJkdXpmUPdBYEapgaLY` | `DRayDktajVnqaNPyuYATWmZXyiJkdXpmUPdBYEapgaLY` |
+
+En mainnet estos coinciden con los valores ya almacenados en las 21 configuraciones de CLMM existentes (ver [Cuentas de configuración a nivel de programa](#program-level-config-accounts)). La actualización codifica un valor que fue establecido previamente manualmente.
+
+<Warning>
+  Como con CPMM, estos son los valores que el programa *escribe en nuevas configuraciones*. Las cuentas `AmmConfig` existentes no se reescriben. Lee `owner` / `fund_owner` de la cuenta antes de construir una transacción de recopilación.
+</Warning>
+
+### Billeteras de recopilación de comisiones de protocolo
+
+Donde se acumula la parte del protocolo de las comisiones de negociación de cada programa. Estas son billeteras ordinarias que contienen tokens, por lo que una única dirección lleva un conjunto mixto de mints SPL (wSOL y USDC de pools SOL/USDC, wSOL y RAY de pools SOL/RAY, etc.).
+
+| Programa | Dirección de recopilación | Almacenado como |
+|---------|--------------------|-----------|
+| CLMM | `projjosVCPQH49d5em7VYS7fJZzaqKixqKtus7yk416` | `AmmConfig.owner` en las 21 configuraciones, y escrito en nuevas desde 2026-09-30 (ver [Billeteras propietarias de comisiones de CLMM](#clmm-fee-owner-wallets)) |
+| CPMM | `ProCXqRcXJjoUd1RNoo28bSizAA6EEqt9wURZYPDc5u` | `AmmConfig.protocol_owner` (ver [Billeteras propietarias de comisiones de CPMM](#cpmm-fee-owner-wallets)) |
+| AMM v4 | `PNLCQcVCD26aC7ZWgRyr5ptfaR7bBrWdTFgRWwu2tvF` | `AmmConfig.pnl_owner` en el PDA de configuración único |
+
+La parte de protocolo de Stable AMM se acumula en bóveda como `out_put.need_take_pnl_*` y es barrida por `WithdrawPnl` en lugar de estar en una billetera permanente. Para CPMM, lee `protocol_owner` de la `AmmConfig` específica antes de construir una transacción de recopilación — las configuraciones creadas antes de la actualización de 2026-09 pueden contener una clave diferente.
+
+### Billeteras de recopilación de lámports excedentes
+
+Cada uno de los tres programas actualizados el 2026-09-09, y CLMM el 2026-09-30, ganó una instrucción de administrador que devuelve lámports mantenidos por encima del mínimo exento de renta en cuentas controladas por el programa, siguiendo la [reducción de renta SIMD-0437](/docs/en/solana-fundamentals/rent-and-reclaimable-rent). Cada programa codifica su propia billetera de destino, y cada una es una clave dedicada, no el administrador del programa compartido.
+
+| Programa | Instrucción | mainnet-beta | devnet |
+|---------|-------------|--------------|--------|
+| AMM v4 | `WithdrawExcessLamports` | `Rayyxz4cjBTQo7XTT1fhVNqFWK21TjiWcrtPgC3czbL` | `DRaySTrJSn4nD9TF1dLZ7uAGNhUXV5kth6yudWTTx39A` |
+| CPMM | `CollectExcessLamports` | `RayGkhY93thaTgCv98sx1pNLgBHhJDxWUeZXp4bjmnp` | `DRaydJNq54dSDHUqYCE3G8YySgaXfZucbh7dTXw9fBMs` |
+| LaunchLab | `CollectExcessLamports` | `RayFqUZuGuG4Lt35YSEVX1TS12pKLbiqpB3fPzFG4Ag` | `DRayrZj22uaieAuGA8BnYUnK5zRMEiJM88A13dPrJDyB` |
+| CLMM | `CollectExcessLamports` | `Ray9LdYRLXsHzL8pr3Ceahfiz8MsS2pZagzHo1ckdfJ` | `DRay9ncC4JVKemPgT4FBaAV2wyTK21CUa7reZKgKdE9B` |
+
+CPMM, LaunchLab y CLMM además aceptan el administrador del programa compartido como firmante. AMM v4 acepta **solo** la billetera anterior — no tiene fallback de administrador. AMM v4 también compila una clave de testnet separada (`75KWb5XcqPTgacQyNw9P5QU2HL3xpezEVcgsFCiJgTT`) bajo su característica `testnet`.
+
+Estas instrucciones mueven solo lámports; nunca tocan un saldo de token, cierran una cuenta o cambian el estado del pool. Ver [`products/amm-v4/instructions`](/docs/i18n/es/products/amm-v4/instructions#withdrawexcesslamports), [`products/cpmm/instructions`](/docs/i18n/es/products/cpmm/instructions#collectexcesslamports), [`products/launchlab/instructions`](/docs/i18n/es/products/launchlab/instructions#collectexcesslamports) y [`products/clmm/instructions`](/docs/i18n/es/products/clmm/instructions#collectexcesslamports).
+
+### Creador de configuración delegado de LaunchLab
+
+`CreateConfig` acepta el administrador del programa compartido o la autoridad delegada a continuación. El rol delegado puede crear una nueva `GlobalConfig`; no puede llamar a la ruta `UpdateConfig` solo para administrador en una cuenta existente.
+
+| Cluster | Autoridad delegada de `CreateConfig` |
+|---------|------------------------------------|
+| mainnet-beta | `RayUzntHM1dWZJyCnkQjHusUGhYyi6gpNf7t8srtty2` |
+| devnet | `DRayDZimvpoExGSuPFHSD8ys1iUCeyr77WpWkUBHh7LB` |
+
+### Autoridades de congelación de emisor restringido de CLMM
+
+Cuando cualquiera de los mints de bóveda en un pool de CLMM tiene una de las autoridades de congelación a continuación, las nuevas posiciones abiertas a través de una ruta V2 tienen su cuenta de token NFT de posición congelada. La lista es `frozen_position_nft_authorities::IDS` en el programa CLMM, y su única entrada es la autoridad de emisor que la detección de Superstate ahora eliminada de CLMM también coincidía. Estas son **autoridades de emisor de activo subyacente usadas solo como claves de coincidencia**. El PDA del pool de CLMM, no la clave del emisor, se convierte en autoridad de congelación para el mint de NFT de posición.
+
+| Cluster | Autoridad de congelación de emisor restringido |
+|---------|--------------------------------------|
+| mainnet-beta | `2Yq4T3mPNfjtEyTxSbRjRKqLf1pwbTasuCQrWe6QpM7x` |
+| devnet | `3TRuL3MFvzHaUfQAb6EsSAbQhWdhmYrKxEiViVkdQfXu` |
+
+La lista está codificada en el programa CLMM. Agregar o eliminar una autoridad requiere una actualización del programa.
+
+### Convenciones de configuración compartida / PDA
+
+Varios programas de Raydium exponen **cuentas de configuración** cuyas claves públicas son estables y se enumeran en la API pública. Prefiere la búsqueda de API sobre codificar:
+
+```
+# Configuraciones de comisiones de CPMM (devuelve un array de {id, index, tradeFeeRate, ...})
+GET https://api-v3.raydium.io/main/cpmm-config
+
+# Configuraciones de comisiones de CLMM
+GET https://api-v3.raydium.io/main/clmm-config
+```
+
+### Receptores de comisión de creación de pool
+
+Tanto CPMM como AMM v4 validan su destino de comisión de creación de pool **por dirección exacta**, por lo que ya debe existir en cualquier cluster en el que estés probando. CLMM no tiene una comisión de creación de pool separada.
+
+| Programa | Constante | mainnet-beta | devnet |
+|---------|----------|--------------|--------|
+| CPMM | `create_pool_fee_reveiver::ID` (el error tipográfico está en la fuente) | `DNXgeM9EiiaAbaWvwjHj9fQQLAX5ZsfHyvmYUNRAdNC8` | `3oE58BKVt8KuYkGxx8zBojugnymWmBiyafWgMrnb6eYy` |
+| AMM v4 | `config_feature::create_pool_fee_address::ID` | `7YttLkHDoNj9wyDur5pM1ejNaAvT9X4eqaYcHQqtj2G5` | `9y8ENuuZ3b19quffx9hQvRVygG5ky6snHfRvGpuSfeJy` |
+
+AMM v4 también compila `3TRTX4dXUpp2eqxi3tvQDFYUV7SdDJjcPE3Y4mbtftaX` bajo su característica `testnet`. CPMM rechaza una falta de coincidencia con `ConstraintAddress` de Anchor (`2012`); AMM v4 con `InvalidFee`.
+
+### Guardián de orden limitado de CLMM
+
+`SettleLimitOrder` y `CloseLimitOrder` aceptan el `owner` de la orden o la clave de guardián a nivel de programa a continuación. El guardián no puede abrir, aumentar o disminuir órdenes, y la salida siempre llega a la cuenta del propietario de la orden — ver [`security/admin-and-multisig`](/docs/i18n/es/security/admin-and-multisig).
+
+| Cluster | `limit_order_admin` |
+|---------|---------------------|
+| mainnet-beta | `Ray8HHtixhL9zvnokMyELCVGp622PDPJj96zcVC9RWp` |
+| devnet | `DRaypkxM96mjYYnqMmuYjsSL3stHxLf1CvYuTcqxUaav` |
+
+Parámetros de comisión de `AmmConfig` predeterminado de CPMM índice `0` (pool estándar de 0.25%), para referencia:
+
+| Campo | Valor | Significado |
+|-------|-------|---------|
+| `trade_fee_rate` | `2500` | 0.25% del volumen de negociación |
+| `protocol_fee_rate` | `120000` | 12% **de la comisión de negociación** (no volumen) enrutado al protocolo |
+| `fund_fee_rate` | `40000` | 4% **de la comisión de negociación** enrutado al multisig del fondo |
+| `creator_fee_rate` | `500` | 0.05% del volumen de negociación al creador del pool (opcional) |
+
+Ver [`products/cpmm/fees`](/docs/i18n/es/products/cpmm/fees) para cómo se componen las divisiones, y [`reference/fee-comparison`](/docs/i18n/es/reference/fee-comparison) para la matriz entre productos.
+
+### Semillas de PDA
+
+Las semillas a continuación son **canónicas** y son utilizadas tanto por el SDK como por CPIs en cadena. Siempre calcula PDAs; no codifiques direcciones derivadas.
+
+```ts
+// CPMM — todas las semillas son cadenas ASCII estáticas a menos que se indique lo contrario.
+const [ammConfig]   = PublicKey.findProgramAddressSync(
+  [Buffer.from("amm_config"), u16ToBytes(index)],
+  CPMM_PROGRAM_ID,
+);
+const [authority]   = PublicKey.findProgramAddressSync(
+  [Buffer.from("vault_and_lp_mint_auth_seed")],
+  CPMM_PROGRAM_ID,
+);
+const [poolState]   = PublicKey.findProgramAddressSync(
+  [Buffer.from("pool"), ammConfig.toBuffer(), token0Mint.toBuffer(), token1Mint.toBuffer()],
+  CPMM_PROGRAM_ID,
+);
+const [lpMint]      = PublicKey.findProgramAddressSync(
+  [Buffer.from("pool_lp_mint"), poolState.toBuffer()],
+  CPMM_PROGRAM_ID,
+);
+const [vault0]      = PublicKey.findProgramAddressSync(
+  [Buffer.from("pool_vault"), poolState.toBuffer(), token0Mint.toBuffer()],
+  CPMM_PROGRAM_ID,
+);
+const [vault1]      = PublicKey.findProgramAddressSync(
+  [Buffer.from("pool_vault"), poolState.toBuffer(), token1Mint.toBuffer()],
+  CPMM_PROGRAM_ID,
+);
+const [observation] = PublicKey.findProgramAddressSync(
+  [Buffer.from("observation"), poolState.toBuffer()],
+  CPMM_PROGRAM_ID,
+);
+
+// Anulación opcional por creador de la parte del protocolo de la comisión del creador.
+// La cuenta puede no existir; ambas rutas de CollectCreatorFee aún requieren la dirección.
+const [creatorFeeShare] = PublicKey.findProgramAddressSync(
+  [Buffer.from("creator_fee_share"), creator.toBuffer(), ammConfig.toBuffer()],
+  CPMM_PROGRAM_ID,
+);
+```
+
+`token0Mint` / `token1Mint` están **ordenados por orden de bytes de clave pública** (token0 < token1) antes de hacer hash. Hacerlo mal produce un PDA válido para un pool inexistente.
+
+Las semillas equivalentes de CLMM siguen el mismo estilo; ver [`products/clmm/accounts`](/docs/i18n/es/products/clmm/accounts).
+
+## Devnet
+
+| Programa | ID del programa |
+|---------|------------|
+| **AMM v4** | `DRaya7Kj3aMWQSy19kSjvmuwq9docCHofyP9kanQGaav` |
+| **CPMM** | `DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb` |
+| **CLMM** | `DRayAUgENGQBKVaX8owNhgzkEDyoHTGVEGHVJT1E9pfH` |
+| **Stable AMM** | `DRayDdXc1NZQ9C3hRWmoSf8zK4iapgMnjdNZWrfwsP8m` |
+| **LaunchLab** | `DRay6fNdQ5J82H7xV6uq2aV3mNrUZ1J4PgSKsWgptcm6` |
+| **AMM Routing** | `DRaybByLpbUL57LJARs3j8BitTxVfzBg351EaMr5UTCd` |
+| **Burn & Earn / LP Lock** | `DRay25Usp3YJAi7beckgpGUC7mGJ2cR1AVPxhYfwVCUX` |
+| **Farm v3 / v5 / v6** | No se publica de forma confiable para devnet — confirma a través de la API en vivo (`https://api-v3-devnet.raydium.io/main/info`) antes de usar. |
+
+Base de API REST de Devnet: `https://api-v3-devnet.raydium.io/` (misma forma de ruta que mainnet).
+
+## Autoridad de actualización
+
+Cada programa de Raydium en mainnet-beta se implementa bajo el Cargador BPF Actualizable con la **misma** autoridad de actualización — la bóveda del multisig de actualización de programa de Squads:
+
+| | Valor |
+|---|---|
+| Autoridad de actualización (todos los programas) | `FytDrVzDybM1TwFQPGb8qaxZR7dBCzNeqT3vtQsceZQK` |
+| Cuenta de configuración del multisig de Squads | `tr8rgazUrZzgdkfc6Q622nVJHMMzh29trdBE2uBHb4u` |
+| Programa de Squads | `SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf` (v4) |
+
+Verificado en cadena el 2026-09-09 para AMM v4, CPMM, CLMM, Stable AMM, Farm v6, LaunchLab, AMM Routing y Lock — los ocho reportan esa autoridad, y ninguno es inmutable. Vuelve a verificar con `solana program show <PROGRAM_ID> -u mainnet-beta` antes de un despliegue de alto riesgo; ver [`security/admin-and-multisig`](/docs/i18n/es/security/admin-and-multisig) para el umbral del multisig y la práctica de firma.
+
+## Cuentas de configuración a nivel de programa
+
+| Programa | Cuenta de configuración | Contenidos |
+|---------|----------------|----------|
+| AMM v4 | `9DCxsMizn3H1hprZ7xWe6LDzeUeZBksYFpBWBtSf1PQX` | El PDA `AmmConfig` único en semilla `["amm_config_account_seed"]`. Contiene `pnl_owner` = `PNLCQcVCD26aC7ZWgRyr5ptfaR7bBrWdTFgRWwu2tvF`, `cancel_owner` = `RAYdmrNjdRSu7ErPv9s2BqDtRoFa1QECn7UJYaC2tR3` y `create_pool_fee` = `150000000` (0.15 SOL). |
+| CPMM | 21 cuentas `AmmConfig` (índice 0–20) | El índice 0 es `D4FPEruKEHrG5TenZ2mpDGEfu1iUvTiqBxvpU8HLBvC2`. Ver [`reference/fee-comparison`](/docs/i18n/es/reference/fee-comparison) para el conjunto de niveles. |
+| CLMM | 21 cuentas `AmmConfig` (índice 0–20) | El índice 1 (0.25%, espaciado de tick 60) es `E64NGkDLLCdQ2yFNPcavaKptrEgmiQaNykUuLC1Qgwyp`. `owner` = `projjosVCPQH49d5em7VYS7fJZzaqKixqKtus7yk416`, `fund_owner` = `FundHfY8oo8J9KYGyfXFFuQCHe7Z1VBNmsj84eMcdYs4` en las 21. |
+
+Todos los valores leídos de mainnet-beta el 2026-09-09. Las tasas de comisión en estas cuentas son mutables por administrador — léelas en vivo en lugar de almacenarlas en caché.
+
+## Cómo verificar una dirección en cadena
+
+1. **Explorador de Solana.** Pega la dirección en [explorer.solana.com](https://explorer.solana.com) y confirma que está marcada como `Program` con una autoridad de actualización actual. Mainnet-beta debe mostrar despliegues firmados por la autoridad de actualización de Raydium.
+2. **CLI.** Usa `solana program show <PROGRAM_ID> -u mainnet-beta` para inspeccionar slot de despliegue, cargador BPF, autoridad de actualización y longitud de datos. Registra estos en tu runbook.
+3. **Adjunto de IDL.** `anchor idl fetch <PROGRAM_ID> --provider.cluster mainnet` funciona para **CLMM, LaunchLab y Lock**, que aún mantienen una cuenta `anchor:idl` heredada propiedad del programa mismo. **No** funciona para CPMM: el IDL en cadena de CPMM se movió al programa de Metadatos del Programa (`ProgM6JCCvbYkfKqJYHePx4xxSUSqJp7rh8Lyv7nk7S`) en la actualización de 2026-09, así que obtén de allí en su lugar. AMM v4, Stable AMM y Farm no tienen IDL en cadena. Los IDLs se reflejan en [github.com/raydium-io/raydium-idl](https://github.com/raydium-io/raydium-idl) — compara el IDL en cadena contra el repositorio antes de confiar en él.
+4. **Autoridades de configuración/administrador.** Para cuentas de configuración de CPMM/CLMM, lee el campo `owner`/`protocol_owner` y confirma que coincide con el multisig actual de Raydium publicado en [`security/admin-and-multisig`](/docs/i18n/es/security/admin-and-multisig).
+
+Si cualquiera de las cuatro verificaciones anteriores no está de acuerdo con esta página, trata esta página como incorrecta y abre un problema antes de escribir código nuevo contra las direcciones.
+
+## Actualizar esta página
+
+- Los cambios en los IDs de programa son críticos para la seguridad. **No** envíes un cambio de ID de programa sin (a) enlazar al anuncio de Raydium, (b) agregar una entrada en [`reference/changelog`](/docs/i18n/es/reference/changelog) y (c) ejecutar una verificación de enlaces sobre la documentación para confirmar que ninguna página aún hace referencia al valor anterior.
+- Las deprecaciones permanecen en la tabla con una nota de estado en lugar de ser eliminadas — los pools existentes aún se resuelven a través del programa anterior.
+
+Fuentes:
+
+- API en vivo: `https://api-v3.raydium.io/main/info`
+- [github.com/raydium-io/raydium-idl](https://github.com/raydium-io/raydium-idl)
+- [github.com/raydium-io/raydium-cp-swap](https://github.com/raydium-io/raydium-cp-swap)

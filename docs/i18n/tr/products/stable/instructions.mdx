@@ -1,0 +1,233 @@
+---
+title: "Stable AMM talimatları"
+description: "Şu anda çağrılabilir talimat seti — Deposit, Withdraw, SwapBaseIn, SwapBaseOut, WithdrawPnl — ve 2026-06-22 yükseltmesinde kaldırılan talimatlar."
+---
+
+<Info>
+  **Bu sayfa yapay zekâ tarafından otomatik olarak çevrilmiştir. İngilizce sürüm esas alınır.**
+
+  [İngilizce sürümü görüntüle →](/docs/en/products/stable/instructions)
+</Info>
+
+<Info>
+  Stable AMM, kendi program kimliğine sahip **bağımsız bir programdır**. AMM v4 programının bir modu değildir ve AMM v4 "aracılığıyla" işlem görmez — ayrı olarak dağıtılır, yükseltilir ve çağrılır. Yalnızca işlem ücreti ve hesap düzeni kurallarında AMM v4'e benzer.
+</Info>
+
+<Warning>
+  **2026-06-22 yükseltmesi — ölü OpenBook (market) kodunun kaldırılması.** Stable AMM **çok zaman önce OpenBook'a emir göndermeyi durdurdu**; sipariş defteri pazar yapıcılığı yolu yıllardır hareketsiz kalmıştır. Bu yükseltme, kalan pazar ile ilgili hesapları ve kodu siler — canlı işlem davranışını **değiştirmez**.
+
+  Entegratörler için iki sonuç:
+
+  1. **Daha küçük hesap düzenleri.** `SwapBaseIn` / `SwapBaseOut` (**18 → 9**), `Deposit` (**14 → 12**) ve `Withdraw` (**21/22 → 12**) ölü Serum/market hesaplarını kaldırır. Eski düzenler geriye dönük uyumluluk için hala ayrıştırılır. `WithdrawPnl` (**16 → 10**) **uyumluluk yolu olmayan sabit bir kırılma değişikliğidir** (yalnızca yönetici).
+  2. **Çoğu talimat kaldırılmıştır.** Yalnızca `SwapBaseIn`, `SwapBaseOut`, `Deposit`, `Withdraw` ve `WithdrawPnl` çağrılabilir kalır. Diğer tüm talimatlar artık çağrılamaz.
+
+  Değişiklik günlüğü: [`reference/changelog`](/docs/i18n/tr/reference/changelog).
+</Warning>
+
+## Talimat envanteri
+
+### Çağrılabilir
+
+| Talimat | Kategori | Notlar |
+|---------|----------|--------|
+| `Deposit` | Likidite | Likidite ekle, LP al. Yeni 12 hesaplı düzen; eski 14 hesaplı düzen hala uyumlu. |
+| `Withdraw` | Likidite | LP yak, her iki tarafı al. Yeni 12 hesaplı düzen; eski 21/22 hesaplı düzen hala uyumlu. |
+| `SwapBaseIn` | Swap | Tam giriş swapi. Yeni 9 hesaplı düzen; eski 18 hesaplı düzen hala uyumlu. |
+| `SwapBaseOut` | Swap | Tam çıkış swapi. Yeni 9 hesaplı düzen; eski 18 hesaplı düzen hala uyumlu. |
+| `WithdrawPnl` | Yönetici | Birikmiş protokol ücretlerini topla. Yeni 10 hesaplı düzen (**sabit kırılma — eski düzen uyumluluğu yok**). |
+
+### Kaldırılan (artık çağrılamayan)
+
+Bunlar 2026-06-22 yükseltmesinde kaldırılmış ve artık çağrılamaz. Bkz. [Kaldırılan talimatlar](#removed-instructions).
+
+| Talimat | Eski kategori | Eski amaç |
+|---------|---------------|----------|
+| `Initialize` | Yaşam döngüsü | Havuz oluştur. |
+| `PreInitialize` | Yaşam döngüsü | Eski ön ayırma yardımcısı. |
+| `InitModelData` | Model kurulumu | Arama tablosunu oluştur ve başlat. |
+| `UpdateModelData` | Model kurulumu | Çağrı başına 5 tablo öğesine kadar doldur. |
+| `MonitorStep` | Crank | OpenBook doldurmaları kapat, emirleri yeniden gönder. |
+| `SetParams` | Yönetici | Havuz parametrelerini değiştir. |
+| `WithdrawSrm` | Eski | SRM ücret indirimi geri ödemelerini topla. |
+| `SimulateInfo` | Tanılama | Salt okunur fiyat teklifi yardımcısı. |
+
+## `Deposit`
+
+Likidite ekle, LP tokenleri al.
+
+**Argümanlar**
+
+```
+max_coin_amount: u64
+max_pc_amount: u64
+base_side: u64          // 0 = base on coin, 1 = base on pc
+```
+
+**Hesaplar** — yeni düzen, 12 hesap (yazılabilir `W`, imzalayan `S`)
+
+| # | Ad | W | S | Notlar |
+|---|----|----|---|--------|
+| 0 | `token_program` |   |   | SPL Token. |
+| 1 | `amm` | W |   | Havuzun `AmmInfo`'su. |
+| 2 | `amm_authority` |   |   | Program genelinde PDA. |
+| 3 | `amm_target_orders` | W |   | |
+| 4 | `amm_lp_mint` | W |   | LP mint'i. |
+| 5 | `amm_coin_vault` | W |   | Havuz coin kasası. |
+| 6 | `amm_pc_vault` | W |   | Havuz pc kasası. |
+| 7 | `model_data_account` |   |   | **Salt okunur arama tablosu.** |
+| 8 | `user_source_coin` | W |   | Kullanıcının coin girdisi. |
+| 9 | `user_source_pc` | W |   | Kullanıcının pc girdisi. |
+| 10 | `user_dest_lp` | W |   | Kullanıcının LP ATA'sı. |
+| 11 | `user_source_owner` |   | S | İşlem imzalayan. |
+
+**Uyumluluk**: `amm_open_orders` (eski #3) ve `serum_market` (eski #9) kaldırılmıştır. **14** hesap geçirildiğinde, talimat eski 14 hesaplı düzenle ayrıştırılır; Serum hesapları yoksayılır.
+
+**Matematik** — oranı hesaplamak için arama tablosunu kullanan standart pro-rata. SDK, istenen LP miktarı için coin/pc çiftini hesaplar ve maksimum sınırlara karşı kontrol eder.
+
+## `Withdraw`
+
+LP yak, her iki tarafı pro-rata al.
+
+**Argümanlar**
+
+```
+amount: u64            // Yakılacak LP tokenleri
+```
+
+**Hesaplar** — yeni düzen, 12 hesap (yazılabilir `W`, imzalayan `S`)
+
+| # | Ad | W | S | Notlar |
+|---|----|----|---|--------|
+| 0 | `token_program` |   |   | SPL Token. |
+| 1 | `amm` | W |   | Havuzun `AmmInfo`'su. |
+| 2 | `amm_authority` |   |   | Program genelinde PDA. |
+| 3 | `amm_target_orders` | W |   | |
+| 4 | `amm_lp_mint` | W |   | LP mint'i. |
+| 5 | `amm_coin_vault` | W |   | Havuz coin kasası. |
+| 6 | `amm_pc_vault` | W |   | Havuz pc kasası. |
+| 7 | `model_data_account` |   |   | **Salt okunur arama tablosu.** |
+| 8 | `user_source_lp` | W |   | Kullanıcının LP kaynağı. |
+| 9 | `user_dest_coin` | W |   | Kullanıcının coin çıktısı. |
+| 10 | `user_dest_pc` | W |   | Kullanıcının pc çıktısı. |
+| 11 | `user_lp_owner` |   | S | İşlem imzalayan. |
+
+**Uyumluluk**: dokuz Serum hesabı (`amm_open_orders`, `serum_program`, `serum_market`, `serum_coin_vault`, `serum_pc_vault`, `serum_vault_signer`, `serum_event_q`, `serum_bids`, `serum_asks`) kaldırılmıştır. Eski **21-** veya **22 hesaplı** düzenler hala kabul edilir. Ancak, **22. isteğe bağlı `referrer_pc_wallet` hesabı için referral ücret mantığı kaldırılmıştır** — hala geçirilebilir ancak artık etkili olmaz.
+
+**Ön koşullar**
+
+- `user_source_lp` en az `amount` tutar.
+
+**Son koşullar**
+
+- `amount` LP tokenleri yakılır.
+- Kullanıcı, birikmiş ücretler için ayarlanmış mevcut pro-rata'ya göre coin ve pc miktarlarını alır.
+
+## `SwapBaseIn`
+
+Fiyatlandırma için arama tablosunu kullanan tam giriş swapi.
+
+**Argümanlar**
+
+```
+amount_in: u64
+minimum_amount_out: u64
+```
+
+**Hesaplar** — yeni düzen, 9 hesap (yazılabilir `W`, imzalayan `S`)
+
+| # | Ad | W | S | Notlar |
+|---|----|----|---|--------|
+| 0 | `spl_token program` |   |   | SPL Token. |
+| 1 | `amm` | W |   | Havuzun `AmmInfo`'su. |
+| 2 | `amm_authority` |   |   | Program genelinde PDA. |
+| 3 | `amm_coin_vault` | W |   | Havuz coin kasası. |
+| 4 | `amm_pc_vault` | W |   | Havuz pc kasası. |
+| 5 | `model_data_account` |   |   | **Salt okunur arama tablosu.** |
+| 6 | `user_source_token` | W |   | Kullanıcının giriş token hesabı. |
+| 7 | `user_destination_token` | W |   | Kullanıcının çıkış token hesabı. |
+| 8 | `user_source_owner` |   | S | Kullanıcı (işlem imzalayan). |
+
+**Uyumluluk**: dokuz OpenBook hesabı (`amm_open_orders`, `serum_program`, `serum_market`, `serum_bids`, `serum_asks`, `serum_event_queue`, `serum_coin_vault`, `serum_pc_vault`, `serum_vault_signer`) kaldırılmıştır. Geçirilen hesap sayısı **9 değilse**, talimat eski **18 hesaplı** düzenle ayrıştırılır; Serum hesapları hala konumlarını işgal etmelidir, ancak içerikleri artık doğrulanmaz veya kullanılmaz.
+
+**Ön koşullar**
+
+- `amm.status` swapi izin verir.
+- `user_source_token` ≥ `amount_in` tutar.
+
+**Son koşullar**
+
+- Kullanıcı `amount_in` kaybeder, `amount_out ≥ minimum_amount_out` kazanır.
+- Havuz ücretleri `need_take_pnl_*` sayaçlarını artırır.
+
+**Matematik** — [`products/stable/math`](/docs/i18n/tr/products/stable/math) içinde açıklanan arama tablosu interpolasyonu.
+
+## `SwapBaseOut`
+
+Tam çıkış swapi (`SwapBaseIn`'in tersi). Aynı 9 hesaplı düzen, farklı matematik yönü.
+
+**Argümanlar**
+
+```
+max_amount_in: u64
+amount_out: u64
+```
+
+## `WithdrawPnl`
+
+Yalnızca yönetici. `need_take_pnl_*`'den birikmiş protokol ücretlerini belirlenen PnL hesaplarına topla.
+
+<Warning>
+  **Sabit kırılma değişikliği — uyumluluk yolu yok.** Bu talimatın eski düzen için **hiçbir** ayrıştırması yoktur. Eski düzeni göndermek, hesap yanlış hizalanması nedeniyle `InvalidTokenCoin` gibi doğrulama hataları ile başarısız olur (eski #3 `open_orders` idi). `WithdrawPnl`'yi çağıran yönetici araçları **yeni 10 hesaplı düzene** güncellenmelidir.
+</Warning>
+
+**Argümanlar** — hiçbiri (durum odaklı).
+
+**Hesaplar** — yeni düzen, sabit 10 hesap, yalnızca yönetici (yazılabilir `W`, imzalayan `S`)
+
+| # | Ad | W | S | Notlar |
+|---|----|----|---|--------|
+| 0 | `spl_token program` |   |   | SPL Token. |
+| 1 | `amm` | W |   | Havuzun `AmmInfo`'su. |
+| 2 | `amm_authority` |   |   | Program genelinde PDA. |
+| 3 | `amm_coin_vault` | W |   | Havuz coin kasası. |
+| 4 | `amm_pc_vault` | W |   | Havuz pc kasası. |
+| 5 | `amm_target_orders` | W |   | |
+| 6 | `model_data` |   |   | Arama tablosu. |
+| 7 | `user_coin` | W |   | Yöneticinin coin hesabı (ücret alır). |
+| 8 | `user_pc` | W |   | Yöneticinin pc hesabı (ücret alır). |
+| 9 | `amm_admin` |   | S | Havuz yöneticisi (imzalayan). |
+
+**Mantık değişikliği**: havuzun mevcut fonları birikmiş PnL'yi çekmek için yetersiz olduğunda, havuz artık `CancelAllOrdersState` / `Disabled` durumuna **konulmaz**; talimat doğrudan `TakePnlError` döndürür. İsteğe bağlı `referrer_pc_wallet` da kaldırılmıştır.
+
+**Ön koşullar**
+
+- `amm_admin` yetkili olmalıdır.
+
+**Son koşullar**
+
+- `need_take_pnl_coin` ve `need_take_pnl_pc` yöneticinin hesaplarına aktarılır.
+- Sayaçlar sıfırlanır.
+
+## Kaldırılan talimatlar
+
+Aşağıdaki talimatlar 2026-06-22 yükseltmesinde kaldırılmış ve **artık çağrılamaz**. Entegratörler bunları geçmiş işlemlerde ve SDK'larda tanısınlar diye burada belgelenmiştir.
+
+- **`Initialize`** — eski zamanlarda yeni bir Stable AMM havuzunu önyükledi. Kaldırıldı.
+- **`PreInitialize`** — eski ön ayırma yardımcısı. Kaldırıldı.
+- **`InitModelData`** — eski zamanlarda `ModelDataInfo` arama tablosunu oluşturdu ve başlattı. Kaldırıldı.
+- **`UpdateModelData`** — eski zamanlarda çağrı başına 5 arama tablosu öğesine kadar doldurdu. Kaldırıldı.
+- **`MonitorStep`** — doldurmaları kapatan ve emir ızgarasını yeniden gönderen OpenBook cranki. Havuz OpenBook'a göndermeyi durdurduktan sonra zaten uzun süredir hareketsiz; şimdi kaldırıldı.
+- **`SetParams`** — yönetici parametre değişiklikleri (durum, ücretler, sahip, model-veri anahtarı, vb.). Kaldırıldı.
+- **`WithdrawSrm`** — erken Serum döneminden havuzlar için SRM ücret indirimi geri ödemelerini topladı. Kaldırıldı.
+- **`SimulateInfo`** — salt okunur fiyat teklifi yardımcısı. Kaldırıldı; fiyat teklifi için SDK'nın çevrimdışı kararlı eğri yardımcılarını kullanın (bkz. [Kod örnekleri](/docs/i18n/tr/products/stable/code-demos)).
+
+## Sonraki adımlar
+
+- [Hesaplar](/docs/i18n/tr/products/stable/accounts) — hesap alanı düzenleri ve boyutları için.
+- [Matematik](/docs/i18n/tr/products/stable/math) — arama tablosu interpolasyon mantığı için.
+- [Kod örnekleri](/docs/i18n/tr/products/stable/code-demos) — SDK'dan bunları nasıl çağıracağınızı görmek için.
+
+Kaynaklar:
+
+- `raydium-stable/program/src/instruction.rs` (enum ve pack/unpack)
+- `raydium-stable/program/src/processor.rs` (yürütme mantığı)

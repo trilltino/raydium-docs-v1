@@ -1,0 +1,55 @@
+---
+title: "AMM v4"
+description: "恒定乘积 AMM。原本是与 OpenBook 共享流动性的混合设计；OpenBook 依赖已从程序中移除。"
+---
+
+<Info>
+  **本页内容由 AI 自动翻译，所有内容以英文版本为准。**
+
+  [查看英文版 →](/docs/en/products/amm-v4/index)
+</Info>
+
+<Warning>
+  **AMM v4 的 OpenBook / Serum 依赖已移除（2026-07 程序升级）。** 所有交换都在仅 AMM 路径上执行。订单簿 CPI 和做市指令（`MonitorStep`、`MigrateToOpenBook`、`WithdrawSrm` 等）已从程序中**移除**，现在调用时会回滚。v1 的 `SwapBaseIn` / `SwapBaseOut`、`Deposit` 和 `Withdraw` 指令保持旧的账户布局以实现向后兼容——市场账户仍按位置接受，但**不再被验证或使用**。新集成应使用 `SwapBaseInV2` / `SwapBaseOutV2` 入口点。详见 [2026-07-22 更新日志条目](/docs/i18n/zh/reference/changelog/2026-07-22-amm-v4-openbook-removal)。
+</Warning>
+
+## 概述
+
+AMM v4 是 Raydium 的第一代流动性池。它维护恒定乘积不变量（xy=k）。该池最初被设计为**混合 AMM**：除了曲线外，它还在绑定的 OpenBook 市场上发布斐波那契间距的限价单网格，使得池流动性对订单簿接收者可见。**该 OpenBook 集成已从程序中移除**（见上方警告）；如今 AMM v4 是纯恒定乘积 AMM。链上 `AmmInfo` 账户保留其 `market` / `open_orders` 引用字段以保持布局兼容性，但程序不再读取或作用于它们。
+
+对于许多遗留交易对，它仍然是 Raydium 上流动性最高的产品，但**不再推荐用于新池**——新部署请参阅 [CPMM](/docs/i18n/zh/products/cpmm)。
+
+**程序 ID：** 见 [reference/program-addresses](/docs/i18n/zh/reference/program-addresses)。
+
+**Token-2022：** 不支持。AMM v4 池仅接受经典 SPL 代币。
+
+## 章节内容
+
+<CardGroup cols={2}>
+  <Card title="概述" icon="circle-info" href="/docs/i18n/zh/products/amm-v4/overview">
+    概念模型：AMM v4 如何将恒定乘积曲线与 OpenBook 市场耦合，以及该设计存在的原因。
+  </Card>
+  <Card title="账户" icon="database" href="/docs/i18n/zh/products/amm-v4/accounts">
+    AmmInfo、TargetOrders、OpenOrders、LP 铸币、代币金库、市场金库签名者。种子、字段布局、不变量。
+  </Card>
+  <Card title="数学" icon="function" href="/docs/i18n/zh/products/amm-v4/math">
+    xy=k 不变量、价格计算。储备公式现在仅限金库；OpenBook 限价单网格数学作为历史背景保留。
+  </Card>
+  <Card title="指令" icon="terminal" href="/docs/i18n/zh/products/amm-v4/instructions">
+    Initialize2、Deposit、Withdraw、SwapBaseIn / V2、SwapBaseOut / V2、SetParams、WithdrawPnl。（MonitorStep 等订单簿指令已移除。）
+  </Card>
+  <Card title="费用" icon="percent" href="/docs/i18n/zh/products/amm-v4/fees">
+    LP 费用、协议费用、交易费用分割。订单簿成交的历史 PnL 处理（已停用）。
+  </Card>
+  <Card title="代码示例" icon="code" href="/docs/i18n/zh/products/amm-v4/code-demos">
+    TypeScript（raydium-sdk-v2）和 Rust CPI 示例，涵盖存入、提取和交换。
+  </Card>
+</CardGroup>
+
+## 何时阅读本文
+
+- 你正在审计或集成现有的 AMM v4 池。
+- 你正在构建必须支持 v4 流动性的路由器。
+- 你正在计划从 v4 迁移到 CPMM——另见 [user-flows/migrate-amm-v4-to-cpmm](/docs/i18n/zh/user-flows/migrate-amm-v4-to-cpmm)。
+
+如果你正在创建**新**池，请改为阅读 [CPMM](/docs/i18n/zh/products/cpmm)。

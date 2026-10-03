@@ -1,0 +1,155 @@
+---
+title: "Ước tính APR cho CLMM"
+description: "Cách Raydium tính toán các con số APR hiển thị trên các pool CLMM, cách ước tính APR của riêng bạn cho một khoảng giá giả định trước khi mở vị thế, và các trường hợp đặc biệt khiến APR theo dõi có thể gây hiểu lầm."
+---
+
+<Info>
+  **APR hiển thị trên giao diện Raydium** cho một pool CLMM là APR phí thực hiện của **thanh khoản trong khoảng** trong 24 giờ qua, được chiếu lên một năm. Đây không phải là APR mà **vị thế của bạn** sẽ kiếm được — điều đó phụ thuộc vào khoảng giá của bạn, thời gian ở trong khoảng, và phần thanh khoản của bạn trong tổng thanh khoản hoạt động trong cửa sổ giao dịch.
+</Info>
+
+## Công thức chính
+
+Đối với một pool CLMM, APR phí hàng ngày hiển thị trên Raydium được tính toán như sau:
+
+```
+apr_24h = (fees_24h / tvl_in_range_24h) · 365
+```
+
+Trong đó:
+
+- `fees_24h` là tổng phí swap phía LP tích lũy trong 24 giờ qua (tính bằng USD).
+- `tvl_in_range_24h` là giá trị USD trung bình theo thời gian của thanh khoản **trong khoảng** trong cửa sổ này.
+
+Mẫu số là điều phân biệt APR CLMM với APR CPMM. CPMM sử dụng tổng TVL của pool vì mỗi đô la luôn đóng góp. CLMM chỉ sử dụng tập hợp con trong khoảng vì những đô la ngoài khoảng không kiếm được gì.
+
+## APR thực tế của bạn sẽ là bao nhiêu
+
+APR chính là một thống kê của pool, không phải của vị thế của bạn. APR của bạn phụ thuộc vào bốn hệ số nhân:
+
+```
+your_APR = headline_APR
+         · (your_in_range_fraction / pool_in_range_fraction)     # concentration bonus
+         · time_in_range                                          # range discipline
+         · (1 − transfer_fee_haircut)                             # token-2022 tax
+         · compounding_factor                                     # if you auto-restake
+```
+
+- **Hệ số tập trung.** Nếu khoảng giá của bạn chặt hơn mức trung bình của pool, mỗi tick hoạt động sẽ có nhiều thanh khoản của bạn trên mỗi đô la hơn so với LP trung bình. Chặt hơn = hệ số lớn hơn (và khuếch đại IL tương ứng lớn hơn).
+- **Thời gian trong khoảng.** Nếu bạn ở trong khoảng chỉ 40% thời gian, nhân với 0,40.
+- **Cắt giảm phí chuyển.** Đối với các mint Token-2022 có phí chuyển, mỗi lần thu thập phí sẽ đi qua một lần chuyển mà chính nó cũng mất một số điểm cơ bản.
+- **Ghép lãi.** Nếu bạn `collectFee` và triển khai lại vào cùng khoảng hàng tuần, APR hiệu quả là khoảng `(1 + daily_APR)^365 − 1`. Không ghép lãi thì nó là tuyến tính.
+
+### Ví dụ cụ thể
+
+Giả sử một pool CLMM SOL/USDC có:
+
+- Khối lượng 24h: \$120M
+- Tầng phí: 0,05% (LP nhận **84%** phí — mỗi `AmmConfig` CLMM trên mainnet có `protocol_fee_rate = 12%` cộng với `fund_fee_rate = 4%`)
+- Tổng TVL: \$40M
+- TVL trong khoảng: \$18M (45% pool hiện đang trong khoảng)
+
+```
+fees_24h = 120M · 0.0005 · 0.84 = $50,400
+apr_24h  = (50,400 / 18,000,000) · 365 = 102%
+```
+
+Giao diện Raydium hiển thị **102% APR** cho pool. (Ví dụ này sử dụng một pool sâu, khối lượng cao để giữ các con số cụ thể; các pool CLMM điển hình hiển thị từ 10% đến 50% APR, với các pool khối lượng thấp thì dưới 10%.)
+
+Bây giờ bạn đang xem xét mở một vị thế:
+
+- Khoảng giá của bạn: chặt đủ để bạn có 2× tập trung trung bình.
+- Thời gian dự kiến trong khoảng: 70% (bạn sẽ kiểm tra hàng tuần).
+- Không có phí Token-2022. Không tự động ghép lãi.
+
+```
+your_APR ≈ 102% · 2 · 0.70 = 143%
+```
+
+Đó là một ước tính, không phải là một bảo đảm. Khối lượng thực hiện có thể giảm một nửa hoặc tăng gấp đôi trong một tuần.
+
+## Tại sao APR theo dõi là một tín hiệu chậm
+
+APR CLMM di chuyển **nhanh** so với APR CPMM vì mẫu số TVL trong khoảng di chuyển nhanh:
+
+- Một bước giá lớn đẩy các phần vị thế ra khỏi khoảng, làm giảm mẫu số. Đột nhiên TVL trong khoảng còn lại của bạn trông có "APR cao hơn" — nhưng chỉ vì các đối thủ cạnh tranh đã rời đi, và thường khối lượng cũng giảm.
+- Một pool đạt ATH mới có thể tạm thời hiển thị 500–1000% APR trong một giờ vì hầu hết các vị thế được hiệu chỉnh cho giá thấp hơn và chỉ một vài LP tích cực vẫn ở trong khoảng.
+- Khi thị trường ổn định, LP cân bằng lại và APR quay trở lại mức trung bình.
+
+Các quy tắc thực tế:
+
+- **Bỏ qua APR dưới 24h.** Quá nhiều nhiễu.
+- **Ưu tiên cửa sổ 7d và 30d.** Raydium công khai cả hai thông qua [`GET /pools/info/ids`](/docs/i18n/vi/sdk-api/rest-api) — các trường `week.apr` và `month.apr`.
+- **Kiểm tra lại khoảng giá cụ thể của bạn** trên dữ liệu khối lượng và giá lịch sử trước khi cam kết vốn đáng kể.
+
+## Cách toán học hoạt động (bước tick đơn)
+
+Bên trong một tick duy nhất, CLMM hoạt động như một CPMM trên lượng thanh khoản `L` hoạt động trong tick đó. Phí tích lũy trong `fee_growth_global_X` và `fee_growth_global_Y` trên mỗi đơn vị thanh khoản. Đối với một vị thế có thanh khoản `Lₚ` trải dài các khoảng tick `[i_lo, i_hi]`:
+
+```
+fees_earned_X = Lₚ · (fee_growth_inside_X(i_lo, i_hi, now) − fee_growth_inside_X(i_lo, i_hi, t_open))
+fees_earned_Y = Lₚ · (fee_growth_inside_Y(i_lo, i_hi, now) − fee_growth_inside_Y(i_lo, i_hi, t_open))
+```
+
+Trong đó `fee_growth_inside` trừ tăng trưởng phí dưới `i_lo` và trên `i_hi` từ bộ tích lũy toàn cầu. Chi tiết trong [`algorithms/clmm-math`](/docs/i18n/vi/algorithms/clmm-math).
+
+Để tính toán phí *dự kiến* trong một khoảng thời gian tương lai cho một khoảng giá tiềm năng, hãy ước tính:
+
+```
+expected_fees_per_day = Σ_ticks_in_range (volume_at_tick · fee_rate · your_share_at_tick)
+```
+
+SDK của Raydium công khai `PoolUtils.estimateAprsForPriceRangeMultiplier` và `PoolUtils.estimateAprsForPriceRangeDelta` cho ước tính này.
+
+## Trợ giúp SDK
+
+```ts
+import { Raydium, PoolUtils } from "@raydium-io/raydium-sdk-v2";
+
+const raydium = await Raydium.load({ owner, connection });
+// getPoolInfoFromRpc takes a positional base58 string on the CLMM module.
+const pool = await raydium.clmm.getPoolInfoFromRpc(POOL_ID);
+
+// Synchronous, and it reads the volume/fee stats off poolInfo[aprType].
+const apr = PoolUtils.estimateAprsForPriceRangeMultiplier({
+  poolInfo: pool.poolInfo,
+  aprType: "day",                 // "day" | "week" | "month"
+  positionTickLowerIndex: -100,   // your intended range
+  positionTickUpperIndex:  100,
+});
+
+console.log(`Expected APR: ${apr.feeApr}% fee-only; rewards: ${apr.rewardsApr.join(", ")}`);
+```
+
+Trợ giúp trả về `{ feeApr, rewardsApr[], apr }` — `rewardsApr` là cho mỗi luồng phần thưởng và `apr` là tổng cộng. Không có phương thức `raydium.clmm.estimatedApr`. `estimateAprsForPriceRangeDelta` là cùng một tính toán được tham số hóa bằng ± delta xung quanh spot thay vì các tick rõ ràng.
+
+## APR Farm phù hợp ở đâu
+
+Các pool CLMM của Raydium có thể có phát hành Farm v6 xếp chồng lên trên. Phần thưởng Farm được trả bằng một **mint phần thưởng** (thường là RAY hoặc token của đối tác) độc lập với phí swap. Giao diện Raydium thường hiển thị:
+
+```
+Total APR = Fee APR + Farm APR [in $X, Y, Z reward mints]
+```
+
+APR Farm được tính toán tương tự nhưng sử dụng lịch trình phát hành phần thưởng và giá hiện tại của mint phần thưởng tính bằng USD. Không giống như APR phí, nó không phụ thuộc vào biến động — nó là một lịch trình cố định.
+
+Xem [`products/farm-staking/overview`](/docs/i18n/vi/products/farm-staking/overview) để biết toán học phát hành farm.
+
+## Những sai lầm phổ biến
+
+- **"APR được ghép lãi tự động."** Không. Phí phải được yêu cầu — thông qua một `DecreaseLiquidity` không thanh khoản, vì CLMM không có hướng dẫn thu thập độc lập — sau đó được triển khai lại thủ công. Raydium không tự động ghép lãi phí CLMM.
+- **"APR của tôi = APR chính."** Chỉ khi tập trung của bạn là trung bình, thời gian trong khoảng của bạn là 100%, và bạn ghép lãi với cùng tần suất. Cả ba thường đều sai.
+- **"Tầng phí cao hơn = APR cao hơn."** Chỉ khi khối lượng tồn tại ở mức phí cao hơn. Ở 1% một cặp có thể báo giá 50% APR nhưng thực hiện 1/10 khối lượng; ít hơn 0,25% ở 120% × 0,1 = 12%.
+- **"Các vị thế ngoài khoảng có rủi ro bằng không."** Chúng có thu nhập phí bằng không nhưng IL đầy đủ trên thành phần token hiện có — vị thế bây giờ là "100% của bất kỳ bên nào".
+
+## Con trỏ
+
+- [`algorithms/clmm-math`](/docs/i18n/vi/algorithms/clmm-math) — đạo hàm đầy đủ của bộ tích lũy tăng trưởng phí.
+- [`algorithms/impermanent-loss`](/docs/i18n/vi/algorithms/impermanent-loss) — phía mất mát của phương trình LP.
+- [`user-flows/choosing-a-pool-type`](/docs/i18n/vi/user-flows/choosing-a-pool-type) — khung quyết định sử dụng ước tính APR này.
+- [`sdk-api/rest-api`](/docs/i18n/vi/sdk-api/rest-api) — các điểm cuối khối lượng / APR trực tiếp.
+
+Nguồn:
+
+- Triển khai Raydium SDK v2 `PoolUtils.estimateAprsForPriceRangeMultiplier` / `estimateAprsForPriceRangeDelta`.
+- Trang pool giao diện Raydium (các trường APR trực tiếp).
+- Đạo hàm tăng trưởng phí Uniswap V3.

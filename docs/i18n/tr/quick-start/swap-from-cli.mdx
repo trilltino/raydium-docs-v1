@@ -1,0 +1,136 @@
+---
+title: "CLI'den Swap Yapma"
+description: "Yapıştır ve çalıştır Node betiği: CPMM pool'undan fiyat alır ve swap işlemini gerçekleştirir. Dört ortam değişkenini ayarlayıp çalıştırın."
+---
+
+<Info>
+  **Bu sayfa yapay zekâ tarafından otomatik olarak çevrilmiştir. İngilizce sürüm esas alınır.**
+
+  [İngilizce sürümü görüntüle →](/docs/en/quick-start/swap-from-cli)
+</Info>
+
+<Info>
+  **Bunun yaptığı şey.** RPC'den bir CPMM pool'u yükler, %0,5 slippage ile swap fiyatı alır, işlemi oluşturur, anahtar çiftinizle imzalar ve gönderir. Baştan sona ~30 satırda.
+</Info>
+
+## Kurulum
+
+[Hızlı başlangıç ön koşullarını](/docs/i18n/tr/quick-start) okuduğunuzdan ve `RPC_URL`, `KEYPAIR` ile gerekli bağımlılıkların yüklü olduğundan emin olun.
+
+## Betik
+
+`swap.mjs` olarak kaydedin:
+
+```ts swap.mjs icon="js"
+import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import { Raydium, TxVersion, CurveCalculator, FeeOn } from "@raydium-io/raydium-sdk-v2";
+import BN from "bn.js";
+import fs from "node:fs";
+
+// ── Config from env ──────────────────────────────────────────────
+const RPC_URL    = process.env.RPC_URL    ?? "https://api.mainnet-beta.solana.com";
+const KEYPAIR    = process.env.KEYPAIR    ?? `${process.env.HOME}/.config/solana/id.json`;
+const POOL_ID    = process.env.POOL_ID;     // required, base58
+const INPUT_MINT = process.env.INPUT_MINT;  // required, base58
+const AMOUNT_RAW = process.env.AMOUNT_RAW;  // required, integer in raw units (e.g. 1_000_000_000 for 1 SOL)
+
+if (!POOL_ID || !INPUT_MINT || !AMOUNT_RAW) {
+  console.error("Set POOL_ID, INPUT_MINT, AMOUNT_RAW env vars.");
+  process.exit(1);
+}
+
+// ── Setup ────────────────────────────────────────────────────────
+const connection = new Connection(RPC_URL, "confirmed");
+const owner = Keypair.fromSecretKey(
+  new Uint8Array(JSON.parse(fs.readFileSync(KEYPAIR, "utf8"))),
+);
+const raydium = await Raydium.load({
+  owner,
+  connection,
+  cluster: "mainnet",
+  disableFeatureCheck: true,
+  blockhashCommitment: "finalized",
+});
+
+// ── Load pool ────────────────────────────────────────────────────
+// getPoolInfoFromRpc takes the base58 string directly, not a PublicKey.
+const { poolInfo, poolKeys, rpcData } =
+  await raydium.cpmm.getPoolInfoFromRpc(POOL_ID);
+
+const baseIn = poolInfo.mintA.address === INPUT_MINT;
+
+// ── Quote ────────────────────────────────────────────────────────
+const inputAmount = new BN(AMOUNT_RAW);
+const swapResult  = CurveCalculator.swapBaseInput(
+  inputAmount,
+  baseIn ? rpcData.baseReserve : rpcData.quoteReserve,
+  baseIn ? rpcData.quoteReserve : rpcData.baseReserve,
+  rpcData.configInfo.tradeFeeRate,
+  rpcData.configInfo.creatorFeeRate,
+  rpcData.configInfo.protocolFeeRate,
+  rpcData.configInfo.fundFeeRate,
+  rpcData.feeOn === FeeOn.BothToken || rpcData.feeOn === FeeOn.OnlyTokenB,
+);
+
+console.log(`Quote: ${inputAmount.toString()} -> ${swapResult.outputAmount.toString()}`);
+console.log(`Fee:   ${swapResult.tradeFee.toString()}`);
+
+// ── Build and execute ────────────────────────────────────────────
+const { execute } = await raydium.cpmm.swap({
+  poolInfo,
+  poolKeys,
+  inputAmount,
+  swapResult,
+  slippage: 0.005, // 0.5%
+  baseIn,
+  txVersion: TxVersion.V0,
+  computeBudgetConfig: {
+    units: 250_000,
+    microLamports: 50_000,
+  },
+});
+
+const { txId } = await execute({ sendAndConfirm: true });
+console.log(`Swap landed: https://solscan.io/tx/${txId}`);
+```
+
+## Çalıştırın
+
+Likiditeye sahip olduğunuz herhangi bir CPMM pool'u seçin. Kanonik SOL/USDC CPMM pool'u ile örnek:
+
+```bash icon="terminal"
+export POOL_ID="<bir CPMM pool ID yapıştırın — Raydium UI'nin Pools sekmesinde bulabilirsiniz>"
+export INPUT_MINT="So11111111111111111111111111111111111111112"
+export AMOUNT_RAW="10000000"   # 0.01 SOL
+
+node swap.mjs
+```
+
+Beklenen çıktı:
+
+```text
+Quote: 10000000 -> 1640000
+Fee:   25000
+Swap landed: https://solscan.io/tx/4Z9...
+```
+
+## Ne oldu
+
+1. **`Raydium.load`** SDK'yı başlattı — global yapılandırmayı getirdi, cüzdan bağlamını kurdu.
+2. **`getPoolInfoFromRpc`** canlı pool durumunu doğrudan RPC'den çekti (API önbelleğinden değil). Yüksek değerli swaplar için her zaman güncel duruma ihtiyacınız vardır.
+3. **`CurveCalculator.swap`** pool'un ücretini düşerek sabit-ürün çıktısını hesapladı. Bu, programın zincir üzerinde çalıştırdığı matematikle aynıdır, bu nedenle fiyatları zincir dışı ve zincir üzerinde karşılaştırabilirsiniz.
+4. **`raydium.cpmm.swap`** işlemi V0 formatında oluşturdu (adres arama tabloları etkinleştirildi) ve açık bir compute-budget yapılandırması ekledi. Compute-budget bahşişi, işlemin yoğun dönemlerde yer almasına yardımcı olur.
+5. **`execute({ sendAndConfirm: true })`** imzaladı, gönderdi ve onayı bekledi.
+
+## Yaygın hatalar
+
+- **`Pool not found`** — Yanlış `POOL_ID` veya yanlış cluster'a işaret ediyorsunuz (mainnet pool ID'si devnet RPC'ye karşı, vb.).
+- **`Insufficient funds for transaction`** — Cüzdanınızda swap girdisi + ücretler + ATA kirasına yetecek kadar SOL yok.
+- **`Slippage tolerance exceeded`** — Pool'un fiyatı fiyat alımı ile yürütme arasında değişti. Yeniden çalıştırın; veya `slippage` parametresini artırın; veya SDK'nin `computeAmountOut` kullanın (her zaman rezervleri yeniden getirir).
+- **`Token account not initialized`** — Çıktı token'ının ATA mevcut değildi ve örtülü oluşturma talimatı iniş yaptı ancak bir nedenle başarısız oldu; cüzdanınızın SOL bakiyesini kontrol edin ve yeniden deneyin.
+
+## Sonraki adımlar
+
+- [`sdk-api/typescript-sdk`](/docs/i18n/tr/sdk-api/typescript-sdk) — tam SDK referansı.
+- [`products/cpmm/instructions`](/docs/i18n/tr/products/cpmm/instructions) — swap talimatının zincir üzerinde nasıl göründüğü.
+- [`integration-guides/priority-fee-tuning`](/docs/i18n/tr/integration-guides/priority-fee-tuning) — üretim için `computeBudgetConfig` boyutlandırma.

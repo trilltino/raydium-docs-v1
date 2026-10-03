@@ -1,0 +1,375 @@
+---
+title: "عروض توضيحية لكود LaunchLab"
+description: "TypeScript من البداية إلى النهاية: إنشاء إطلاق LaunchLab، والشراء والبيع على منحنى الربط، والتخرج إلى مجموعة CPMM، وجمع رسوم المنشئ."
+---
+
+<Info>
+  **هذه الصفحة مُترجَمة آليًا بواسطة الذكاء الاصطناعي. النسخة الإنجليزية هي المرجع المعتمد.**
+
+  [عرض النسخة الإنجليزية →](/docs/en/products/launchlab/code-demos)
+</Info>
+
+<Info>
+  **لافتة الإصدار.**
+
+  - SDK: `@raydium-io/raydium-sdk-v2@0.2.64-alpha`
+  - Cluster: Solana `mainnet-beta`
+  - معرّف البرنامج: انظر [`reference/program-addresses`](/docs/i18n/ar/reference/program-addresses)
+  - آخر تحقق: **2026-09-09** مقابل SDK `0.2.64-alpha` source، [`raydium-sdk-V2-demo/src/launchpad`](https://github.com/raydium-io/raydium-sdk-V2-demo/tree/master/src/launchpad)، وبرنامج `raydium-launch` source
+
+  ثبّت إصدار SDK في `package.json` الخاص بك. واجهة منحنى الربط تطورت بين الإصدارات الثانوية.
+</Info>
+
+## الإعداد
+
+العروض التوضيحية هنا تعكس الملفات في [`raydium-sdk-V2-demo/src/launchpad`](https://github.com/raydium-io/raydium-sdk-V2-demo/tree/master/src/launchpad). يتبع التمهيد [`config.ts.template`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/config.ts.template) من مستودع العرض التوضيحي:
+
+```ts
+import { Connection, Keypair, clusterApiUrl, PublicKey } from "@solana/web3.js";
+import { Raydium, TxVersion } from "@raydium-io/raydium-sdk-v2";
+import BN from "bn.js";
+import fs from "node:fs";
+
+const connection = new Connection(process.env.RPC_URL ?? clusterApiUrl("mainnet-beta"));
+const owner = Keypair.fromSecretKey(
+  new Uint8Array(JSON.parse(fs.readFileSync(process.env.KEYPAIR!, "utf8"))),
+);
+const raydium = await Raydium.load({
+  owner,
+  connection,
+  cluster: "mainnet",
+  disableFeatureCheck: true,
+  blockhashCommitment: "finalized",
+});
+export const txVersion = TxVersion.V0;
+```
+
+## إنشاء إطلاق
+
+المصدر: [`src/launchpad/createMint.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/createMint.ts) (و[`createBonkMintApi.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/createBonkMintApi.ts) لمتغير Bonk المدفوع بواسطة API)
+
+معظم الاقتصاديات الخاصة بالإطلاق **ليست** معاملات — فهي تأتي من `GlobalConfig` التي تربطها عبر `configId`، والـ SDK يملأ الباقي من معاملات API الافتراضية. تمرر هوية الـ mint، والإعدادات المراد الربط بها، و(اختياريًا) عملية شراء أولى:
+
+```ts
+import {
+  LAUNCHPAD_PROGRAM,
+  DEVNET_PROGRAM_ID,
+  LaunchpadConfig,
+  getPdaLaunchpadConfigId,
+} from "@raydium-io/raydium-sdk-v2";
+import { Keypair, PublicKey } from "@solana/web3.js";
+import { NATIVE_MINT } from "@solana/spl-token";
+
+const programId = LAUNCHPAD_PROGRAM;          // devnet: DEVNET_PROGRAM_ID.LAUNCHPAD_PROGRAM
+
+// الـ mint الأساسي هو keypair تنشئه وتوقع به.
+const pair  = Keypair.generate();
+const mintA = pair.publicKey;
+
+// ربط GlobalConfig: (quote mint، curve_type، index).
+const configId = getPdaLaunchpadConfigId(programId, NATIVE_MINT, 0, 0).publicKey;
+const configData = await raydium.connection.getAccountInfo(configId);
+if (!configData) throw new Error("config not found");
+const configInfo = LaunchpadConfig.decode(configData.data);
+const mintBInfo = await raydium.token.getTokenInfo(configInfo.mintB);
+
+const { execute, transactions, extInfo } = await raydium.launchpad.createLaunchpad({
+  programId,
+  mintA,
+  decimals: 6,
+  name:   "Example Token",
+  symbol: "EXMPL",                 // يجب أن يكون 10 أحرف أو أقل
+  uri:    "https://example.com/metadata.json",   // يجب أن يكون غير فارغ
+  migrateType: "amm",              // "amm" | "cpmm"
+
+  configId,
+  configInfo,                      // اختياري؛ يعيد قراءة SDK configId عند الحذف
+  mintBDecimals: mintBInfo.decimals,
+  mintBProgram:  new PublicKey(mintBInfo.programId),
+
+  // عملية شراء أولى اختيارية في نفس الحزمة.
+  createOnly: true,                // true = إنشاء الـ mint فقط
+  buyAmount:  new BN(1000),        // يتم تجاهله عند createOnly true
+  slippage:   new BN(100),         // 100 = 1%
+
+  extraSigners: [pair],            // يجب أن يوقع keypair الـ mint الأساسي
+  txVersion: TxVersion.V0,
+
+  // تأتي الافتراضيات من افتراضيات API الإعدادات المرتبطة؛ تجاوز فقط إذا كان يجب عليك:
+  // supply:            new BN(1_000_000_000_000_000),
+  // totalSellA:        new BN(793_100_000_000_000),
+  // totalFundRaisingB: new BN(85_000_000_000),   // 85 SOL عندما يكون mintB هو SOL
+  // totalLockedAmount: new BN(0),
+  // cliffPeriod:       new BN(0),                // ثواني
+  // unlockPeriod:      new BN(0),                // ثواني
+  // platformId:        new PublicKey("4Bu96XjU84XjPDSpveTVf6LYGCkfW5FK7SNkREWcEfV4"), // Raydium's، الافتراضي
+});
+
+// createLaunchpad يعيد معاملات متعددة - نفذها بالترتيب.
+const { txIds } = await execute({ sequentially: true });
+console.log("Pool:", extInfo.address.poolId.toBase58());
+console.log("Base mint:", mintA.toBase58());
+console.log("Create txs:", txIds);
+```
+
+ملاحظات:
+
+- لا يوجد معامل `curveType`، `graduationFractionBps`، `initialK`، `quoteMint`، `openTime`، `fees` أو `postGraduationLpPolicy`. شكل المنحنى و quote mint هما خصائص `GlobalConfig` التي تربطها؛ معدلات الرسوم تعيش على `GlobalConfig` و `PlatformConfig`؛ التخلص من LP عند التخرج هو إعداد `PlatformConfig`. انظر [`products/launchlab/instructions`](/docs/i18n/ar/products/launchlab/instructions#initialize) لمعرفة بالضبط ما يقبله `InitializeV2`.
+- `symbol` أطول من 10 أحرف و `uri` فارغ يتم رفضهما من جانب العميل قبل أي RPC.
+- تمرير `transferFeeExtensionParams` يحول المنشئ إلى `InitializeWithToken2022` ويفرض `migrateType` على `"cpmm"`.
+- يعيد المنشئ مصفوفة `transactions`؛ `createOnly: false` يضيف معاملة الشراء الأولى. استخدم دائمًا `execute({ sequentially: true })` — يجب أن يكون الـ mint موجودًا قبل وصول الشراء.
+
+## جلب حالة الإطلاق
+
+المصدر: [`src/launchpad/poolInfo.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/poolInfo.ts)
+
+لا يوجد `getLaunchById`. معرّف المجموعة هو PDA من `(programId, mintA, mintB)`، و `getRpcPoolInfo` يعيد `PoolState` المفكك مع `configInfo` المرتبط به:
+
+```ts
+import { getPdaLaunchpadPoolId, Curve } from "@raydium-io/raydium-sdk-v2";
+
+const poolId = getPdaLaunchpadPoolId(programId, mintA, NATIVE_MINT).publicKey;
+const poolInfo = await raydium.launchpad.getRpcPoolInfo({ poolId });
+
+console.log("status:", poolInfo.status);
+console.log("base sold:", poolInfo.realA.toString(), "/", poolInfo.totalSellA.toString());
+console.log("quote raised:", poolInfo.realB.toString(), "/", poolInfo.totalFundRaisingB.toString());
+
+// السعر الفوري الحالي على المنحنى.
+const price = Curve.getPrice({
+  poolInfo,
+  curveType: poolInfo.configInfo.curveType,
+  decimalA: poolInfo.mintDecimalsA,
+  decimalB: poolInfo.mintDecimalsB,
+});
+console.log("price:", price.toString());
+```
+
+`getRpcPoolsInfo({ poolIdList })` هي الشكل المجمع وتعيد `poolInfoMap` مفهرسة حسب معرّف المجموعة — استخدمها لعروض المحفظة بدلاً من الحلقات. إذا كنت تريد فك تشفير الحسابات الخام بنفسك، فإن `LaunchpadPool.decode` و `LaunchpadConfig.decode` يتم تصديرهما.
+
+## الشراء — إدخال quote دقيق
+
+المصدر: [`src/launchpad/buy.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/buy.ts)
+
+مساعد الاقتباس خارج السلسلة هو **`Curve.buyExactIn`**، وهي طريقة ثابتة على فئة `Curve` المُصدَّرة — وليست طريقة على `raydium.launchpad`. منشئ المعاملة هو **`buyToken`**. كلاهما يحتاج إلى معدلات الرسوم الخاصة بالمنصة، التي تعيش على حساب `PlatformConfig` منفصل:
+
+```ts
+import { Curve, PlatformConfig, toTransferFeeConfig } from "@raydium-io/raydium-sdk-v2";
+
+const inAmount = new BN(1).mul(new BN(10).pow(new BN(9)));   // 1 SOL
+const slippage = new BN(100);                                 // 100 = 1%
+
+const poolInfo = await raydium.launchpad.getRpcPoolInfo({ poolId });
+const platformData = await raydium.connection.getAccountInfo(poolInfo.platformId);
+const platformInfo = PlatformConfig.decode(platformData!.data);
+
+const mintInfo  = await raydium.token.getTokenInfo(mintA);
+const mintBInfo = await raydium.token.getTokenInfo(poolInfo.mintB);
+const epochInfo = await raydium.connection.getEpochInfo();
+
+// معاينة خارج السلسلة — تعكس رياضيات المنحنى على السلسلة.
+const res = Curve.buyExactIn({
+  poolInfo,
+  amountB: inAmount,
+  protocolFeeRate: poolInfo.configInfo.tradeFeeRate,
+  platformFeeRate: platformInfo.feeRate,
+  creatorFeeRate:  platformInfo.creatorFeeRate,
+  curveType:       poolInfo.configInfo.curveType,
+  shareFeeRate:    new BN(0),
+  transferFeeConfigA: mintInfo.extensions.feeConfig  ? toTransferFeeConfig(mintInfo,  epochInfo.epoch) : undefined,
+  transferFeeConfigB: mintBInfo.extensions.feeConfig ? toTransferFeeConfig(mintBInfo, epochInfo.epoch) : undefined,
+  slot: await raydium.connection.getSlot(),
+});
+console.log("expected out:", res.amountA.amount.sub(res.amountA.fee ?? new BN(0)).toString());
+
+const { execute, extInfo } = await raydium.launchpad.buyToken({
+  programId,
+  mintA,
+  mintAProgram: new PublicKey(mintInfo.programId),
+  mintB:        poolInfo.mintB,
+  mintBProgram: new PublicKey(mintBInfo.programId),
+  transferFeeConfigB: toTransferFeeConfig(mintBInfo, epochInfo.epoch),
+  poolInfo,
+  configInfo:      poolInfo.configInfo,
+  platformFeeRate: platformInfo.feeRate,
+  buyAmount:       inAmount,
+  slippage,                       // BN في bps؛ يشتق SDK minMintAAmount منه
+  txVersion: TxVersion.V0,
+});
+
+console.log("expected receive amount:", extInfo.decimalOutAmount.toString());
+const { txId } = await execute({ sendAndConfirm: true });
+console.log("Buy tx:", txId);
+```
+
+يمكنك تمرير `minMintAAmount` بشكل صريح بدلاً من `slippage`؛ حذف كليهما والـ SDK يحسب الحد من بيانات RPC المباشرة. `shareFeeRate` يجب ألا يتجاوز `poolInfo.configInfo.maxShareFeeRate`، وينطبق فقط عندما تمرر أيضًا `shareFeeReceiver`.
+
+## الشراء — إخراج base دقيق
+
+المنشئ هو **`buyTokenExactOut`**، ومعاملات المبلغ هي `outAmount` (base التي تريدها) و `maxBuyAmount` (quote التي ستنفقها على الأكثر). `Curve.buyExactOut({ poolInfo, amountA, ... })` هي معاينة خارج السلسلة المطابقة.
+
+```ts
+const { execute, extInfo } = await raydium.launchpad.buyTokenExactOut({
+  programId,
+  mintA,
+  mintAProgram: new PublicKey(mintInfo.programId),
+  mintB:        poolInfo.mintB,
+  mintBProgram: new PublicKey(mintBInfo.programId),
+  poolInfo,
+  configInfo:      poolInfo.configInfo,
+  platformFeeRate: platformInfo.feeRate,
+
+  outAmount:    new BN(1_000_000).mul(new BN(10).pow(new BN(6))),  // 1M base
+  maxBuyAmount: new BN(2).mul(new BN(10).pow(new BN(9))),          // حد أقصى 2 SOL
+  slippage:     new BN(100),
+
+  txVersion: TxVersion.V0,
+});
+
+console.log("out:", extInfo.outAmount.toString(), "max spent:", extInfo.maxSpentAmount.toString());
+await execute({ sendAndConfirm: true });
+```
+
+مفيد لواجهات المستخدم "اشتر بالضبط X tokens". يرفض المنشئ `outAmount` من الصفر من جانب العميل، والبرنامج يعود إذا تحرك المنحنى بما يكفي بحيث يتجاوز متطلب الاقتباس `maxBuyAmount`.
+
+## البيع
+
+المصدر: [`src/launchpad/sell.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/sell.ts)
+
+المنشئ هو **`sellToken`** (`sellTokenExactOut` لمتغير الإخراج الدقيق للاقتباس)، مع `sellAmount` و `minAmountB` اختياري. `Curve.sellExactIn({ poolInfo, amountA, ... })` يعاينه.
+
+```ts
+const inAmount = new BN(500_000).mul(new BN(10).pow(new BN(6)));  // 0.5M base
+
+const res = Curve.sellExactIn({
+  poolInfo,
+  amountA: inAmount,
+  protocolFeeRate: poolInfo.configInfo.tradeFeeRate,
+  platformFeeRate: platformInfo.feeRate,
+  creatorFeeRate:  platformInfo.creatorFeeRate,
+  curveType:       poolInfo.configInfo.curveType,
+  shareFeeRate:    new BN(0),
+  transferFeeConfigA: mintInfo.extensions.feeConfig  ? toTransferFeeConfig(mintInfo,  epochInfo.epoch) : undefined,
+  transferFeeConfigB: mintBInfo.extensions.feeConfig ? toTransferFeeConfig(mintBInfo, epochInfo.epoch) : undefined,
+  slot: await raydium.connection.getSlot(),
+});
+console.log("expected quote out:", res.amountB.toString());
+
+const { execute } = await raydium.launchpad.sellToken({
+  programId,
+  mintA,
+  mintAProgram: new PublicKey(mintInfo.programId),
+  mintB:        poolInfo.mintB,
+  mintBProgram: new PublicKey(mintBInfo.programId),
+  poolInfo,
+  configInfo:      poolInfo.configInfo,
+  platformFeeRate: platformInfo.feeRate,
+  sellAmount:      inAmount,
+  slippage:        new BN(100),
+  txVersion: TxVersion.V0,
+});
+
+await execute({ sendAndConfirm: true });
+```
+
+مسار البيع على المنحنى متماثل مع مسار الشراء: تقليل `real_a` بمقدار `sellAmount` يعيد `quote_out` مساويًا للمنطقة المتكاملة تحت المنحنى بين `real_a − sellAmount` و `real_a`، مطروحًا منها رسم البيع. `sellAmount` يجب أن يكون أكبر من الصفر — يرفض المنشئ الصفر قبل أي RPC.
+
+## التخرج
+
+<Warning>
+  **التخرج ليس شيئًا يمكن لمدمج أن يشغله.** لا يوجد `raydium.launchpad.graduate`، لا علم `autoGraduate` على منشئي الشراء، ولا حقل `willGraduate` على قيمة الإرجاع الخاصة بهم. على السلسلة، التخرج هو `MigrateToCpswap` (أو `MigrateToAmm` القديم)، وكلا التعليمات تقيد الموقّع الخاص بهما بمحفظة مسجلة على `GlobalConfig` الربط — `migrate_to_cpswap_wallet` و `migrate_to_amm_wallet` على التوالي. استدعاء من أي موقّع آخر يفشل مع `InvalidOwner`. إنه **ليس** بدون إذن، ولا يمكن لأي روبوت MEV أن يتسابق معه.
+</Warning>
+
+يتم تشغيل تلك المحافظ بواسطة crank التخرج الخاص بـ Raydium، لذا في الممارسة العملية تهبط الهجرة في ثوانٍ بعد تجاوز الحد الأدنى بغض النظر عمن قام بالشراء النهائي. من جانب المدمج، الشيء الوحيد الذي يجب فعله هو معاملة انتقال الحالة كحدث سريع: استطلع `getRpcPoolInfo` (أو اشترك عبر gRPC، أدناه) وبدّل واجهة المستخدم الخاصة بك من المنحنى إلى مجموعة CPMM الناتجة عندما يتغير `status`.
+
+انظر [`products/launchlab/instructions`](/docs/i18n/ar/products/launchlab/instructions#migratetoamm-/-migratetocpswap) لقوائم الحسابات، ورسم الهجرة، وكيفية تقسيم LP عند التخرج.
+
+## جمع رسوم المنشئ
+
+المصدر: [`src/launchpad/claimCreatorFee.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/claimCreatorFee.ts) (mint واحد) و [`collectAllCreatorFees.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/launchpad/collectAllCreatorFees.ts) (مجمع)
+
+الطريقة هي **`claimCreatorFee`** (و `claimMultipleCreatorFee` للشكل المجمع). يتم تفتيشها بواسطة **quote mint**، وليس بواسطة إطلاق — استدعاء واحد يكتسح رسوم المنشئ المتراكمة للموقّع في هذا الـ mint عبر عمليات الإطلاق الخاصة به:
+
+```ts
+import { NATIVE_MINT } from "@solana/spl-token";
+
+const { execute } = await raydium.launchpad.claimCreatorFee({
+  programId,
+  mintB: NATIVE_MINT,          // quote mint للمطالبة به
+  // mintBProgram: TOKEN_PROGRAM_ID,   // أو TOKEN_2022_PROGRAM_ID
+  txVersion: TxVersion.V0,
+});
+
+await execute({ sendAndConfirm: true });
+```
+
+ينقل عداد رسم المنشئ المتراكم إلى ATA الخاص بالمنشئ على quote mint. يمكن استدعاؤه قبل أو بعد التخرج؛ استخدمه بشكل دوري بدلاً من انتظار رصيد ضخم يتراكم. لدى مشغلي المنصة منشئو `claimPlatformFee` / `claimAllPlatformFee` / `claimVaultPlatformFee` المتوازيون.
+
+## تتبع إطلاق عبر دورة حياته
+
+بجمع كل شيء معًا، قد تبدو نصيحة المراقبة كالتالي:
+
+```ts
+async function watch(poolId: PublicKey) {
+  const startStatus = (await raydium.launchpad.getRpcPoolInfo({ poolId })).status;
+
+  while (true) {
+    const p = await raydium.launchpad.getRpcPoolInfo({ poolId });
+    const progress = Number(p.realB.toString()) / Number(p.totalFundRaisingB.toString());
+
+    console.log(`status=${p.status}`, `progress=${(progress * 100).toFixed(2)}%`);
+
+    if (p.status !== startStatus) {
+      console.log("status changed - the launch has migrated; switch to the pool page");
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 10_000));
+  }
+}
+```
+
+استطلاع `getRpcPoolInfo` على مؤقت 10 ثوانٍ جيد لإطلاق واحد. بالنسبة لمفهرس، استخدم اشتراك gRPC أدناه بدلاً من ذلك — `getRpcPoolsInfo({ poolIdList })` يجمع، لكن استطلاع مئات المجموعات لا يزال يحرق أرصدة RPC بدون فائدة.
+
+## مراقبة الإعدادات والمجموعات عبر gRPC
+
+المصدر: [`src/grpc/launchpadPoolInfo.ts`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/grpc/launchpadPoolInfo.ts)
+
+يشترك في برنامج LaunchLab عبر Yellowstone gRPC ويسجل كل تحديث `GlobalConfig` و `PoolState` مع برنامج الرمز الخاص بكل mint. مرشحا `datasize` على اشتراك `accounts` واحد يفصلان بين نوعي الحساب، لذا يغطي تيار واحد كليهما.
+
+العرض التوضيحي هو أقصر مرجع صحيح لتصنيف mints الإطلاق، والذي يجعل [إصدار quote-mint Token-2022](/docs/i18n/ar/reference/changelog/2026-08-24-launchlab-token2022-quote-mint) ضروريًا:
+
+- يتم تصنيف **المجموعات** مباشرة من `PoolState.token_program_flag`، وفك تشفير bit0 للـ mint الأساسي و bit1 لـ quote mint بدون جلب mint على الإطلاق. اختبار البايت بالكامل مقابل `0` — والذي كان كافيًا بينما كانت quote mints قديمة فقط — يسيء قراءة mint أساسي قديم كـ Token-2022 كلما كان quote mint هو Token-2022.
+- لا يمكن تصنيف **الإعدادات** بهذه الطريقة: `GlobalConfig` يخزن عنوان quote mint الخاص به وعدم وجود علم برنامج، لذا يقرأ العرض التوضيحي مالك حساب الـ mint مرة واحدة ويخزنه مؤقتًا لكل mint.
+
+كما أنه يتحقق من الاثنين ضد بعضهما البعض، وهو تأكيد مفيد للاحتفاظ به في مفهرسك الخاص. لاحظ أن `create` مقابل `update` يتم استنتاجه من ذاكرات التخزين المؤقت الخاصة بالعرض التوضيحي، والتي تم بذرها عند بدء التشغيل من `getProgramAccounts`؛ مع تعطيل هذا البذر، اقرأ "create" كـ "أول ظهور على هذا التيار".
+
+وصول gRPC ليس جزءًا من سطح RPC العام — انظر [`src/grpc/README.md`](https://github.com/raydium-io/raydium-sdk-V2-demo/blob/master/src/grpc/README.md) من مستودع العرض التوضيحي.
+
+## Rust CPI
+
+استدعاء LaunchLab من برنامج Anchor الخاص بك نادر (معظم تكاملات الإطلاق هي TS-side فقط). إذا فعلت:
+
+- الصندوق هو **`raydium-launchpad`** (اسم lib `raydium_launchpad`)، الإصدار `0.2.0`، وهو يعرض ميزة `cpi`. لا يوجد **`raydium_launchlab`**.
+- إنه **غير منشور على crates.io** — اعتمد عليه بمراجعة git، بنفس الطريقة التي تعتمد بها صناديق برنامج Raydium الأخرى.
+- نقاط دخول CPI سميت على اسم التعليمات على السلسلة، وليس على اسم طرق TypeScript الخاصة بـ SDK: `buy_exact_in`، `buy_exact_out`، `sell_exact_in`، `sell_exact_out`، `claim_creator_fee`، `create_vesting_account`، `claim_vested_token`. `migrate_to_amm` / `migrate_to_cpswap` يتم حراستهما بواسطة الموقّع لمحافظ هجرة `GlobalConfig` وليسا قابلين للاستدعاء من برنامج مدمج.
+
+انظر [`sdk-api/rust-cpi`](/docs/i18n/ar/sdk-api/rust-cpi) لقواعد تثبيت الصندوق — على وجه الخصوص انقسام إصدار Anchor، الذي يقرر ما إذا كان يمكن لصندوق واحد أن يدخل CPI في كل من LaunchLab و CLMM.
+
+## الأخطاء الشائعة
+
+- **الخلط بين أسماء التعليمات على السلسلة وأسماء طرق SDK.** البرنامج لديه `buy_exact_in` / `sell_exact_in`؛ SDK لديه `buyToken` / `sellToken`. `buyExactIn` و `sellExactIn` موجودة فقط كـ **طرق ثابتة على `Curve`**، وتحسب اقتباسًا — فهي لا تبني معاملة.
+- **نسيان `extraSigners`.** `createLaunchpad` ينشئ mint الأساسي من keypair تنشئه، لذا يجب أن يوقع هذا keypair. حذف `extraSigners: [pair]` والمعاملة تفشل التحقق من التوقيع.
+- **عدم اختيار quote mint.** أنت لا تمرر واحدة. quote mint هو خاصية `GlobalConfig` التي تربطها عبر `configId` — `getPdaLaunchpadConfigId(programId, quoteMint, curveType, index)`. لإطلاق ضد quote mint مختلف، ربط إعدادات مختلفة؛ `raydium.api.fetchLaunchConfigs()` يسرد الإعدادات المتاحة مع معاملات افتراضياتها.
+- **حجم البيانات الوصفية.** سلاسل `uri` الطويلة تدفع Metaplex CPI فوق الميزانية. احتفظ بـ `uri` تحت ~200 حرف — معظم بيانات JSON المستضافة على CDN تناسب بسهولة. `symbol` مقيد بـ 10 أحرف.
+- **معاملة التخرج كسباق يمكنك الدخول فيه.** إنه ليس كذلك — انظر التحذير أعلاه. واجهة المستخدم الخاصة بك يجب أن تعامل انتقالات `status` كأحداث سريعة، لأن crank Raydium تهبط الهجرة في ثوانٍ من تجاوز الحد الأدنى.
+
+## أين تذهب بعد ذلك
+
+- [`products/launchlab/bonding-curve`](/docs/i18n/ar/products/launchlab/bonding-curve) — رياضيات المنحنى.
+- [`products/cpmm/code-demos`](/docs/i18n/ar/products/cpmm/code-demos) — ماذا تفعل مع المجموعة الناتجة.
+- [`user-flows/launch-token-launchlab`](/docs/i18n/ar/user-flows/launch-token-launchlab) — دليل إطلاق الرمز من البداية إلى النهاية، بما في ذلك الخطوات خارج السلسلة.
+
+المصادر:
+
+- [Raydium SDK v2](https://github.com/raydium-io/raydium-sdk-V2)
+- مصدر برنامج Raydium LaunchLab

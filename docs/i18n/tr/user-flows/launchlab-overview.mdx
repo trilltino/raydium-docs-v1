@@ -1,0 +1,65 @@
+---
+title: "LaunchLab'a genel bakış"
+description: "LaunchLab nedir, kimler için tasarlanmıştır ve token başlatmaları bonding curve ticaretinden Raydium pool likiditeye nasıl geçer."
+---
+
+<Info>
+  **Bu sayfa yapay zekâ tarafından otomatik olarak çevrilmiştir. İngilizce sürüm esas alınır.**
+
+  [İngilizce sürümü görüntüle →](/docs/en/user-flows/launchlab-overview)
+</Info>
+
+<Warning>
+  LaunchLab izinsiz token başlatma altyapısıdır. Herkes bir token oluşturabilir, ad veya kodu seçebilir ve başlatma parametrelerini yapılandırabilir. Token satın almadan veya tanıtmadan önce her zaman mint adreslerini ve başlatma ayarlarını doğrulayın. Bu sayfa yalnızca ürün mekaniklerini açıklar ve finansal, yasal veya yatırım tavsiyesi değildir.
+</Warning>
+
+LaunchLab, yaratıcıların token çıkarmasına ve bonding curve aracılığıyla ilk likiditeyi önyüklemesine olanak tanır. Alıcılar mezuniyet öncesinde curve karşısında işlem yaparlar. Başlatma mezuniyet eşiğine ulaştığında, likidite bir Raydium AMM pool'una geçer ve ticaret normal Raydium yönlendirmesi aracılığıyla devam eder.
+
+## LaunchLab'ı kimler kullanır
+
+| Kullanıcı | Yaygın görevler |
+|---|---|
+| Tüccarlar | Erken aşama tokenları keşfedin, bonding curve'de alıp satın ve mezuniyet ilerlemesini takip edin. |
+| Yaratıcılar | Kod yazmadan token başlatın, curve parametrelerini yapılandırın ve isteğe bağlı olarak yaratıcı ücretleri kazanın. |
+| Platformlar | Kendi ücret ayarları, markası ve başlatma keşif yüzeyleri ile markalı başlatma ortamları oluşturun. |
+
+## Başlatma nasıl çalışır
+
+1. Bir yaratıcı token meta verilerini, arzını, curve ayarlarını, mezuniyet hedefini ve isteğe bağlı ücret ayarlarını yapılandırır.
+2. Token bir bonding curve'de açılır. Alıcılar ve satıcılar doğrudan bu curve karşısında işlem yaparlar.
+3. Curve fiyatı alım ve satımlar gerçekleştikçe değişir.
+4. Curve mezuniyet hedefine ulaştığında, likidite bir Raydium pool'una geçer.
+5. Mezuniyetten sonra, kullanıcılar token'ı Raydium Swap ve Raydium pool'larından geçen agregatorlar aracılığıyla ticareti yaparlar.
+
+## Oluşturma modları
+
+| Mod | Şu durumlarda kullanın | Temel ayarlar |
+|---|---|---|
+| JustSendit | En hızlı varsayılan ayarlarla kod yazılmayan başlatmayı istiyorsunuz. | Ad, kod, görüntü, isteğe bağlı sosyal bağlantılar, isteğe bağlı ilk satın alma. |
+| LaunchLab | Arz, mezuniyet hedefi, curve tahsisi, vesting veya yaratıcı ücretleri üzerinde daha fazla kontrol gerekiyorsa. | Arz, hedef toplama, curve tahsisi, vesting, geçiş sonrası ücret payı. |
+
+JustSendit varsayılan bir mezuniyet hedefi kullanır. LaunchLab modu, yaratıcıların UI ve program sınırlarına tabi olarak mezuniyet hedefini ayarlamasına olanak tanır.
+
+## Mezuniyet ve likidite
+
+Mezuniyet, bonding curve'ü kapatır ve varlıkları bir CPMM pool'una geçirir. LP muamelesi ve CPMM yaratıcısı kaydı platform yapılandırmasına bağlıdır.
+
+- Tüm yeni başlatılan başlatmalar CPMM'ye geçer.
+- Platform ve yaratıcı ölçek alanları bir platform tarafından sahip olunan kilitli LP payına birleşir; kalan pay yakılır.
+- CPMM yaratıcı ücretleri platform Fee Key'den ayrıdır ve kaydedilen CPMM pool yaratıcısını takip eder.
+
+## Güvenlik temelleri
+
+- Yalnızca kodu veya logoyu değil, token mint'ini doğrulayın.
+- Ticaret yapmadan önce mezuniyet hedefini ve curve ilerlemesini gözden geçirin.
+- Başlatmadan veya satın almadan önce yaratıcı ve platform ücret ayarlarını kontrol edin.
+- Platform Fee Key NFT'lerini ücret hakları varlıkları olarak değerlendirin. Aktarılırsa veya yakılırsa, LP ücret talep hakları hareket edebilir veya kaybolabilir.
+- Bir cüzdan bağlamadan veya işlemleri imzalamadan önce [Güven ve güvenlik](/docs/i18n/tr/getting-started/trust-and-safety) sayfasını okuyun.
+
+## İlgili konular
+
+- [LaunchLab token satın alma](/docs/i18n/tr/user-flows/buying-a-launchlab-token) — mezuniyetten önce ve sonra ticaret akışı nasıl çalışır.
+- [LaunchLab token oluşturma](/docs/i18n/tr/user-flows/creating-a-launchlab-token) — JustSendit ve LaunchLab oluşturma kılavuzları.
+- [Yaratıcı ücretleri nasıl çalışır](/docs/i18n/tr/user-flows/how-creator-fees-work) — bonding curve ve CPMM yaratıcı ücretleri ile platform Fee Key hakları.
+- [LaunchLab platformları](/docs/i18n/tr/user-flows/launchlab-platforms) — platform yapılandırmalarının kontrol edebileceği şeyler.
+- [LaunchLab protokolü genel bakış](/docs/i18n/tr/products/launchlab/overview) — daha derin protokol mekanikleri.

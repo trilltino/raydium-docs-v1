@@ -1,0 +1,184 @@
+---
+title: "Ticks und Positionen"
+description: "Wie CLMM Preise in Ticks diskretisiert, wie Tick-Arrays Speicher komprimieren und welche Regeln für die Platzierung einer Position gelten."
+---
+
+<Info>
+  **Diese Seite wurde mit KI automatisch übersetzt. Maßgeblich ist stets die englische Version.**
+
+  [Englische Version ansehen →](/docs/en/products/clmm/ticks-and-positions)
+</Info>
+
+## Warum Ticks existieren
+
+Die Liquidität in CLMM konzentriert sich auf Preisbereiche. Um diese Bereiche On-Chain handhabbar zu machen, werden Preise in ganzzahlige **Ticks** quantisiert, wobei jeder Tick ein konstantes Vielfaches des vorherigen ist:
+
+$$
+\text{price}(i) = 1.0001^{\,i}
+$$
+
+Ein Tick entspricht einer Preisbewegung von 0,01% oder etwa 1 Basispunkt. Die Zuordnung ist:
+
+| Tick-Index `i` | Preismultiplikator |
+|---|---|
+| `0` | `1.0000` |
+| `100` | `1.0100` (≈ +1,00%) |
+| `-100` | `0.9900` (≈ −0,99%) |
+| `10000` | `2.7181` (≈ e) |
+| `MAX_TICK = 443636` | ≈ `1.84e19` |
+| `MIN_TICK = -443636` | ≈ `5.42e-20` |
+
+`MIN_TICK` und `MAX_TICK` werden so gewählt, dass `sqrt_price_x64` an beiden Enden in einen `u128` passt. Jeder Pool erzwingt, dass `tick_lower >= MIN_TICK` und `tick_upper <= MAX_TICK`. In der Praxis begrenzt die Web-UI den Bereich auf etwas viel Engeres, um zu verhindern, dass Benutzer Liquidität in unerreichbare Ticks sperren.
+
+## Tick-Abstände
+
+Die `AmmConfig` eines Pools legt einen **Tick-Abstand** fest — die einzigen Ticks, die eine Position als Endpunkte verwenden darf. Wenn `tick_spacing = 60`, sind nur Ticks `…, −120, −60, 0, 60, 120, …` gültig. Der Versuch, eine Position mit Endpunkt `31` zu öffnen, wird mit `TickAndSpacingNotMatch` zurückgewiesen.
+
+Häufig veröffentlichte Abstände:
+
+| Gebührentier | `trade_fee_rate` | Tick-Abstand | Gröbster Preisschritt pro Tick-Position |
+|----------|------------------|--------------|---------------------------------------|
+| 0,01% | `100` | 1 | 0,01% |
+| 0,05% | `500` | 10 | 0,10% |
+| 0,25% | `2500` | 60 | 0,60% |
+| 1,00% | `10000` | 120 | 1,21% |
+
+Je gröber der Abstand, desto weniger Tick-Arrays müssen initialisiert werden, desto günstiger ist es, eine breite Position zu öffnen, und desto verschwommener wird die Preisgrenze. Volatile Paare befinden sich typischerweise in 120er-Abstands-Tiers; Stablecoins befinden sich in 1er-Abstands-Tiers.
+
+## Tick-Arrays
+
+Der Pool speichert keinen Pro-Tick-Status in separaten Konten. Stattdessen werden `TICK_ARRAY_SIZE` benachbarte Ticks (60 im aktuellen Raydium CLMM) in einem einzigen `TickArrayState` gepackt. Der erste Tick des Arrays ist sein `start_tick_index`, und er umfasst genau `TICK_ARRAY_SIZE * tick_spacing` ganzzahlige Tick-Einheiten.
+
+Für `tick_spacing = 60` und `TICK_ARRAY_SIZE = 60`:
+
+- Jedes Tick-Array umfasst `60 × 60 = 3600` ganzzahlige Ticks.
+- `start_tick_index` ist ein Vielfaches von 3600: `…, -7200, -3600, 0, 3600, 7200, …`.
+
+Ein Positions-Endpunkt `t = 2040` bei `tick_spacing = 60` befindet sich im Tick-Array mit `start_tick_index = 0`. Ein Positions-Endpunkt `t = 4200` befindet sich im Array mit `start_tick_index = 3600`.
+
+### Wenn ein Array erstellt wird
+
+Ein Tick-Array ist lazy: Die **erste** Position, die auf einen Tick darin verweist, initialisiert das Array und zahlt die Miete. Swaps initialisieren keine Tick-Arrays — sie überspringen nicht initialisierte Arrays mithilfe der Bitmap. Es gibt keine separate Init-Tick-Array-Anweisung: `OpenPosition*` und `IncreaseLiquidity*` rufen intern `TickArrayState::get_or_create_tick_array` auf und allokieren ein fehlendes Array auf Kosten von `payer`. Sie übergeben einfach die Tick-Array-PDA — auch wenn sie noch nicht initialisiert und System-eigen ist.
+
+### Tick-Arrays werden nicht geschlossen
+
+Sobald ein Tick-Array initialisiert wurde, bleibt es für die Lebensdauer des Pools bestehen. Das Programm stellt **keinen** Pfad zum Schließen eines Tick-Arrays bereit, auch nicht nachdem `initialized_tick_count` auf Null zurückgekehrt ist. Es gibt keine Mietrückgewinnung für Tick-Arrays; die Miete, die die erste Position zahlt, die ein Array berührt, wird dauerhaft in diesem Konto gesperrt. Dies ist ein bewusster Kompromiss: Die Wiederverwendung eines vorhandenen Tick-Arrays ist kostenlos für jede nachfolgende Position, sodass ein stark gehandelter Pool die Mietkosten nur einmal pro `(pool, start_tick_index)`-Slot zahlt, unabhängig von der Fluktuation.
+
+### Die Bitmap
+
+Das Finden des „nächsten initialisierten Ticks links/rechts des aktuellen Ticks" muss schnell sein — ein Swap kann viele Ticks kreuzen. Der Pool speichert eine 1-Bit-pro-Tick-Array-Bitmap inline in `PoolState` für den Bereich **±512** Arrays um Tick 0 (`TICK_ARRAY_BITMAP_SIZE = 512`; das Feld ist `[u64; 16]` = 1.024 Bits, aufgeteilt in 512 negative / 512 positive, also Array-Indizes −512 … +511). Außerhalb dieses Bereichs (Full-Range-Positionen, exotische Setups) bietet `TickArrayBitmapExtension` den Überlauf.
+
+Ein Swap durchläuft die Bitmap: `lowest_set_bit_above(tick_current_array_index)` gibt das nächste Array mit einem initialisierten Tick auf der Seite an, zu der der Swap kreuzt. Innerhalb dieses Arrays lokalisiert ein ähnlicher Bit-Scan den nächsten initialisierten Tick.
+
+## `liquidity_gross` und `liquidity_net`
+
+Jeder **initialisierte** Tick speichert zwei Liquiditätswerte:
+
+- **`liquidity_gross`** — die Summe von `L` über alle Positionen, die diesen Tick als Endpunkt referenzieren. Wenn `liquidity_gross` Null erreicht, wird der Tick nicht initialisiert und kann aus der Bitmap entfernt werden.
+- **`liquidity_net`** — die *vorzeichenbehaftete* Änderung der Pool-Level-`liquidity`, wenn der Preis diesen Tick **aufwärts** kreuzt (von links nach rechts im Tick-Raum). Wenn dieser Tick die untere Grenze einer Position mit Größe `L` ist, trägt er `+L` bei; wenn er die obere Grenze dieser Position ist, trägt er `−L` bei.
+
+Durchgerechnetes Beispiel: zwei Positionen im selben Pool.
+
+- Position A: `tick_lower = -120`, `tick_upper = 0`, Liquidität `L_A = 100`.
+- Position B: `tick_lower = -60`, `tick_upper = 60`, Liquidität `L_B = 50`.
+
+Tick-für-Tick-Status:
+
+| Tick | Berührt von | `liquidity_gross` | `liquidity_net` |
+|------|------------|-------------------|------------------|
+| `-120` | A untere Grenze | 100 | +100 |
+| `-60` | B untere Grenze | 50 | +50 |
+| `0` | A obere Grenze | 100 | −100 |
+| `60` | B obere Grenze | 50 | −50 |
+
+Pool-Level-`liquidity` für verschiedene `tick_current`-Werte:
+
+- `tick_current = -180`: `liquidity = 0` (vor jeder Position)
+- `tick_current = -90`: `liquidity = 100` (nur in A)
+- `tick_current = -30`: `liquidity = 150` (in A und B)
+- `tick_current = 30`: `liquidity = 50` (nur in B)
+- `tick_current = 90`: `liquidity = 0` (nach beiden)
+
+Bei jedem Tick-Crossing während eines Swaps addiert das Programm `liquidity_net` (möglicherweise negativ) zu `PoolState.liquidity`. Dies ist der exakte Uniswap-v3-Mechanismus.
+
+## Positionen als NFTs
+
+Eine Raydium-CLMM-Position ist ein NFT. Das Öffnen einer Position prägt einen brandneuen Mint mit Angebot 1 in die Wallet des Aufrufers, und die Autorität des Mints ist das CLMM-Programm. Das Programm bindet die Positionseigentümerschaft an **wer einen Saldo in einem ATA dieses Mints** zum CPI-Zeitpunkt hält.
+
+Konsequenzen:
+
+- **Positionen sind normalerweise übertragbar.** Eine Wallet kann eine Position verkaufen oder airdroppen, indem sie das NFT überträgt. Der neue Inhaber kann dann `CollectRewards`, `IncreaseLiquidity` usw. aufrufen. Die Ausnahme ist eine Position, die unter dem eingeschränkten Emittenten-Pfad unten eingefroren ist.
+- **Positionen sind außerhalb von CLMM adressierbar.** Marktplätze und Wallets zeigen Positionen wie andere NFTs an. Das SDK setzt einen angemessenen `name`/`symbol` auf die Mint-Metadaten.
+- **Die PDA einer Position wird vom NFT-Mint abgeleitet.** Sie können die `PersonalPositionState` finden, ohne zu wissen, wer sie derzeit hält.
+
+### Positionen mit eingeschränktem Emittenten
+
+Jeder Positions-NFT-Mint, der nach dem 2026-08-Upgrade erstellt wird, zeichnet seinen CLMM-`pool_state` als Freeze-Autorität auf. **Das bedeutet nicht, dass jede neue Position eingefroren ist.** Für gewöhnliche Pools und jede nicht übereinstimmende Position bleibt das NFT-Token-Konto nicht eingefroren und übertragbar. Die Pool-PDA kann nicht außerhalb des CLMM-Programms signieren, und CLMM stellt keine allgemeine Freeze-Anweisung bereit.
+
+Das Einfrieren erfordert beide dieser Bedingungen:
+
+1. Die Position wird durch `OpenPositionV2` oder `OpenPositionWithToken22Nft` geöffnet.
+2. Mindestens ein Pool-Vault-Mint trägt eine Freeze-Autorität aus der hardcodierten Liste der eingeschränkten Emittenten des Programms.
+
+Nur wenn beide Bedingungen erfüllt sind, friert CLMM das neu erstellte Positions-NFT-Konto unmittelbar nach dem Prägen ein. `OpenPosition` V1 wendet diesen Filter nicht an. Siehe [`reference/program-addresses`](/docs/i18n/de/reference/program-addresses#clmm-restricted-issuer-freeze-authorities) für die aktuelle Liste.
+
+Eine eingefrorene Position:
+
+- Kann ihr NFT nicht auf ein anderes Token-Konto übertragen.
+- Kann den Eigentümer des NFT-Token-Kontos nicht ändern.
+- Kann immer noch Liquidität erhöhen oder verringern und Gebühren oder Belohnungen einziehen, wenn der aufgezeichnete Eigentümer signiert.
+- Kann immer noch geschlossen werden. `ClosePosition` verwendet die Pool-PDA, um das NFT-Konto aufzutauen, brennt dann das NFT und schließt die Positions-Konten in derselben Anweisung.
+
+Vorhandene Positionen werden nicht rückwirkend migriert oder eingefroren. Positions-NFT-Mints, die vor dem Upgrade erstellt wurden, behalten ihre vorherige Freeze-Autorität-Einstellung.
+
+<Warning>
+  Ein Client, der eine eingefrorene Position schließt, muss den `pool_state` der Position als erstes verbleibendes Konto an `ClosePosition` anhängen. Die deklarierte IDL-Kontoliste ist unverändert, sodass ältere Clients eine eingefrorene Position erfolgreich öffnen können, aber später mit `AccountLack` fehlschlagen. Aktualisieren Sie den Close-Builder, bevor Sie diese Pools unterstützen.
+</Warning>
+
+### Token-2022-Positionen
+
+CLMM kann einen Positions-NFT unter klassischem SPL Token durch `OpenPositionV2` oder unter Token-2022 durch `OpenPositionWithToken22Nft` prägen. Beide V2-Pfade inspizieren die Pool-Vault-Mints und wenden die gleiche Freeze-Regel für eingeschränkte Emittenten an. `OpenPosition` V1 ist der Legacy-Pfad für klassische Token und kann keinen Pool mit Token-2022-Vault-Mints bedienen. Die Wallet- und Marktplatz-Kompatibilität unterscheidet sich; Raydiums UI verfolgt beide NFT-Programme.
+
+## Regeln für zulässige Bereiche
+
+Zum Zeitpunkt von `OpenPosition` erzwingt das Programm:
+
+1. `tick_lower < tick_upper`.
+2. `tick_lower % tick_spacing == 0` und `tick_upper % tick_spacing == 0`.
+3. `MIN_TICK <= tick_lower` und `tick_upper <= MAX_TICK`.
+4. Der Aufrufer hat die Tick-Array-PDAs bereitgestellt, die `tick_lower` und `tick_upper` enthalten. Sie müssen nicht initialisiert sein — das Programm erstellt ein fehlendes selbst.
+5. Das Bitmap-Erweiterungs-Konto, falls diese Position in den Erweiterungsbereich reicht.
+
+Wenn eine Überprüfung fehlschlägt, revertiert die Anweisung mit `TickInvalidOrder` (Regel 1), `TickAndSpacingNotMatch` (Regel 2), `InvalidTickIndex` (Regel 3) oder `MissingTickArrayBitmapExtensionAccount` (Regel 5); `NotApproved` deckt den separaten Fall ab, in dem `pool_state.status` das Open-Position-Bit gesetzt hat. Siehe [`reference/error-codes`](/docs/i18n/de/reference/error-codes).
+
+## „Im Bereich" vs. „außerhalb des Bereichs"
+
+Eine Position ist **im Bereich**, wenn `tick_lower <= tick_current < tick_upper`. Nur Positionen im Bereich tragen zu `PoolState.liquidity` bei und verdienen daher nur Swap-Gebühren.
+
+Eine Position außerhalb des Bereichs:
+
+- Hält 100% von *einem* Token. Wenn `tick_current < tick_lower` — Preis **unter** dem Bereich — besteht die Position vollständig aus **Token0**; wenn `tick_current >= tick_upper` — Preis **über** dem Bereich — vollständig aus **Token1**. Der Preis wird als `token1/token0` notiert; eine Position, die von einem steigenden Preis durchlaufen wird, hält am Ende also den Quote-Asset.
+- Verdient **keine** Swap-Gebühren.
+- **Setzt** fort, Belohnungen zu sammeln, wenn die Pool-Reward-Streams an Liquidität außerhalb des Bereichs emittieren — aber Raydiums Standardverhalten ist „nur an In-Range emittieren", was der Uniswap-v3-Konvention entspricht. Siehe [`products/clmm/fees`](/docs/i18n/de/products/clmm/fees).
+
+LPs, die CLMM-Positionen verwalten, verbringen den Großteil ihrer Aufmerksamkeit damit, Positionen im Bereich zu halten, während sich der Preis bewegt.
+
+## Häufige Integrationsfallen
+
+- **Endpunkte mit falschem Abstand.** Code, der einen Tick aus einem Zielpreis berechnet, muss auf ein Vielfaches von `tick_spacing` einrasten, bevor er an `OpenPosition` übergeben wird, sonst revertiert der Aufruf mit `TickAndSpacingNotMatch`. Der SDK-Helfer ist `TickUtil.getPriceAndTick({ price, mintADecimals, mintBDecimals, zeroForOne, tickSpacing })` (Achtung: `TickUtil`, Singular); selbstgeschriebene Mathematik überspringt das Einrasten oft.
+- **Fehlende Tick-Arrays.** Das Öffnen einer breiten Position berührt zwei Tick-Arrays; das Vergessen, sie als beschreibbare Konten zu übergeben, führt zu einer Rückweisung. Sie müssen vorher nicht existieren — das Programm erstellt ein fehlendes — aber das *Konto* muss in der Liste stehen.
+- **Veralteter Tick nach einem Swap.** `tick_current` kann in einem Swap viele Ticks kreuzen. Wenn Ihre UX einen „aktuellen Tick" aus einem RPC-Aufruf anzeigt und dann später eine Position öffnet, kann die relative Position zum Live-Preis um Dutzende Ticks abweichen. Rufen Sie direkt vor dem Signieren erneut ab.
+- **Positions-NFTs mit zusätzlichen Metadaten.** Wenn Sie eine Wallet erstellen, die Raydium-Positionen erkennt, verwenden Sie die Positions-PDA / Programmdaten und nicht ein hardcodiertes Metadatenfeld. Neue Positions-Mints verwenden die Pool-PDA als Mint- und Freeze-Autorität bei der Erstellung; die Mint-Autorität wird nach dem Prägen des einzelnen NFT entfernt.
+- **Annahme, dass jede Position übertragbar ist.** Lesen Sie den `isFrozen`-Status des NFT-Token-Kontos, bevor Sie Transfer-, Marktplatz-, Escrow- oder Burn & Earn-Aktionen anzeigen.
+
+## Nächste Schritte
+
+- [Mathematik](/docs/i18n/de/products/clmm/math) — der Swap-Schritt-für-Schritt und die Gebühren-Wachstums-Ableitung, an der Tick-Grenzen beteiligt sind.
+- [Konten](/docs/i18n/de/products/clmm/accounts) — die `TickArrayState`- und `PositionState`-Layouts.
+- [Gebühren und Belohnungen](/docs/i18n/de/products/clmm/fees) — wie In-Range-Sein die Gebührensammlung steuert.
+- [`algorithms/clmm-math`](/docs/i18n/de/algorithms/clmm-math) — die gemeinsame Ableitung der konzentrierten Liquiditätsformeln.
+
+Quellen:
+
+- [`raydium-io/raydium-clmm` — `tick_array`, `tick`, `position` Module](https://github.com/raydium-io/raydium-clmm)
+- „Uniswap v3 Core" Whitepaper, §6 (Ticks), §7 (Gebührenwachstum)

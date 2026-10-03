@@ -1,0 +1,65 @@
+---
+title: "Tổng quan LaunchLab"
+description: "LaunchLab là gì, dành cho ai, và cách token launches chuyển từ bonding curve trading sang Raydium pool liquidity."
+---
+
+<Info>
+  **Trang này được dịch tự động bằng AI. Phiên bản tiếng Anh là bản chính thức.**
+
+  [Xem bản tiếng Anh →](/docs/en/user-flows/launchlab-overview)
+</Info>
+
+<Warning>
+  LaunchLab là cơ sở hạ tầng phát hành token không cần phép. Bất kỳ ai cũng có thể tạo token, chọn tên hoặc ticker, và cấu hình các tham số phát hành. Luôn xác minh địa chỉ mint và cài đặt phát hành trước khi mua hoặc quảng bá token. Trang này chỉ giải thích cơ chế sản phẩm và không phải là lời khuyên tài chính, pháp lý hoặc đầu tư.
+</Warning>
+
+LaunchLab cho phép những người sáng tạo phát hành token và khởi động thanh khoản ban đầu thông qua bonding curve. Người mua giao dịch với curve trước khi hoàn thành. Khi phát hành đạt ngưỡng hoàn thành, thanh khoản di chuyển sang pool AMM của Raydium và giao dịch tiếp tục thông qua định tuyến Raydium thông thường.
+
+## Ai sử dụng LaunchLab
+
+| Đối tượng | Tác vụ phổ biến |
+|---|---|
+| Nhà giao dịch | Khám phá token giai đoạn sớm, mua hoặc bán trên bonding curve, và theo dõi tiến độ hoàn thành. |
+| Người sáng tạo | Phát hành token mà không cần code, cấu hình các tham số curve, và tùy chọn kiếm phí người sáng tạo. |
+| Nền tảng | Xây dựng môi trường phát hành có thương hiệu với cài đặt phí, thương hiệu và bề mặt khám phá phát hành của riêng họ. |
+
+## Cách một phát hành hoạt động
+
+1. Người sáng tạo cấu hình siêu dữ liệu token, cung cấp, cài đặt curve, mục tiêu hoàn thành và cài đặt phí tùy chọn.
+2. Token mở trên bonding curve. Người mua và người bán giao dịch trực tiếp với curve đó.
+3. Giá curve thay đổi khi có mua và bán xảy ra.
+4. Khi curve đạt mục tiêu hoàn thành, thanh khoản di chuyển sang pool Raydium.
+5. Sau khi hoàn thành, người dùng giao dịch token thông qua Raydium Swap và các aggregator định tuyến qua pool Raydium.
+
+## Chế độ tạo
+
+| Chế độ | Sử dụng khi | Cài đặt chính |
+|---|---|---|
+| JustSendit | Bạn muốn phát hành nhanh nhất mà không cần code với cài đặt mặc định. | Tên, ticker, hình ảnh, liên kết mạng xã hội tùy chọn, lần mua đầu tiên tùy chọn. |
+| LaunchLab | Bạn cần kiểm soát nhiều hơn đối với cung cấp, mục tiêu gây quỹ, phân bổ curve, vesting hoặc phí người sáng tạo. | Cung cấp, mục tiêu gây quỹ, phân bổ curve, vesting, chia sẻ phí sau khi di chuyển. |
+
+JustSendit sử dụng mục tiêu hoàn thành mặc định. Chế độ LaunchLab cho phép người sáng tạo đặt mục tiêu hoàn thành, tuân theo giới hạn UI và chương trình.
+
+## Hoàn thành và thanh khoản
+
+Hoàn thành đóng bonding curve và di chuyển tài sản vào pool CPMM. Xử lý LP và CPMM creator-of-record phụ thuộc vào cấu hình nền tảng.
+
+- Tất cả các phát hành mới được khởi tạo di chuyển sang CPMM.
+- Các trường nền tảng và người sáng tạo kết hợp thành một chia sẻ LP bị khóa do nền tảng sở hữu; chia sẻ còn lại bị đốt.
+- Phí CPMM creator riêng biệt với Fee Key của nền tảng và tuân theo CPMM pool creator được ghi lại.
+
+## Những điều cơ bản về an toàn
+
+- Xác minh mint token, không chỉ ticker hoặc logo.
+- Xem xét mục tiêu hoàn thành và tiến độ curve trước khi giao dịch.
+- Kiểm tra cài đặt phí người sáng tạo và nền tảng trước khi phát hành hoặc mua.
+- Coi NFT Fee Key của nền tảng là tài sản quyền phí. Nếu được chuyển hoặc đốt, quyền yêu cầu phí LP sẽ di chuyển hoặc có thể bị mất.
+- Đọc [Trust and safety](/docs/i18n/vi/getting-started/trust-and-safety) trước khi kết nối ví hoặc ký giao dịch.
+
+## Các liên kết
+
+- [Mua token LaunchLab](/docs/i18n/vi/user-flows/buying-a-launchlab-token) — cách luồng giao dịch hoạt động trước và sau khi hoàn thành.
+- [Tạo token LaunchLab](/docs/i18n/vi/user-flows/creating-a-launchlab-token) — hướng dẫn tạo JustSendit và LaunchLab.
+- [Cách phí người sáng tạo hoạt động](/docs/i18n/vi/user-flows/how-creator-fees-work) — phí bonding-curve và CPMM creator so với quyền Fee Key của nền tảng.
+- [Nền tảng LaunchLab](/docs/i18n/vi/user-flows/launchlab-platforms) — những gì cấu hình nền tảng có thể kiểm soát.
+- [Tổng quan giao thức LaunchLab](/docs/i18n/vi/products/launchlab/overview) — cơ chế giao thức sâu hơn.

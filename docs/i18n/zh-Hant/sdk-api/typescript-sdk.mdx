@@ -1,0 +1,203 @@
+---
+title: "TypeScript SDK"
+description: "@raydium-io/raydium-sdk-v2 端到端指南 — 安裝、四個模組外觀、交易建構，以及每個新整合者都會遇到的陷阱。"
+---
+
+<Info>
+  **本頁內容由 AI 自動翻譯，所有內容以英文版本為準。**
+
+  [查看英文版 →](/docs/en/sdk-api/typescript-sdk)
+</Info>
+
+<Info>
+  **版本說明。** 本頁文件涵蓋 `@raydium-io/raydium-sdk-v2@0.2.64-alpha`，這是本網站所有程式碼示例所使用的版本。SDK 尚未達到 1.0，型別介面在各版本間有所演變 — 請固定你的版本。
+
+  版本已從 `0.2.42-alpha` 升級至 `0.2.64-alpha`（2026-09-09），同時進行了程式升級。`0.2.64-alpha` 是 SDK 的目前版本。程式碼示例頁面連結的 [`raydium-sdk-V2-demo`](https://github.com/raydium-io/raydium-sdk-V2-demo) 儲存庫安裝的是 `0.2.62-alpha`，如果你逐字跟隨示例，可以固定其中任一版本。本頁的示例最後**執行**於 `0.2.42-alpha`（2026-04）；其呼叫簽名已在 2026-09-09 針對 `0.2.64-alpha` 原始碼重新檢查，但如有不符之處，請視為文件錯誤並[提出議題](https://github.com/raydium-io/raydium-docs-v1/issues/new)。
+</Info>
+
+## 安裝
+
+```bash
+npm install @raydium-io/raydium-sdk-v2 @solana/web3.js @solana/spl-token
+# 或
+pnpm add @raydium-io/raydium-sdk-v2 @solana/web3.js @solana/spl-token
+```
+
+SDK 以 TypeScript 編寫，並隨附 `.d.ts` 型別定義檔。最低工具鏈要求：Node 18+、TypeScript 5.0+、`moduleResolution: "bundler"` 或 `"node16"`。
+
+## 初始化
+
+進入點是 `Raydium.load`：
+
+```ts
+import { Raydium } from "@raydium-io/raydium-sdk-v2";
+import { Connection, Keypair, clusterApiUrl } from "@solana/web3.js";
+
+const connection = new Connection(process.env.RPC_URL ?? clusterApiUrl("mainnet-beta"));
+const owner      = Keypair.fromSecretKey(/* ... */);
+
+const raydium = await Raydium.load({
+  owner,
+  connection,
+  cluster: "mainnet",           // "mainnet" | "devnet"
+  disableFeatureCheck: true,    // skip the SDK's startup feature-detect API call
+  blockhashCommitment: "confirmed",
+});
+```
+
+`Raydium.load` 是非同步的，因為它預設會從 `api-v3.raydium.io` 載入代幣列表（`raydium.token.load()`）。傳遞 `disableLoadToken: true` 可跳過該提取。可用性功能檢查是對 `/v3/main/AvailabilityCheckAPI` 的另一次呼叫，並且**已預設跳過**，除非你明確傳遞 `disableFeatureCheck: false`。費用配置在載入時完全不會被取得 — 它們在首次使用時由 `raydium.api.getCpmmConfigs()` / `getClmmConfigs()` 延遲取得。
+
+## 模組外觀
+
+載入後，`raydium` 物件會公開十個模組外觀，加上一個 API 用戶端：
+
+```ts
+raydium.cpmm       // CPMM pools: createPool, addLiquidity, withdrawLiquidity, swap, ...
+raydium.clmm       // CLMM pools: createPool, openPositionFromBase, increasePositionFromBase,
+                   //             decreaseLiquidity, harvestAllRewards, swap, limit orders, ...
+raydium.liquidity  // AMM v4 pools: computeAmountOut, swap, addLiquidity, removeLiquidity, ...
+raydium.farm       // Farm v3/v5/v6: deposit, withdraw, harvestAllRewards, create,
+                   //                restartReward(s), addNewRewardToken(s)
+raydium.launchpad  // LaunchLab: createLaunchpad, buyToken, buyTokenExactOut, sellToken,
+                   //            claimCreatorFee, curve-rule and platform-config builders, ...
+raydium.tradeV2    // Multi-pool routing: route discovery, compute, route-execution
+raydium.marketV2   // OpenBook market creation (legacy)
+raydium.utils1216  // One-off historical-claim helpers
+raydium.token      // Token list + metadata: load(), getTokenInfo()
+raydium.account    // Wallet token accounts, ATA lookup and creation
+raydium.api        // The REST client (fetchPoolById, getCpmmConfigs, fetchLaunchConfigs, ...)
+```
+
+## 交易建構器
+
+每個變動函式都會傳回一個建構器，而不是立即執行：
+
+```ts
+import { Percent } from "@raydium-io/raydium-sdk-v2";
+
+const { execute, builder, transaction, instructionTypes, signers, extInfo } =
+  await raydium.cpmm.addLiquidity({
+    poolInfo,
+    inputAmount,              // BN — one side, not a pair
+    baseIn: true,
+    slippage: new Percent(1, 100),   // a Percent, not a number
+    txVersion: TxVersion.V0,
+  });
+```
+
+傳回的欄位：
+
+- **`execute`** — 便利函式，用於簽署 + 傳送。等同於 `builder.execute`。
+- **`builder`** — `TxBuilder` 實例，已累積所有指令和簽署者。`builder.build()` 會回傳一個 `TxBuildData`，其 `transaction` 是單一的舊式 `Transaction`；`builder.buildV0()` 會回傳一個帶有單一 `VersionedTransaction` 的 `TxV0BuildData`。只有 `buildMultiTx` / `buildMultiTxV0` 才會產生陣列。
+- **`transaction`** — 已建構的 `Transaction` / `VersionedTransaction`。
+- **`instructionTypes`** / **`signers`** — 已累積的指令標籤和簽署者集合。
+- **`extInfo`** — 產品特定的額外資訊。例如，`cpmm.createPool` 回傳 `extInfo.address.{poolId, lpMint, vaultA, vaultB}`；`launchpad.createLaunchpad` 回傳 `extInfo.address`（一個 `LaunchpadPoolInfo` 加上 `poolId`）。
+
+<Note>
+  傳回型別上並沒有 `innerTransactions` 欄位 — 對它做解構是 TypeScript 錯誤。傳回型別為
+  `MakeMultiTxData` 的建構器（例如 `clmm.harvestAllRewards`、`farm.harvestAllRewards`、
+  `tradeV2.swap`、`launchpad.createLaunchpad`）改為公開 `transactions`，而且它們的 `execute`
+  **必須**帶 `{ sequentially: boolean }`，並解析為 `{ txIds }` 而不是 `{ txId }`。
+</Note>
+
+`txVersion` 控制舊版與 V0 交易格式。V0（位址查詢表）是預設建議 — 它讓更大的交換能在單一交易中進行。
+
+### 為什麼是非同步建構器？
+
+幾乎每個建構器都在內部取得鏈上狀態：池資訊（用於報價）、代幣程式所有權（用於 Token-2022 與 SPL 路由）、帳戶租金豁免（用於 ATA 建立）等。SDK 會積極快取，但新池的首次呼叫涉及 RPC 往返。保持長期存在的 `raydium` 實例以避免重新取得。
+
+## CLMM 模組新增功能（最新版本）
+
+CLMM 外觀新增了動態費用、單邊費用和限價單功能的介面：
+
+- **`raydium.clmm.createCustomizablePool`** — `createPool` 的超集，接受 `collectFeeOn` 和 `dynamicFeeConfig`（配置帳戶的 `PublicKey`）。提供 `dynamicFeeConfig` 就是啟用動態費用的方式；並沒有單獨的 `enableDynamicFee` 旗標，也沒有 `dynamicFeeConfigId`。經典的 `createPool` 繼續適用於預設費用池。
+- **`raydium.clmm.openLimitOrder`** — 開立單一 tick 限價單。接受 `poolInfo`、`baseIn`（方向）、`orderTick`、`amount`，以及可選的 `tickArrayBitmap`、`noneIndex`、`ownerInfo`。請使用匯出的 `getOrderTick({ baseIn, mintADecimal, mintBDecimal, tickSpacing, price })` 輔助工具來量化 tick。
+- **`raydium.clmm.increaseLimitOrder` / `decreaseLimitOrder`** — 調整現有訂單的未成交部分。兩者都接受 `{ poolInfo, limitOrder, amount }`；`decreaseLimitOrder` 另有可選的 `slippage`。對已完全成交的訂單減少時會以 `InvalidOrderPhase` 回復。
+- **`raydium.clmm.settleLimitOrder` / `settleAllLimitOrder`** — 將已成交的輸出掃入所有者的 ATA。`settleLimitOrder` 只接受 `{ limitOrder }` — 沒有 `poolInfo`。訂單所有者或程式的 `limit_order_admin` 保管人都可以呼叫。
+- **`raydium.clmm.closeLimitOrder` / `closeAllLimitOrder`** — 關閉已完全結算的訂單以回收租金。
+- **`raydium.api.getClmmDynamicConfigs()`** — REST 輔助工具，呼叫新的 `/main/clmm-dynamic-config` 端點。（並沒有限價單配置的輔助工具或端點：限價單是以 tick 為鍵，而不是以每池的配置帳戶為鍵。）
+
+該套件未宣告子路徑匯出，因此 `@raydium-io/raydium-sdk-v2/<anything>` 在任何拼法下都無法解析 — 請從頂層 barrel 匯入所有內容。（在內部，`src/raydium/clmm/utils/` 已重新命名為 `src/raydium/clmm/libraries/`，但那從未是公開的進入點。）
+
+端到端 TypeScript 逐步解說位於 [`products/clmm/code-demos`](/docs/i18n/zh-Hant/products/clmm/code-demos)。
+
+## 常見陷阱
+
+### 1. 叢集不匹配
+
+SDK 的啟動設定是叢集特定的。混合 `cluster: "mainnet"` 與 devnet `Connection` 會導致無聲的誤路由：SDK 針對 mainnet `AmmConfig` 報價，但傳送至 devnet。始終同時傳遞兩者。
+
+### 2. 忘記預先建立 ATA
+
+首次與 mint 互動時，使用者的關聯代幣帳戶可能不存在。SDK 在偵測到缺少 ATA 時會自動前置 `AssociatedTokenAccount::create` 指令，這會消耗少量租金。如果你的錢包 SOL 不足，這將無聲地失敗。檢查並在重試前充值。
+
+### 3. 過時的 `poolInfo`
+
+`poolInfo` 是一個快取的快照。如果自你取得它以來池狀態已變更（例如大型交易移動了價格），交換的 `minAmountOut` 可能是根據舊狀態計算的，並低於鏈上輸出量，導致回復。在建構高價值交易前立即重新取得 `poolInfo`，或使用 SDK 的 `computeAmountOut`，它會重新查詢儲備。
+
+### 4. 優先費用
+
+SDK 預設不新增計算單位價格。在高交易量時段（新池啟動、迷因幣事件），這意味著你的交易與許多其他交易競爭，可能無法成交。提供明確的 `computeBudgetConfig`：
+
+```ts
+const { execute } = await raydium.cpmm.swap({
+  poolInfo,
+  baseIn,                    // required: which side inputAmount is denominated in
+  inputAmount: new BN(...),
+  swapResult: ...,           // required: from CurveCalculator.swapBaseInput/Output
+  slippage: 0.005,
+  txVersion: TxVersion.V0,
+  computeBudgetConfig: {
+    units: 250_000,          // CU limit
+    microLamports: 50_000,   // priority fee per CU
+  },
+});
+```
+
+參見 [`integration-guides/priority-fee-tuning`](/docs/i18n/zh-Hant/integration-guides/priority-fee-tuning) 以取得規模指導。
+
+### 5. 滑點容限必須符合池類型
+
+CPMM 和 AMM v4 使用 CPMM 數學（對正常交易的影響低）。CLMM 是分段的（影響在 tick 交叉時跳躍）。如果你將 0.5% 的滑點容限從 CPMM 示例複製到跨越多個 tick 的 CLMM 交換中，交易可能會回復。SDK 的 `computeAmountOut` 傳回 `priceImpact`；將你的容限設定在其上方。
+
+### 6. `BN` 與 `number`
+
+SDK 中的所有金額欄位都是 `bn.js` `BN` 實例 — 絕不是 JavaScript `number`。透過 `.toNumber()` 轉換金額值會在 `2^53` 處無聲地截斷；對於任何高於約 9 千兆的值（在 9 位小數 mint 上並不罕見），這會產生錯誤的結果。將所有內容保持在 `BN` 中，直到最終 UI 渲染。
+
+## 版本控制政策
+
+- `@raydium-io/raydium-sdk-v2` 是 Raydium 維護的唯一 SDK。所有文件、示例和整合指導都以它為目標。
+- 一個較舊的 v1 套件（`@raydium-io/raydium-sdk`）出於歷史原因存在於 npm 上。維護在 CPMM 和 LaunchLab 推出後結束（v1 從未獲得對任一者的支援），自 2024 年以來沒有 v1 版本。將 v1 視為生命週期終止：不要將其用於新程式碼，並將任何剩餘的 v1 整合遷移至 v2。
+- SDK v2 是 pre-1.0。0.x 次要版本之間可能存在破壞性變更；固定你已驗證的版本，並在升級時檢查 GitHub 發行說明。
+
+## 升級
+
+升級 SDK 次要版本時：
+
+1. 重新檢查每個變動呼叫的傳回型別 — 形狀變更（例如 `extInfo`）經常出現。
+2. 重新產生 `poolInfo` 取得簽名 — 欄位可能已重新命名。
+3. 重新驗證你的滑點處理；SDK 在各版本間已在自動綁定和選擇加入綁定行為之間切換。
+4. 如果你使用 `raydium.tradeV2`（路由），請重新驗證路由形狀 — 它是介面中最不穩定的部分。請注意該外觀已從 `trade` 更名為 `tradeV2`；舊名稱已不存在。
+
+## 取得幫助
+
+如有 SDK 和 API 問題：
+
+- **GitHub 議題** — 在 [github.com/raydium-io/raydium-sdk-V2/issues](https://github.com/raydium-io/raydium-sdk-V2/issues) 提出錯誤和功能請求。Raydium 團隊積極監控。
+- **Discord** — [discord.gg/raydium](https://discord.gg/raydium) 的 `#dev-support` 頻道以取得同步幫助。
+- **Telegram** — 開發者聊天連結來自 [raydium.io](https://raydium.io)（避免未驗證的 Telegram 群組）。
+
+如有安全問題，**不要**在公開頻道發佈 — 參見 [`security/disclosure`](/docs/i18n/zh-Hant/security/disclosure)。
+
+## 相關連結
+
+- [`sdk-api/rest-api`](/docs/i18n/zh-Hant/sdk-api/rest-api) — SDK 的 HTTP 補充。
+- [`sdk-api/trade-api`](/docs/i18n/zh-Hant/sdk-api/trade-api) — 伺服器建構的交換交易。
+- [`sdk-api/anchor-idl`](/docs/i18n/zh-Hant/sdk-api/anchor-idl) — 直接從程式 IDL 重新產生客戶端。
+- [`sdk-api/python-integration`](/docs/i18n/zh-Hant/sdk-api/python-integration) — 透過 `solana-py` 的 Python 等效項。
+- [`integration-guides/priority-fee-tuning`](/docs/i18n/zh-Hant/integration-guides/priority-fee-tuning) — 規模化 `computeBudgetConfig`。
+
+來源：
+
+- [Raydium SDK v2 原始碼](https://github.com/raydium-io/raydium-sdk-V2)
+- Raydium SDK 發行說明。

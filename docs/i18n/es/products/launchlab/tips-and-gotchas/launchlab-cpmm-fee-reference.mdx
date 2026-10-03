@@ -1,0 +1,72 @@
+---
+title: "Referencia de tarifas de LaunchLab y CPMM"
+description: "Flujo de tarifas de extremo a extremo para tokens de LaunchLab, desde el comercio en curva de vinculación hasta la migración a CPMM."
+---
+
+<Info>
+  **Esta página fue traducida automáticamente por IA. La versión en inglés es la fuente autorizada.**
+
+  [Ver versión en inglés →](/docs/en/products/launchlab/tips-and-gotchas/launchlab-cpmm-fee-reference)
+</Info>
+
+Los tokens de LaunchLab tienen dos fases de comercio, y cada fase tiene su propio modelo de tarifas. No combines estas en una única «tarifa del creador» en la copia de la interfaz de usuario ni en la contabilidad.
+
+## Ciclo de vida de las tarifas
+
+### Fase 1: Curva de vinculación
+
+Cada operación en la curva de vinculación puede incluir cuatro tarifas aditivas:
+
+| Tarifa | Establecida por | Destinatario |
+|---|---|---|
+| Tarifa de protocolo | Configuración global de LaunchLab, `tradeFeeRate` | Raydium |
+| Tarifa de plataforma | Configuración de plataforma, `feeRate` | Billetera de reclamación de plataforma |
+| Tarifa del creador | Configuración de plataforma, `creatorFeeRate` | Bóveda del creador del token |
+| Tarifa de referencia | Por transacción, `shareFeeRate` | Billetera del referidor |
+
+Las tarifas que se acumulan en las bóvedas de plataforma y creador deben ser reclamadas. Las tarifas de referencia se transfieren directamente durante la operación.
+
+## Migración
+
+Cuando la curva de vinculación alcanza el objetivo de graduación:
+
+1. La liquidez se migra a CPMM para cada nuevo lanzamiento.
+2. Se acuñan tokens LP de CPMM.
+3. Antes de la actualización del 2026-08-17, `creatorScale` producía una Clave de Tarifa propiedad del creador. Las migraciones ejecutadas después combinan las escalas de plataforma y creador almacenadas en una única participación de LP bloqueada propiedad de la plataforma. La participación restante se quema.
+4. `cpConfigId` determina cuál `AmmConfig` de CPMM utiliza el pool migrado.
+
+## Fase 2: Pool CPMM
+
+Después de la migración, los swaps de CPMM pueden incluir:
+
+| Tarifa | Cómo funciona |
+|---|---|
+| Tarifa de comercio | Se deduce de la entrada del swap y se divide entre LPs, protocolo y tesorería. |
+| Tarifa del creador de CPMM | Tarifa adicional deducida de la entrada del swap y atribuida al creador del pool. |
+
+Para migraciones actualizadas, el titular de la Clave de Tarifa de plataforma gana de la parte de participación de LP bloqueada del lado de la tarifa de comercio. Las Claves de Tarifa del Creador de migraciones completadas antes de la actualización continúan ganando de acuerdo con sus registros de liquidez bloqueada existentes. La tarifa del creador de CPMM es separada y se reclama a través de la recopilación de tarifas del creador.
+
+## Flujos de ingresos del creador
+
+Un creador puede tener dos flujos de contador de tarifas bajo el programa actualizado. Un creador también puede poseer una Clave de Tarifa creada por una migración anterior a la actualización. La plataforma posee los derechos de tarifa de LP recién migrados después de la actualización:
+
+| Fuente | Mecanismo | Ruta de reclamación típica |
+|---|---|---|
+| Tarifa del creador de curva de vinculación | Bóveda anterior a la migración | `claimCreatorFee()` |
+| Tarifa del creador de CPMM | `creator_fee_rate` en la configuración de CPMM | `collectCreatorFee()` |
+| Participación histórica de tarifa de LP del creador | Clave de Tarifa del Creador de una migración completada antes de la actualización | Flujo de cosecha Burn & Earn |
+| Participación de tarifa de LP de plataforma actualizada | Clave de Tarifa de Plataforma de una migración ejecutada después de la actualización | Flujo de cosecha Burn & Earn |
+
+Estas no se reemplazan entre sí. Preserva la propiedad de los registros históricos de Clave de Tarifa, pero no atribuyas una Clave de Tarifa creada por el flujo de migración actualizado al creador del token.
+
+## Errores comunes
+
+- Las tarifas del creador de CPMM no se extraen de la tarifa de comercio. Son adicionales.
+- Los derechos de NFT de Clave de Tarifa son derechos de tarifa de LP, no derechos de tarifa del creador de CPMM.
+- Los pools de CPMM estándar creados fuera de la ruta de migración de LaunchLab no tienen automáticamente tarifas del creador de CPMM.
+- Los tokens de LP quemados dejan liquidez en el pool de forma permanente, pero ninguna billetera puede reclamar las tarifas representadas por la participación quemada.
+
+## Referencias
+
+- [Distribución de tarifas de LP](/docs/i18n/es/products/launchlab/tips-and-gotchas/lp-fee-distribution)
+- [Cómo funcionan las tarifas del creador](/docs/i18n/es/user-flows/how-creator-fees-work)

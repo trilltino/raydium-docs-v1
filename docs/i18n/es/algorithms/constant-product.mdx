@@ -1,0 +1,213 @@
+---
+title: "AMM de producto constante"
+description: "El invariante x·y=k, precios basados en reservas, derivación de slippage y variantes de manejo de comisiones utilizadas por CPMM y AMM v4 de Raydium. Esta es la página de referencia matemática a la que se vinculan todos los productos x·y=k en Raydium."
+---
+
+<Info>
+  **Esta página fue traducida automáticamente por IA. La versión en inglés es la fuente autorizada.**
+
+  [Ver versión en inglés →](/docs/en/algorithms/constant-product)
+</Info>
+
+## El invariante
+
+Un creador de mercado de producto constante (CPMM) mantiene dos reservas `x` e `y` y cumple:
+
+```
+x · y ≥ k       (después de cada operación)
+```
+
+donde `k` es el producto de las reservas antes de la operación. Para un mercado sin comisiones, `x · y = k` exactamente. Con comisiones, `k` crece estrictamente (la parte de la comisión correspondiente al LP se retiene en las reservas).
+
+El invariante es deliberadamente geométrico: garantiza que sin importar cuán pequeña se vuelva una reserva, la otra crece sin límite para compensar — es decir, el pool nunca puede vaciarse completamente en ningún lado.
+
+## Precios
+
+### Precio spot
+
+El precio marginal de `y` denominado en `x` en cualquier instante es la tangente de la curva:
+
+```
+p = y / x
+```
+
+(derivación: diferenciación implícita de `x · y = k` da `dy/dx = −y/x`; ignorando el signo, `|dy/dx| = y/x`).
+
+Este es el precio que el pool cotiza para una operación infinitesimalmente pequeña. Para cualquier operación de tamaño finito, el precio realizado es peor debido al slippage a lo largo de la curva.
+
+### Swap de entrada exacta (dar `Δx`, recibir `Δy`)
+
+Con comisiones, sea `f` la tasa de comisión (por ejemplo, `f = 0.0025` para 25 bps). Aplica la comisión a la entrada y luego usa el invariante para resolver la salida:
+
+```
+Δx_after_fee = Δx · (1 − f)
+Δy           = y · Δx_after_fee / (x + Δx_after_fee)
+```
+
+Reservas después de la operación:
+
+```
+x' = x + Δx
+y' = y − Δy
+```
+
+Todo `Δx` entra en las reservas. La parte de comisión del LP permanece en `x'`; la parte de protocolo se excluye de la curva mediante un paso de contabilidad separada (ver [Variantes de contabilidad de comisiones](#variantes-de-contabilidad-de-comisiones) abajo).
+
+### Swap de salida exacta (recibir `Δy`, pagar el mínimo `Δx`)
+
+```
+Δx_after_fee = x · Δy / (y − Δy)
+Δx           = Δx_after_fee / (1 − f)
+```
+
+`Δx` se redondea hacia arriba para garantizar que el pool no cobre menos de lo debido.
+
+## Slippage e impacto de precio
+
+**Impacto de precio** mide cuánto se mueve el precio spot del pool como resultado de la operación:
+
+```
+p_before = y / x
+p_after  = y' / x' = (y − Δy) / (x + Δx)
+impact   = (p_before − p_after) / p_before
+```
+
+Para `Δx / x` pequeño, una expansión de primer orden da:
+
+```
+impact ≈ 2 · Δx / x      (ignorando comisiones)
+```
+
+Intuición: un swap del 1% causa un impacto de precio de ~2%. Este factor de 2 es la razón por la que los pools CPMM cotizados para operaciones de tamaño medio parecen «delgados» en comparación con mercados de libro de órdenes — no estás comprando solo contra la mejor oferta actual, estás caminando tu propio precio marginal.
+
+**Precio efectivo** pagado por el operador:
+
+```
+effective = Δx / Δy
+```
+
+El diferencial entre `p_before` y `effective` es **slippage**. El slippage en la interfaz on-chain generalmente se expresa como `(effective − p_before) / p_before`; la función `computeAmountOut` del SDK devuelve tanto `amountOut` como `priceImpact` por esta razón.
+
+## Verificación del invariante en código
+
+Después de un swap, los protocolos re-verifican:
+
+```
+k' = x' · y'  ≥  k  =  x · y
+```
+
+Cualquier violación es un error de programa o un desbordamiento aritmético. Las instrucciones de swap de Raydium hacen esta verificación explícita como una poscondición:
+
+```rust
+let k_before = coin_reserve_before as u128 * pc_reserve_before as u128;
+let k_after  = coin_reserve_after  as u128 * pc_reserve_after  as u128;
+require!(k_after >= k_before, ErrorCode::InvariantViolation);
+```
+
+## Variantes de contabilidad de comisiones
+
+La verificación del invariante asume que la comisión del LP permanece en las reservas. Diferentes productos Raydium manejan los componentes de protocolo, fondo y creador de manera diferente:
+
+### Convención CPMM
+
+Las comisiones son tasas de tipo basis-point `u64` con denominador `1_000_000`. La comisión de operación se divide en `trade_fee_rate` (total) y luego se subdivide mediante `protocol_fee_rate`, `fund_fee_rate`, `creator_fee_rate`. En cada swap:
+
+```
+trade_fee     = ceil(Δx · trade_fee_rate   / 1_000_000)
+creator_fee   = ceil(Δx · creator_fee_rate / 1_000_000)   // its own rate on volume,
+                                                          // NOT a slice of trade_fee
+protocol_fee  = floor(trade_fee · protocol_fee_rate / 1_000_000)
+fund_fee      = floor(trade_fee · fund_fee_rate     / 1_000_000)
+lp_fee        = trade_fee − protocol_fee − fund_fee
+```
+
+Las tres partes que no son LP se acumulan en contadores separados (`protocol_fees_*`, `fund_fees_*`, `creator_fees_*`) que se **excluyen** de las reservas utilizadas en el invariante. Así es como las comisiones pueden retirarse sin mover la curva. Ver [`products/cpmm/fees`](/docs/i18n/es/products/cpmm/fees).
+
+### Convención AMM v4
+
+Las comisiones son ratios `numerator / denominator` con denominador `10_000`. La división se fija en la creación del pool y se almacena en `AmmInfo.fees`:
+
+```
+swap_fee  = ceil(Δx · swap_fee_numerator / swap_fee_denominator)    // por ejemplo, 0.25%
+pnl_share = swap_fee · pnl_numerator / pnl_denominator               // 12 / 100 = 12% de swap_fee
+lp_share  = swap_fee − pnl_share                                     // 0.22% del volumen
+```
+
+`pnl_share` se acumula en `state_data.need_take_pnl_*` y se excluye de las reservas; `lp_share` permanece en el vault. Ver [`products/amm-v4/fees`](/docs/i18n/es/products/amm-v4/fees).
+
+Ambas convenciones preservan el invariante de la misma manera — la diferencia es cosmética (denominador + número de subcategorías).
+
+## Reglas de redondeo
+
+- **El cálculo de comisión redondea hacia arriba.** Garantiza que el pool nunca cobre una comisión insuficiente.
+- **El monto de salida redondea hacia abajo.** Garantiza que el invariante se mantenga estrictamente (`k' > k` incluso antes de que se agregue la comisión).
+- **El monto de entrada exacta de salida redondea hacia arriba.** Garantiza que el usuario no pague de menos.
+
+Toda la aritmética usa `u128` para los productos `x · Δx` intermedios para evitar desbordamiento en reservas grandes. Los resultados finales se convierten de nuevo a `u64` con una verificación de saturación.
+
+## Casos especiales
+
+### Pool vacío
+
+Antes del primer `Deposit`, `x = y = 0`. Las instrucciones de swap rechazan las operaciones previas al depósito.
+
+### Salida cero
+
+Si `Δx` es lo suficientemente pequeño como para que `Δy` redondeado hacia abajo sea 0, la instrucción se revierte con `ZeroTradingTokens`. Esto previene la extracción de valor sin pago; también significa que los swaps de polvo en pools altamente desequilibrados fallan.
+
+### LP de polvo
+
+El primer `Deposit` tiene manejo especial: calcula el suministro inicial de LP como `sqrt(x · y)` y quema una pequeña cantidad de «quemado inicial» (generalmente 100 unidades de LP) para prevenir el «ataque de inflación del primer depositante» (donde un atacante dona al vault e infla el valor del token LP). Los depósitos posteriores usan matemáticas pro-rata.
+
+## Relación con el arbitraje
+
+El precio de un pool CPMM solo cambia mediante:
+
+1. Operaciones a través del pool mismo (usuarios caminando la curva).
+2. Donaciones (envío de tokens al vault sin un swap).
+
+Porque las operaciones mueven el precio de manera determinística con la curva, cualquier pool cuyo precio diverja del precio de mercado más amplio crea una oportunidad de arbitraje. Los arbitrajistas traen el precio del pool de vuelta hacia el precio del mercado en expectativa. Por esto se dice que los pools CPMM «cotizan un precio sin un oráculo»: el mercado encuentra el precio mediante arbitraje en lugar de que el pool lo lea externamente.
+
+El lado contrario: el pool mismo es la contraparte del arbitrajista, por lo que cualquier ganancia de arbitraje es pérdida impermanente del LP (menos la comisión capturada por los LPs).
+
+## Ejemplos elaborados
+
+### Ejemplo 1 — operación pequeña, slippage negligible
+
+Pool: `x = 1_000_000, y = 2_000_000, k = 2·10^12`. Comisión `f = 0.0025`.
+
+Trade `Δx = 1_000`:
+
+```
+Δx_after_fee = 1000 · 0.9975  = 997.5
+Δy           = 2_000_000 · 997.5 / (1_000_000 + 997.5)
+             = 1_995_000_000 / 1_000_997.5
+             ≈ 1_993.01
+```
+
+Precio efectivo: `1000 / 1993.01 ≈ 0.5018`. Spot antes: `0.5`. Slippage respecto al spot: **~0.35%**. El impacto de precio — el movimiento en el precio spot del pool, según la definición anterior — es **~0.20%**.
+
+### Ejemplo 2 — operación de tamaño medio, slippage visible
+
+Mismo pool, `Δx = 100_000` (10% de `x`):
+
+```
+Δx_after_fee = 100_000 · 0.9975 = 99_750
+Δy           = 2_000_000 · 99_750 / (1_000_000 + 99_750)
+             = 199_500_000_000 / 1_099_750
+             ≈ 181_405
+```
+
+Efectivo: `100_000 / 181_405 ≈ 0.5513`. Slippage respecto al spot: **~10.3%**. Impacto de precio: **~17.3%** — cercano a la regla empírica de `2 · 10% = 20%`, que la comisión de operación y la inversión de la curva sitúan ligeramente por debajo. Los dos números se confunden a menudo: el slippage es lo que paga el swapper en relación con el spot, el impacto de precio es cuánto se mueve la propia cotización del pool.
+
+## Referencias
+
+- [`products/cpmm/math`](/docs/i18n/es/products/cpmm/math) — elecciones específicas de redondeo y denominador de comisión de CPMM.
+- [`products/amm-v4/math`](/docs/i18n/es/products/amm-v4/math) — cómo las reservas integradas de OpenBook de AMM v4 extienden este modelo.
+- [`algorithms/slippage-and-price-impact`](/docs/i18n/es/algorithms/slippage-and-price-impact) — página dedicada al dimensionamiento de tolerancia de slippage para interfaces.
+
+Fuentes:
+
+- Whitepaper Uniswap v2 — la declaración canónica de `x · y = k`.
+- Código fuente del programa CPMM de Raydium.
+- Código fuente del programa AMM v4 de Raydium.

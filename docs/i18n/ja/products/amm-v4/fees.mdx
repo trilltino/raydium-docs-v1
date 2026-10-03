@@ -1,0 +1,111 @@
+---
+title: "AMM v4 フィー"
+description: "0.25% のトレードフィー、LP/プロトコル分配、OpenBook 約定からの PnL 生成、および管理者がプロトコルフィーを回収する方法。"
+---
+
+<Info>
+  **このページは AI による自動翻訳です。すべての内容は英語版を正とします。**
+
+  [英語版を表示 →](/docs/en/products/amm-v4/fees)
+</Info>
+
+## 公開されている唯一のティア
+
+CPMM および CLMM とは異なり、AMM v4 には **`AmmConfig` アカウントがありません**。フィーはプール作成時に各プールの `AmmInfo.fees` 構造体に直接保存され、固定されています。本質的にすべてのライブ AMM v4 プールをカバーするデフォルト値は以下の通りです：
+
+| オンチェーンフィールド | デフォルト | 意味 |
+|----------------|---------|---------|
+| `swap_fee_numerator / swap_fee_denominator` | `25 / 10_000` | **AMM パススワップの総トレードフィー：入力量の 0.25%。** |
+| `trade_fee_numerator / trade_fee_denominator` | `25 / 10_000` | OpenBook 削除後の遺産機能（歴史的にはリミットオーダー価格設定に使用）。デフォルトでは `swap_fee` と同じ `0.25%`。 |
+| `pnl_numerator / pnl_denominator` | `12 / 100` | **プロトコルのスワップフィー分配：12%** — つまり、取引量の `0.25% × 12% = 0.03%`。`need_take_pnl_*` カウンターに蓄積されます。 |
+| `min_separate_numerator / min_separate_denominator` | `5 / 10_000` | フィー分配の丸め処理ロジックで使用される内部精度フロア。 |
+
+`pnl_numerator / pnl_denominator` は取引量ではなく、スワップフィーの分数であることに注意してください — これはよくある誤読です。LP シェアは補数（フィーの `88%` = 取引量の `0.22%`）であり、暗黙的です。個別の「LP シェア」分子はありません。
+
+少数の初期プールは異なる分子で作成されました。引用する前に常に `AmmInfo.fees` を読んでください。
+
+**ファンドフィー** と **クリエイターフィー** の行はありません。これらは CPMM/CLMM の発明であり、AMM v4 の元のフィーモデルには存在しませんでした。
+
+## 分配の計算方法
+
+各スワップで、プールは入力量から総トレードフィーを徴収し、その後配分します：
+
+```
+gross_fee   = ceil(amount_in * swap_fee_numerator / swap_fee_denominator)        // amount_in の 0.25%
+pnl_portion = gross_fee * pnl_numerator / pnl_denominator                        // gross_fee の 12%
+lp_portion  = gross_fee − pnl_portion                                            // gross_fee の 88%
+```
+
+- `lp_portion` はボールトに残り、次の `k` に寄与します。LP はその後 LP トークンをバーンすることでこれを獲得します。
+- `pnl_portion` は、スワップ入力がどちらの側かに応じて `AmmInfo.state_data.need_take_pnl_coin` または `need_take_pnl_pc` をインクリメントします。
+
+CPMM と同じ不変量保存トリック：PnL 量は物理的にボールトに存在しますが、曲線で使用されるリザーブから差し引かれるため、`TakePnl` は価格をシフトさせずにトークンを移動させます。
+
+## OpenBook からの PnL（歴史的）
+
+<Note>
+  **削除されました。** OpenBook 統合はプログラムから削除されたため、このセクションで説明されている *2 番目の* PnL ストリームは生成されなくなりました。`total_pnl_{coin,pc}` カウンターは現在非推奨フィールドです — 凍結された履歴値を保持し、更新されることはありません。上記の 0.03% プロトコルフィーパスは影響を受けず、依然としてアクティブです。
+</Note>
+
+歴史的には、AMM v4 には *2 番目の* フィーのような収益ストリームがありました。OpenBook のリミットオーダーが約定されたとき、プールはフィルの テイカー側にいることができ、市場のメイカー/テイカー スプレッドを獲得または支払うことができました。これらの PnL イベントは `MonitorStep` 中にプール ボールトに決済され、プログラムはそれらを情報カウンターとして `state_data.total_pnl_{coin,pc}` にクレジットしました。
+
+- プールの投稿グリッドが曲線価格の周りで正しく調整されたとき、OpenBook フィルは通常、プールに対して **フィー正** でした — AMM は事実上 OpenBook でマーケットメイキングを行い、メイカー リベートを獲得していました。
+- OpenBook が一時停止したり、イベント キューが満杯になったりすると、プールは不利な価格で約定した古いオーダーに座ることができ、負の PnL を生成します。この運用上の結合は、ハイブリッド設計から離れる動機の 1 つでした。
+
+この OpenBook PnL は 0.03% プロトコルフィーと **同じではありませんでした**。OpenBook PnL はプール リザーブを直接インフレさせ（LP + プロトコルをフィー分配に比例して利益）、0.03% プロトコルフィーは管理者スイープ用に特別にタグ付けされました。OpenBook 側がオフになったため、今日の唯一のフィー蓄積は AMM スワップの 0.25% とその 22/3 分配です。
+
+## 回収
+
+管理者（Raydium マルチシグ）は `WithdrawPnl` を呼び出して、`need_take_pnl_*` をプログラムの `AmmConfig` に設定されたプールレベルの「PnL オーナー」アカウントにスイープします（異なるプログラムスコープの設定 — プール単位の CPMM スタイル AmmConfig ではありません）。スイープ：
+
+1. `need_take_pnl_coin` / `need_take_pnl_pc` をプール ボールトから PnL 宛先に転送します。
+2. カウンターをゼロにします。
+
+OpenBook 決済ステップはもはやありません。ボールト残高が蓄積された PnL をカバーするのに不十分な場合、命令は直接 `TakePnlError` を返します。操作は曲線を移動させません — LP は `WithdrawPnl` 呼び出し全体で価格変化を見るべきではありません。`WithdrawPnl` アカウント レイアウトは 2026-07 アップグレードで変更されたことに注意してください（[instructions](/docs/i18n/ja/products/amm-v4/instructions#withdrawpnl-/-takepnl) を参照）。
+
+## LP フィー償却
+
+専用の「LP フィーを回収」命令はありません。LP フィーはボールトに蓄積され、時間とともに `k` をインフレさせます。LP は `Withdraw` 経由で LP トークンをバーンすることでそれらを実現します。LP トークンの値は、`(coin_reserve_effective, pc_reserve_effective)` が成長するにつれて単調に増加します。
+
+## 可視化：1,000 USDC の取引量がどこに行くか
+
+デフォルトパラメータプールに対する USDC ヘビーな \$1,000 スワップの場合：
+
+```
+総トレードフィー（0.25%）：   $2.50
+  LP シェア（0.22%）：       $2.20   → プールに残り、k を上昇させる
+  PnL シェア（0.03%）：       $0.30   → need_take_pnl_pc、TakePnl でスイープ
+ユーザーに送信される残り：   $997.50   （曲線駆動の価格インパクトを除く）
+```
+
+CPMM `AmmConfig[0]`（0.25% ティア、クリエイターフィーなし）と比較：LP は \$2.10、プロトコル \$0.30、ファンド \$0.10 を取得します。CPMM は、AMM v4 の同等のティアで LP のシェアになるはずだったものから切り出すことでファンド行を導入します。
+
+## 比較表
+
+| | AMM v4 | CPMM `index=0` | CLMM `index=2` |
+|---|---|---|---|
+| トレードフィー | 0.25% | 0.25% | 0.25% |
+| LP | 0.22% | 0.21% | エミッションによって異なる |
+| プロトコル | 0.03% | 0.03% | ティアごと |
+| ファンド | N/A | 0.01% | ティアごと |
+| クリエイター（オプション） | N/A | デフォルトで 0 | N/A |
+| フィーが存在する場所 | プール ボールト + need_take_pnl_* | プール ボールト + protocol_fees_* + fund_fees_* | グローバル + ティックごと + ポジションごと |
+
+[`reference/fee-comparison`](/docs/i18n/ja/reference/fee-comparison) の完全なマトリックス。
+
+## インテグレーター向けメモ
+
+- **クォート。** SDK または `api-v3.raydium.io/pools/info/ids` 経由で `AmmInfo` をフェッチします。リザーブはボールトのみなので、ボールト残高に対して直接クォートできます — `need_take_pnl_*` を差し引くことを忘れないでください（蓄積された PnL はボールトに保持されますが、曲線から除外されます）。
+- **古いフィーパラメータ。** 原則として `SetParams` は `swap_fee_numerator` を変更できますが、実際には Raydium マルチシグはライブプールのデフォルトを変更していません。それでも、常にハードコーディングするのではなくオンチェーン状態から読み取ってください。
+- **報酬なし。** AMM v4 はプール上の報酬エミッションをサポートしていません。レガシー エコシステム ファーム（Farm v3 / v5 / v6）はステーキング層の同等物です — [`products/farm-staking`](/docs/i18n/ja/products/farm-staking) を参照してください。
+
+## 次に進むべき場所
+
+- [`products/amm-v4/math`](/docs/i18n/ja/products/amm-v4/math) — 曲線内のトレードフィー導出。
+- [`products/amm-v4/instructions`](/docs/i18n/ja/products/amm-v4/instructions) — `WithdrawPnl` / `SetParams` アカウント リスト。
+- [`reference/fee-comparison`](/docs/i18n/ja/reference/fee-comparison) — 並列マトリックス。
+
+ソース：
+
+- [Raydium AMM プログラム — `raydium-io/raydium-amm`](https://github.com/raydium-io/raydium-amm)
+- オンチェーン AMM v4 フィー分子/分母フィールド（メインネット `AmmInfo` アカウントに対して検証済み）。

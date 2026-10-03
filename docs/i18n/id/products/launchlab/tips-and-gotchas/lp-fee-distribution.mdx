@@ -1,0 +1,79 @@
+---
+title: "Distribusi biaya LP"
+description: "Bagaimana LaunchLab menggabungkan skala platform dan kreator menjadi LP terkunci milik platform dan membakar token LP CPMM yang tersisa."
+---
+
+<Info>
+  **Halaman ini diterjemahkan secara otomatis oleh AI. Versi bahasa Inggris adalah acuan resmi.**
+
+  [Lihat versi bahasa Inggris →](/docs/en/products/launchlab/tips-and-gotchas/lp-fee-distribution)
+</Info>
+
+Ketika token LaunchLab bermigrasi ke CPMM, pool mencetak token LP. Sebelum upgrade 2026-08-17, `creatorScale` dikunci secara terpisah untuk kreator token. Untuk migrasi yang dijalankan setelah upgrade, `migrateCpLockNftScale` masih menyimpan tiga bidang yang berjumlah `1_000_000`, tetapi runtime hanya menghasilkan dua tujuan.
+
+## Pembagian efektif
+
+| Bidang | Perilaku yang Diperbarui |
+|---|---|
+| `platformScale` | Disertakan dalam bagian LP terkunci milik platform. |
+| `creatorScale` | Sebelum upgrade, mencetak Fee Key milik kreator. Setelah upgrade, disertakan dalam bagian LP terkunci milik platform. |
+| `burnScale` | Dibakar secara permanen. Tidak ada Fee Key yang mewakili bagian ini. |
+
+```text
+effectivePlatformScale = platformScale + creatorScale
+platformLp = floor(totalLp × effectivePlatformScale / 1_000_000)
+burnLp = totalLp − platformLp
+```
+
+Ketika `burnScale` adalah nol, platform menerima semua unit LP. Ketika `effectivePlatformScale` adalah nol, semua LP dibakar dan tidak ada Fee Key platform yang dibuat.
+
+## Contoh
+
+```ts
+// @raydium-io/raydium-sdk-v2@0.2.64-alpha · mainnet-beta · verified 2026-08-13
+// 90% LP terkunci milik platform, 10% dibakar.
+migrateCpLockNftScale: {
+  platformScale: new BN(900_000),
+  creatorScale: new BN(0),
+  burnScale: new BN(100_000),
+}
+
+// 100% LP terkunci milik platform.
+migrateCpLockNftScale: {
+  platformScale: new BN(1_000_000),
+  creatorScale: new BN(0),
+  burnScale: new BN(0),
+}
+
+// 100% dibakar; tidak ada Fee Key.
+migrateCpLockNftScale: {
+  platformScale: new BN(0),
+  creatorScale: new BN(0),
+  burnScale: new BN(1_000_000),
+}
+
+// A stored value you may still READ off a pre-2026-08-17 config — not settable now.
+// Its 500_000 creator share is folded into the platform's locked LP at migration:
+// { platformScale: 400_000, creatorScale: 500_000, burnScale: 100_000 }
+```
+
+## Hubungan dengan biaya kreator CPMM
+
+Bidang skala hanya mengontrol kepemilikan LP. Mereka tidak menetapkan tarif biaya swap atau mengidentifikasi penerima biaya kreator CPMM. `cpConfigId` memilih CPMM `AmmConfig`; `platformCpCreator` menentukan apakah pool CPMM mencatat kreator peluncuran asli atau alamat yang dipilih platform.
+
+## Memperbarui pembagian
+
+Sebelum memperbarui platform:
+
+- Konfirmasi ketiga nilai berjumlah tepat `1_000_000`.
+- Sajikan `platformScale + creatorScale` sebagai bagian platform yang efektif.
+- Jangan janjikan Fee Key kreator berdasarkan `creatorScale`.
+- Pertahankan kepemilikan Fee Key kreator yang ditunjukkan oleh migrasi yang diselesaikan sebelum upgrade; catatan tersebut tidak ditulis ulang.
+- Jelaskan perubahan sebelum peluncuran di masa depan menggunakan konfigurasi yang diperbarui.
+
+## Referensi
+
+- [Konfigurasi platform](/docs/i18n/id/products/launchlab/platform-config)
+- [Burn & Earn](/docs/i18n/id/user-flows/burn-and-earn)
+- [Referensi biaya LaunchLab & CPMM](/docs/i18n/id/products/launchlab/tips-and-gotchas/launchlab-cpmm-fee-reference)
+- [Biaya kreator LaunchLab](/docs/i18n/id/products/launchlab/creator-fees)

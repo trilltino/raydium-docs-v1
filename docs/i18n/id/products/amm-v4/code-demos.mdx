@@ -1,0 +1,293 @@
+---
+title: "Demo kode AMM v4"
+description: "Contoh TypeScript untuk swap dan penyediaan likuiditas ke pool AMM v4 yang sudah ada. Pembuatan pool baru di luar cakupan — gunakan CPMM sebagai gantinya."
+---
+
+<Info>
+  **Halaman ini diterjemahkan secara otomatis oleh AI. Versi bahasa Inggris adalah acuan resmi.**
+
+  [Lihat versi bahasa Inggris →](/docs/en/products/amm-v4/code-demos)
+</Info>
+
+<Info>
+  **Versi banner.** Semua demo menargetkan `@raydium-io/raydium-sdk-v2@0.2.64-alpha` terhadap Solana mainnet-beta, **diverifikasi 2026-09-09** — setiap nama builder, nama parameter dan tipe parameter di bawah telah diperiksa terhadap sumber rilis tersebut dan terhadap [`raydium-sdk-V2-demo/src/amm`](https://github.com/raydium-io/raydium-sdk-V2-demo/tree/master/src/amm). Program ID: `675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8` (lihat [`reference/program-addresses`](/docs/i18n/id/reference/program-addresses)).
+
+  Dua jebakan yang menjerat sebagian besar integrasi pertama: `slippage` pada `computeAmountOut` adalah **number** biasa (`0.005` = 0.5%), bukan `Percent`; dan `liquidity.swap` **mewajibkan** `inputMint` sebagai string base58.
+</Info>
+
+<Info>
+  **Pembuatan pool baru tidak ditampilkan di sini.** UI Raydium tidak lagi menawarkan pembuatan pool AMM v4 — pasangan baru default ke [CPMM](/docs/i18n/id/products/cpmm/code-demos). Program AMM v4 itu sendiri masih menerima `Initialize2` on-chain; hanya saja bukan jalur yang direkomendasikan. Demo di bawah mencakup operasi pool aktif yang setiap integrator masih butuhkan: swap, deposit, withdraw.
+</Info>
+
+## Setup
+
+```ts
+import { Connection, Keypair, clusterApiUrl } from "@solana/web3.js";
+import { Raydium, TxVersion } from "@raydium-io/raydium-sdk-v2";
+import fs from "node:fs";
+
+const connection = new Connection(process.env.RPC_URL ?? clusterApiUrl("mainnet-beta"));
+const owner = Keypair.fromSecretKey(
+  new Uint8Array(JSON.parse(fs.readFileSync(process.env.KEYPAIR!, "utf8"))),
+);
+const raydium = await Raydium.load({ owner, connection, cluster: "mainnet" });
+```
+
+## Ambil pool berdasarkan ID
+
+```ts
+import { PublicKey } from "@solana/web3.js";
+
+// `liquidity.getPoolInfoFromRpc` takes the pool id as a base58 STRING, not a PublicKey.
+const poolId = "58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2"; // SOL-USDC, see reference/program-addresses
+
+const data = await raydium.liquidity.getPoolInfoFromRpc({ poolId });
+const { poolInfo, poolKeys, poolRpcData } = data;
+
+console.log("Pair:", poolInfo.mintA.symbol, "/", poolInfo.mintB.symbol);
+console.log("Version:", poolInfo.version);       // 4 untuk AMM v4
+console.log("Market:", poolKeys.marketId);       // already a base58 string
+```
+
+`poolKeys` adalah struct yang dikonsumsi oleh instruction builder. Ia membawa setiap akun AMM v4 dalam urutan yang diharapkan program, ditambah bidang pasar warisan yang masih diterima program saat ini secara posisional tetapi tidak lagi dibaca.
+
+## Swap (base-in)
+
+```ts
+import BN from "bn.js";
+
+const amountIn = new BN(1_000_000);            // 1 USDC (quote 6-desimal)
+const inputMint = new PublicKey(poolInfo.mintB.address);  // USDC
+const slippage  = 0.005;
+
+const computed = raydium.liquidity.computeAmountOut({
+  poolInfo,
+  amountIn,
+  mintIn: inputMint,
+  mintOut: new PublicKey(poolInfo.mintA.address),
+  slippage,
+});
+
+const { execute } = await raydium.liquidity.swap({
+  poolInfo,
+  poolKeys,
+  amountIn,
+  amountOut: computed.minAmountOut,
+  fixedSide: "in",
+  inputMint: poolInfo.mintB.address,   // a base58 STRING, and it is required
+  txVersion: TxVersion.V0,
+});
+
+const { txId } = await execute({ sendAndConfirm: true });
+console.log("Swap tx:", txId);
+```
+
+SDK merutekan swap AMM v4 melalui entrypoint V2, yang tidak membawa akun OpenBook. (Setelah upgrade 2026-07, akun market tidak lagi divalidasi bahkan pada jalur v1 legacy.)
+
+## Swap (base-out)
+
+```ts
+const amountOut = new BN(1_000_000_000);       // 1 SOL (base 9-desimal)
+const slippage  = 0.005;
+
+const computed = raydium.liquidity.computeAmountIn({
+  poolInfo,
+  amountOut,
+  mintOut: new PublicKey(poolInfo.mintA.address),
+  mintIn: new PublicKey(poolInfo.mintB.address),
+  slippage,
+});
+
+const { execute } = await raydium.liquidity.swap({
+  poolInfo,
+  poolKeys,
+  amountIn: computed.maxAmountIn,
+  amountOut,
+  fixedSide: "out",
+  inputMint: poolInfo.mintB.address,   // base58 string, not a PublicKey
+  txVersion: TxVersion.V0,
+});
+
+await execute({ sendAndConfirm: true });
+```
+
+## Tambah likuiditas
+
+```ts
+import { Percent, TokenAmount, toToken } from "@raydium-io/raydium-sdk-v2";
+
+const amountARaw = new BN(100_000_000);        // 0.1 SOL, in base units
+
+// computePairAmount takes a UI-decimal string (or Decimal) and a Percent —
+// not a BN and not a number — and it is synchronous.
+const { anotherAmount, maxAnotherAmount, minAnotherAmount } =
+  raydium.liquidity.computePairAmount({
+    poolInfo,
+    amount: "0.1",
+    baseIn: true,
+    slippage: new Percent(1, 100),
+  });
+
+// addLiquidity takes THREE TokenAmounts; otherAmountMin is required.
+const { execute } = await raydium.liquidity.addLiquidity({
+  poolInfo,
+  poolKeys,
+  amountInA: new TokenAmount(toToken(poolInfo.mintA), amountARaw),
+  amountInB: maxAnotherAmount,
+  otherAmountMin: minAnotherAmount,
+  fixedSide: "a",
+  txVersion: TxVersion.V0,
+});
+
+await execute({ sendAndConfirm: true });
+```
+
+`fixedSide: "a"` memberitahu SDK bahwa Anda menyediakan `amountInA` yang tepat dan bahwa `amountInB` harus paling banyak `maxAnotherAmount`. Matematika pro-rata berjalan dari saldo vault dikurangi PnL yang terkumpul — tidak ada lagi komponen on-book yang harus diselesaikan lebih dulu.
+
+## Hapus likuiditas
+
+```ts
+const lpAmount = new BN(50_000);               // LP untuk dibakar
+
+const { execute } = await raydium.liquidity.removeLiquidity({
+  poolInfo,
+  poolKeys,
+  lpAmount,
+  baseAmountMin: new BN(0),
+  quoteAmountMin: new BN(0),
+  txVersion: TxVersion.V0,
+});
+
+await execute({ sendAndConfirm: true });
+```
+
+Slippage mins melindungi terhadap perubahan state pool antara pre-quote dan waktu landing Anda.
+
+## Tuning compute-unit / priority fee
+
+Sejak OpenBook dihapus, swap AMM v4 tidak lagi memvalidasi state pasar apa pun, sehingga `SwapBaseIn` V1 jauh lebih murah daripada sebelumnya — dan `SwapBaseInV2` (8 akun, tanpa placeholder pasar) lebih murah lagi. Ukur jalur Anda sendiri daripada menganggarkan berdasarkan angka historis, dan selalu berikan batas compute-unit eksplisit:
+
+```ts
+const { execute, transaction } = await raydium.liquidity.swap({
+  /* ...params... */
+  computeBudgetConfig: {
+    units: 400_000,
+    microLamports: 50_000,       // priority fee per CU
+  },
+});
+```
+
+Jika Anda menghilangkan `computeBudgetConfig`, SDK mungkin masih menggunakan defaultnya sendiri; periksa `transaction` yang dikembalikan untuk mengonfirmasi. Lihat [`integration-guides/priority-fee-tuning`](/docs/i18n/id/integration-guides/priority-fee-tuning).
+
+## Direct Rust CPI
+
+Jika Anda harus CPI ke AMM v4 dari program Anchor Anda sendiri, Anda perlu memodelkan daftar akun `SwapBaseIn` secara verbatim. Sketsa minimal:
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::solana_program::instruction::Instruction;
+
+const AMM_V4_PROGRAM_ID: Pubkey = pubkey!("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8");
+
+#[derive(Accounts)]
+pub struct ProxyAmmV4Swap<'info> {
+    /// CHECK:
+    pub token_program: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub amm:          UncheckedAccount<'info>,
+    /// CHECK:
+    pub amm_authority: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub amm_open_orders: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub amm_target_orders: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub pool_coin_token_account: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub pool_pc_token_account: UncheckedAccount<'info>,
+    /// CHECK:
+    pub market_program: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub market: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub market_bids: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub market_asks: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub market_event_queue: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub market_coin_vault: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub market_pc_vault: UncheckedAccount<'info>,
+    /// CHECK:
+    pub market_vault_signer: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub user_source: UncheckedAccount<'info>,
+    #[account(mut)] /// CHECK:
+    pub user_dest: UncheckedAccount<'info>,
+    pub user_owner: Signer<'info>,
+}
+
+pub fn proxy_swap(
+    ctx: Context<ProxyAmmV4Swap>,
+    amount_in: u64,
+    minimum_amount_out: u64,
+) -> Result<()> {
+    // Instruction discriminator untuk SwapBaseIn adalah 9 pada AMM v4.
+    let mut data = vec![9u8];
+    data.extend_from_slice(&amount_in.to_le_bytes());
+    data.extend_from_slice(&minimum_amount_out.to_le_bytes());
+
+    let ix = Instruction {
+        program_id: AMM_V4_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new_readonly(ctx.accounts.token_program.key(), false),
+            AccountMeta::new(ctx.accounts.amm.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.amm_authority.key(), false),
+            AccountMeta::new(ctx.accounts.amm_open_orders.key(), false),
+            AccountMeta::new(ctx.accounts.amm_target_orders.key(), false),
+            AccountMeta::new(ctx.accounts.pool_coin_token_account.key(), false),
+            AccountMeta::new(ctx.accounts.pool_pc_token_account.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.market_program.key(), false),
+            AccountMeta::new(ctx.accounts.market.key(), false),
+            AccountMeta::new(ctx.accounts.market_bids.key(), false),
+            AccountMeta::new(ctx.accounts.market_asks.key(), false),
+            AccountMeta::new(ctx.accounts.market_event_queue.key(), false),
+            AccountMeta::new(ctx.accounts.market_coin_vault.key(), false),
+            AccountMeta::new(ctx.accounts.market_pc_vault.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.market_vault_signer.key(), false),
+            AccountMeta::new(ctx.accounts.user_source.key(), false),
+            AccountMeta::new(ctx.accounts.user_dest.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.user_owner.key(), true),
+        ],
+        data,
+    };
+    invoke_signed(&ix, &ctx.accounts.to_account_infos(), &[])?;
+    Ok(())
+}
+```
+
+AMM v4 tidak mengirimkan crate Anchor untuk CPI. Sketsa di atas menggunakan `Instruction` yang dibangun secara manual.
+
+<Note>
+  Sketsa CPI di atas menggunakan **layout `SwapBaseIn` v1 legacy** (tag 9, 17 akun) untuk membaca/mereproduksi transaksi yang ada. Sejak upgrade 2026-07 akun market diterima tetapi diabaikan. **Untuk kode baru, lebih suka `SwapBaseInV2` / `SwapBaseOutV2`** (tag 16 / 17), yang menghilangkan akun market (dan `amm_open_orders`) sepenuhnya — berikan hanya 8 akun: `token_program`, `amm`, `amm_authority`, dua vault pool, dua akun token pengguna, dan `user_owner`.
+</Note>
+
+## Jebakan
+
+- **Jumlah akun salah pada swap v1.** `SwapBaseIn` / `SwapBaseOut` legacy masih memerlukan daftar 17-akun (atau 18-akun) penuh — jumlah yang tidak cocok akan dikembalikan dengan `WrongAccountsNumber`. Isi akun market tidak lagi divalidasi, tetapi Anda masih harus mengisi slot mereka. Lebih suka entrypoint V2 untuk menghindari ini.
+- **Membaca saldo vault mentah.** Cadangan sekarang hanya vault; kurangi PnL yang terkumpul (`need_take_pnl_*`). Quote SDK atau `api-v3.raydium.io/pools/info/ids` menangani ini untuk Anda.
+- **Memanggil instruction yang dihapus.** `MonitorStep`, `MigrateToOpenBook`, `WithdrawSrm`, `SimulateInfo`, `AdminCancelOrders`, dan `Initialize` / `PreInitialize` legacy sekarang dikembalikan. Gunakan `Initialize2` untuk pembuatan pool; tidak ada crank untuk dipanggil.
+- **Mint Token-2022.** Tidak didukung. Pool AMM v4 tidak dapat dibuat terhadap mint Token-2022; pasangan Token-2022 apa pun harus berada di CPMM atau CLMM.
+
+## Ke mana selanjutnya
+
+- [`products/amm-v4/instructions`](/docs/i18n/id/products/amm-v4/instructions) — permukaan tingkat instruction di balik demo ini.
+- [`user-flows/migrate-amm-v4-to-cpmm`](/docs/i18n/id/user-flows/migrate-amm-v4-to-cpmm) — jika Anda adalah LP yang mempertimbangkan migrasi.
+- [`integration-guides/priority-fee-tuning`](/docs/i18n/id/integration-guides/priority-fee-tuning) — ukuran priority-fee untuk swap AMM v4 yang berat.
+
+Sumber:
+
+- [Raydium SDK v2](https://github.com/raydium-io/raydium-sdk-V2)
+- [Program Raydium AMM](https://github.com/raydium-io/raydium-amm)

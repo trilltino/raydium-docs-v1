@@ -1,0 +1,264 @@
+---
+title: "LaunchLab PlatformConfig"
+description: "Cấu hình cho từng nền tảng tùy chỉnh branding, chia phí, chia sẻ NFT migration, phân bổ vesting, và các quy tắc tham số launch cho bất kỳ launch nào được định tuyến qua nền tảng đó."
+---
+
+<Info>
+  **Trang này được dịch tự động bằng AI. Phiên bản tiếng Anh là bản chính thức.**
+
+  [Xem bản tiếng Anh →](/docs/en/products/launchlab/platform-config)
+</Info>
+
+<Info>
+  `PlatformConfig` là **lớp cấu hình cấp nền tảng** nằm trên [`GlobalConfig`](/docs/i18n/vi/products/launchlab/global-config). Trong khi `GlobalConfig` định nghĩa các quy tắc toàn giao thức ("phí giao dịch là 1%, cung cấp phải ít nhất 10M, chỉ ví này có thể tốt nghiệp"), `PlatformConfig` là những gì mỗi nền tảng launch — pump.fun, giao diện Raydium riêng, launchpad của bên thứ ba — sử dụng để thêm phí của họ, yêu cầu phần của LP sau tốt nghiệp, hạn chế những tham số launch nào mà các launch của họ có thể chọn, và hiển thị branding của họ (tên, trang web, hình ảnh) trên chuỗi.
+</Info>
+
+## Nó là gì
+
+Một tài khoản `PlatformConfig` quản lý năm mối quan tâm xuyên suốt cho một nền tảng:
+
+1. **Branding** — tên, trang web, liên kết hình ảnh, tất cả được lưu trữ inline để bất kỳ explorer hoặc aggregator nào cũng có thể hiển thị nền tảng đã launch token.
+2. **Phí nền tảng** — một phí giao dịch bổ sung (`fee_rate`) trên top của `trade_fee_rate` của giao thức. Tích lũy vào `platform_fee_wallet` của nền tảng. Bị giới hạn ở 500 bps (`50000`) trên cả đường tạo và cập nhật, được nâng từ 100 bps (`10000`) vào 2026-08-26 — xem [Giới hạn tỷ lệ](#rate-caps).
+3. **Chia sẻ LP migration** — ba số nguyên được lưu trữ (`platform_scale`, `creator_scale`, `burn_scale`) cộng lại bằng `1_000_000`. Trước nâng cấp 2026-08-17, creator scale tạo ra một Fee Key riêng cho creator. Các migration được thực hiện sau nâng cấp kết hợp hai cái đầu tiên thành một chia sẻ LP bị khóa do nền tảng sở hữu; phần còn lại bị đốt.
+4. **Quy tắc tham số launch** — một hạn chế tùy chọn (`restrict_curve_param`) yêu cầu launch thỏa mãn tài khoản [`PlatformCurveRule`](/docs/i18n/vi/products/launchlab/curve-rules) của `GlobalConfig` mà nó đã chọn. Các quy tắc hỗ trợ dải giá trị, các tầng thay thế, và gating loại token; chúng nằm trong các tài khoản riêng, không phải trên `PlatformConfig`.
+5. **Danh sách cho phép global-config** — một hạn chế tùy chọn yêu cầu `PlatformAllowConfig` được tạo bởi nền tảng cho `GlobalConfig` được chọn.
+
+Dẫn xuất PDA:
+
+```ts
+const [platformConfigPda] = PublicKey.findProgramAddressSync(
+  [
+    Buffer.from("platform_config"),
+    platformAdmin.toBuffer(),       // platform's owning pubkey
+  ],
+  LAUNCHLAB_PROGRAM_ID,
+);
+```
+
+(Xem `create_platform_config` trong source để có danh sách seed chính tắc.)
+
+## Bố cục
+
+```rust
+// states/platform_config.rs
+pub const PLATFORM_CONFIG_SEED: &str = "platform_config";
+pub const NAME_SIZE: usize = 64;
+pub const WEB_SIZE:  usize = 256;
+pub const IMG_SIZE:  usize = 256;
+pub const MAX_CREATOR_FEE_RATE: u64 = 5000;       // 50 bps (denominator 1_000_000)
+pub const MAX_TRANSFER_FEE_RATE: u16 = 500;       // 5%   (denominator 10_000)
+
+#[account]
+pub struct PlatformConfig {
+    pub epoch:                       u64,
+    pub platform_fee_wallet:         Pubkey,            // signs ClaimPlatformFee
+    pub platform_nft_wallet:         Pubkey,            // receives the platform NFT slice at CPMM graduation
+    pub platform_scale:              u64,               // share of LP minted to platform NFT
+    pub creator_scale:               u64,               // creator share before upgrade; added to platform share afterward
+    pub burn_scale:                  u64,               // share of LP burned permanently
+    pub fee_rate:                    u64,               // platform's trade fee (1/1_000_000)
+    pub name:                        [u8; 64],          // utf-8 padded with zeros
+    pub web:                         [u8; 256],
+    pub img:                         [u8; 256],
+    pub cpswap_config:               Pubkey,            // CPMM AmmConfig that the post-grad pool will bind to
+    pub creator_fee_rate:            u64,               // creator-side fee taken pre-graduation
+    pub transfer_fee_extension_auth: Pubkey,            // for Token-2022 launches: withdraw-withheld authority from mint creation, fee-config authority from graduation
+    pub platform_vesting_wallet:     Pubkey,
+    pub platform_vesting_scale:      u64,               // platform's slice of total_locked_amount
+    pub platform_cp_creator:         Pubkey,            // optional creator-of-record on the post-graduation CPMM pool
+    pub restrict_global_config:      u8,                // 0 = unrestricted, 1 = require allow PDA
+    pub restrict_curve_param:        u8,                // 0 = unrestricted, 1 = enforce the PlatformCurveRule
+    pub curve_rule_manager:          Pubkey,            // hot wallet allowed to manage rule accounts
+    pub padding:                     [u8; 78],
+}
+```
+
+Tài khoản có kích thước cố định 944 byte. Nó từng chứa một `Vec<PlatformCurveParam>` ở cuối cho đến khi phiên bản 2026-08-31 chuyển các tham số launch vào các tài khoản [`PlatformCurveRule`](/docs/i18n/vi/products/launchlab/curve-rules); `restrict_curve_param`, `curve_rule_manager`, và 4 byte mà tiền tố độ dài của vec chiếm dụng đều đến từ padding, vì vậy số byte và mọi offset trường trước đó không thay đổi. Xem [mục changelog](/docs/en/reference/changelog/2026-08-31-launchlab-platform-curve-rules) để biết những gì decoders phải thay đổi.
+
+`platform_scale + creator_scale + burn_scale` phải bằng `1_000_000`, **và `creator_scale` phải đúng bằng `0`** — chương trình khẳng định `require_eq!(creator_scale, 0)` trên cả `CreatePlatformConfig` và đường cập nhật `MigrateNftInfo`, nên một cách chia có thể đặt được thực chất chỉ là `platform_scale + burn_scale = 1_000_000`. Trường này chỉ còn tồn tại để các cấu hình trước 2026-08-17 vẫn giải mã được; trên các cấu hình đó, bất kỳ giá trị `creator_scale` nào chúng đã lưu đều được gộp vào phần LP bị khóa của nền tảng khi di chuyển thay vì đi đến người tạo token.
+
+Các ví dụ có thể đặt được:
+
+- `(100_000, 0, 900_000)` — 90% LP bị đốt, 10% bị khóa cho nền tảng.
+- `(150_000, 0, 850_000)` — 85% bị đốt, 15% bị khóa cho nền tảng.
+- `(0, 0, 1_000_000)` — đốt toàn bộ, không có NFT mint. Các launch "không có insider" nghiêm ngặt.
+
+## Các trường branding
+
+`name`, `web`, và `img` là các mảng byte inline được đệm bằng các số không lên đến hằng số kích thước của chúng. Để đọc chúng dưới dạng chuỗi, cắt lên đến `\0` đầu tiên:
+
+```ts
+function readString(bytes: Uint8Array): string {
+  const end = bytes.indexOf(0);
+  return Buffer.from(end === -1 ? bytes : bytes.subarray(0, end)).toString("utf-8");
+}
+```
+
+Các hằng số được cố ý rộng rãi (`name: 64`, `web: 256`, `img: 256`) để các nền tảng có thể bao gồm đủ metadata cho explorers và aggregators mà không cần chạm vào lưu trữ ngoài chuỗi. Bất cứ điều gì vượt quá các kích thước này sẽ hoàn nguyên tại `CreatePlatformConfig` với `InvalidInput`.
+
+## Cơ chế phí
+
+Một swap trên curve được ràng buộc với `PlatformConfig` tính ba phí xếp chồng:
+
+```
+trade_fee     = amount_in × global_config.trade_fee_rate    / 1_000_000
+platform_fee  = amount_in × platform_config.fee_rate        / 1_000_000
+creator_fee   = amount_in × platform_config.creator_fee_rate / 1_000_000
+
+amount_after_fee = amount_in − trade_fee − platform_fee − creator_fee
+```
+
+- `trade_fee` tích lũy vào `protocol_fee_owner` của giao thức (được yêu cầu qua `CollectFee`).
+- `platform_fee` tích lũy vào một vault cho mỗi nền tảng (được yêu cầu qua `ClaimPlatformFee` hoặc `ClaimPlatformFeeFromVault`; xem [`instructions`](/docs/i18n/vi/products/launchlab/instructions)).
+- `creator_fee` tích lũy vào một vault cho mỗi creator được khóa bằng pubkey của creator + quote mint (được yêu cầu qua `ClaimCreatorFee`).
+
+### Giới hạn tỷ lệ
+
+Cả hai tỷ lệ đều được tính bằng `1/1_000_000`, vì vậy `5000` là 50 bps và `50000` là 500 bps.
+
+| Tỷ lệ | Giới hạn | Được thực thi trong |
+|---|---|---|
+| `fee_rate` | `50000` (500 bps) | `PlatformParams::check()` khi tạo — hoàn nguyên với `InvalidInput`. `update_platform_fee_rate` trên mọi biến thể cập nhật chạm vào nó (`FeeRate` và `AllInfo`) — hoàn nguyên với `InvalidPlatformInfo`. |
+| `creator_fee_rate` | `MAX_CREATOR_FEE_RATE = 5000` (50 bps) | `create_platform_config` khi tạo và `update_creator_fee_rate` khi cập nhật — cả hai hoàn nguyên với `InvalidPlatformInfo`. |
+
+Hai điểm thực thi cho `fee_rate` là các lệnh `require!` riêng biệt trong các tệp khác nhau, vì vậy chúng mang các mã lỗi khác nhau, nhưng chúng áp dụng cùng một trần. Một nền tảng được tạo ở bất kỳ tỷ lệ được phép nào cũng có thể được chỉnh sửa sau này, bao gồm thông qua biến thể `AllInfo` hàng loạt viết lại mọi trường cùng một lúc.
+
+Cả hai giới hạn `fee_rate` ban đầu là 100 bps (`10000`). Giới hạn cập nhật chuyển sang `25000` (250 bps) vào 2026-01-27; vào 2026-08-26 cả hai chuyển sang `50000` (500 bps) — xem [mục changelog](/docs/en/reference/changelog/2026-08-26-launchlab-platform-fee-rate-cap).
+
+`GlobalConfig.max_share_fee_rate` **không** ràng buộc bất kỳ tỷ lệ nào. Nó ràng buộc đối số `share_fee_rate` cho mỗi giao dịch mà bốn lệnh swap lấy — phí giới thiệu — và không có gì khác. Xem [`global-config`](/docs/i18n/vi/products/launchlab/global-config#fees).
+
+## Quyền hạn transfer-fee Token-2022
+
+`transfer_fee_extension_auth` đặt tên cho khóa nền tảng kết thúc nắm giữ các quyền hạn `TransferFeeConfig` của mint cơ sở khi một launch được tạo thông qua `InitializeWithToken2022` với phí transfer được đính kèm. Phần mở rộng mang hai quyền hạn, và chúng được bàn giao tại **các điểm khác nhau trong vòng đời launch**:
+
+| Quyền hạn | Người nắm giữ khi tạo mint | Người nắm giữ sau `MigrateToCpswap` |
+|---|---|---|
+| `withdraw_withheld_authority` — rút các phí mà Token-2022 giữ lại trên các tài khoản token | `transfer_fee_extension_auth`, được viết trực tiếp vào mint. Quay lại launch `authority` PDA khi trường là `Pubkey::default()`. | Đã là khóa nền tảng, vì vậy không có gì di chuyển. Migration chỉ gán lại khi `authority` PDA vẫn nắm giữ nó. |
+| `transfer_fee_config_authority` — thay đổi tỷ lệ phí và phí tối đa | Luôn là launch `authority` PDA. | `transfer_fee_extension_auth`, với điều kiện trường đó không phải là mặc định. |
+
+Trước 2026-08-27, mint được tạo với `authority` PDA trên cả hai quyền hạn, và cả hai chuyển sang nền tảng khi tốt nghiệp. Chương trình không hiển thị lệnh withdraw-withheld hoặc harvest, vì vậy các phí được giữ lại trong giai đoạn bonding-curve không thể truy cập được cho đến khi launch tốt nghiệp. Viết phía withdraw khi tạo mint làm cho chúng có thể yêu cầu từ giao dịch đầu tiên — xem [mục changelog](/docs/en/reference/changelog/2026-08-27-launchlab-token2022-withheld-authority).
+
+Hai hệ quả đáng lưu ý:
+
+- **Đặt trường trước khi bạn launch, không phải sau.** Một launch được tạo trong khi `transfer_fee_extension_auth` là `Pubkey::default()` đặt `authority` PDA trên phía withdraw. Đặt trường sau này vẫn hoạt động — tốt nghiệp tìm thấy PDA tại chỗ và bàn giao quyền hạn — nhưng không có gì có thể rút số dư được giữ lại trong thời gian đó.
+- **Xoay trường mid-launch chia tách hai quyền hạn.** Thay đổi `transfer_fee_extension_auth` giữa việc tạo launch và tốt nghiệp của nó và quyền hạn withdraw-withheld của mint vẫn ở khóa được cấu hình khi tạo (PDA không còn nắm giữ nó, vì vậy migration bỏ qua việc bàn giao đó) trong khi quyền hạn fee-config đi đến khóa mới. Xoay giữa các launch, hoặc lên kế hoạch để tự điều hòa hai khóa thông qua Token-2022 trực tiếp.
+
+Một nền tảng để trường ở `Pubkey::default()` cho toàn bộ cuộc đời launch giữ cả hai quyền hạn trên `authority` PDA vĩnh viễn: tỷ lệ phí không bao giờ có thể được thay đổi và số dư được giữ lại không bao giờ có thể được rút. Chỉ đính kèm phí transfer vào launch nếu nền tảng dự định nắm giữ các khóa này.
+
+## Chia sẻ NFT migration (chỉ CPMM)
+
+Khi một launch tốt nghiệp thành CPMM, lệnh migration chia các token LP được mint bởi `CPMM::InitializeWithPermission` theo hai cách:
+
+```
+lp_to_platform = floor(lp_total × (platform_scale + creator_scale) / 1_000_000)
+lp_to_burn     = lp_total − lp_to_platform
+```
+
+Nếu `lp_to_platform` khác không, chương trình LP-Lock bao nó vào một Fee Key NFT được sở hữu bởi `platform_nft_wallet`. Điều này thay thế hành vi trước nâng cấp tạo ra các Fee Key riêng biệt cho nền tảng và creator. Các Fee Key được tạo bởi các migration hoàn thành trước nâng cấp vẫn không thay đổi. Quyền LP-fee này tách biệt với các phí creator CPMM được kiểm soát bởi `platform_cp_creator`.
+
+Lát cắt burn bị đốt trực tiếp, vì vậy không có tài khoản nào có thể rút nó hoặc yêu cầu các phí LP được đại diện bởi chia sẻ đó.
+
+Các launch hiện có với `migrate_type = 0` được lưu trữ vẫn có thể sử dụng đường dẫn AMM v4 kế thừa. Khởi tạo mới từ chối loại migrate đó.
+
+## Quy tắc tham số launch
+
+`restrict_curve_param` là công tắc. Ở `0`, chương trình không đọc quy tắc nào cả. Ở `1`, mọi launch được định tuyến qua nền tảng này phải thỏa mãn tài khoản [`PlatformCurveRule`](/docs/i18n/vi/products/launchlab/curve-rules) của `GlobalConfig` mà nó đã chọn, và người xây dựng launch phải thêm tài khoản đó vào `remaining_accounts`.
+
+```rust
+pub restrict_curve_param: u8,   // 0 = unrestricted, 1 = enforce the rule of the used config
+pub curve_rule_manager:   Pubkey, // may manage rule accounts; the platform admin always may too
+```
+
+Một quy tắc là một menu các hình dạng launch được phép: các ràng buộc bên trong một nhóm kiểm tra được AND, các nhóm được OR, và mỗi ràng buộc là một bộ ba `(field, op, value)` hỗ trợ `Eq`, `Gte`, `Lte`, và `Neq`. Điều đó bao gồm dải giá trị, các tầng thay thế, giới hạn định giá tốt nghiệp, sàn migration, gating loại token, và các nhóm được giới hạn thời gian — mô hình đầy đủ, bảng trường, và chín sách hướng dẫn được thực hiện nằm trong [`products/launchlab/curve-rules`](/docs/i18n/vi/products/launchlab/curve-rules).
+
+Hai điều thuộc về đây hơn là trên trang đó:
+
+- **`curve_rule_manager` là một ủy quyền, không phải một chuyển giao.** Đặt nó thông qua `UpdatePlatformConfig::CurveRuleManager` và ví đó có thể tạo, cập nhật, xóa, và đóng các tài khoản quy tắc của nền tảng này mà không cần khóa admin. Quản trị viên nền tảng giữ cùng một quyền lực song song, vì vậy xoay hoặc xóa trường khôi phục kiểm soát. `Pubkey::default()` có nghĩa là chỉ admin có thể quản lý quy tắc. Nó không thể lật `restrict_curve_param`, vốn vẫn là lệnh chỉ dành cho admin.
+- **Các quy tắc được thực thi trên top của `GlobalConfig`, không bao giờ thay thế nó.** Kiểm tra quy tắc chạy trước các giới hạn riêng của config và chỉ có thể thu hẹp chúng.
+
+Điều này thay thế danh sách `curve_params: Vec<PlatformCurveParam>` trước đây, chỉ có thể kiểm tra bằng nhau chính xác, giữ tối đa 10 mục trên tất cả các config, và phát triển chính tài khoản `PlatformConfig`. Các nền tảng sử dụng nó đã được giao thức di chuyển trong một lần vượt qua một lần; trường kế thừa, hai lệnh của nó, và `MAX_CURVE_PARAMS` đã biến mất.
+
+## `PlatformAllowConfig` — hạn chế một nền tảng
+
+Mỗi nền tảng quyết định có hạn chế những tài khoản `GlobalConfig` nào mà các launch của nó có thể sử dụng hay không. Đặt `restrict_global_config` với `UpdatePlatformConfig::RestrictGlobalConfig(0 | 1)`.
+
+```rust
+pub const PLATFORM_ALLOW_CONFIG_SEED: &str = "platform_allow_config";
+
+#[account]
+pub struct PlatformAllowConfig {
+    pub bump:            u8,
+    pub platform_config: Pubkey,
+    pub global_config:   Pubkey,
+    pub padding:         [u64; 8],
+}
+```
+
+Hạt giống PDA: `[b"platform_allow_config", platform_config, global_config]`.
+
+Quản trị viên nền tảng tạo hoặc đóng một tài khoản cho mỗi cặp được phép thông qua `CreatePlatformAllowConfig` và `ClosePlatformAllowConfig`. Khi hạn chế là `1`, khởi tạo tìm kiếm `remaining_accounts` cho PDA dự kiến và từ chối một tài khoản bị thiếu với `NotEnoughRemainingAccounts`. Khi hạn chế là `0`, không cần tài khoản cho phép.
+
+Tài khoản `PlatformGlobalAccess` được quản lý bởi admin giao thức trước đây và các lệnh tạo/đóng của nó đã được loại bỏ. Các kích thước `PlatformConfig` và `GlobalConfig` hiện có không thay đổi, nhưng decoders phải thay thế cờ toàn cầu cũ bằng cờ nền tảng mới. Các PDA truy cập cũ không được tiêu thụ bởi kiểm tra mới.
+
+## Đường dẫn đọc
+
+```ts
+// The SDK exports the layout, not a getter — decode the account yourself.
+import { PlatformConfig } from "@raydium-io/raydium-sdk-v2";
+
+const info = await connection.getAccountInfo(platformConfigPda);
+const platformConfig = PlatformConfig.decode(info!.data);
+
+console.log("Platform:", readString(platformConfig.name));
+console.log("Fee rate:", platformConfig.feeRate, "(/1M)");
+console.log("NFT split:",
+  platformConfig.platformScale,
+  platformConfig.creatorScale,
+  platformConfig.burnScale,
+);
+console.log("Restrict launch params:", platformConfig.restrictCurveParam);
+console.log("Rule manager:", platformConfig.curveRuleManager.toBase58());
+```
+
+Đối với giao diện người dùng hiển thị "token này được launch từ đâu", `PoolState.platform_config` trỏ trực tiếp đến `PlatformConfig` gốc — tìm nạp nó một lần và lưu vào bộ nhớ cache branding.
+
+## Đường dẫn cập nhật
+
+| Lệnh | Ai ký | Những gì thay đổi |
+|-------------|-----------|--------------|
+| `CreatePlatformConfig` | quản trị viên nền tảng (một lần) | Khởi tạo tài khoản với `PlatformParams`. |
+| `UpdatePlatformConfig` | quản trị viên nền tảng | Gửi chung được khóa bằng `param: u8`; thay đổi một trường cho mỗi lệnh gọi, hoặc mọi trường cùng một lúc qua `AllInfo`. Các trường branding, tỷ lệ phí, ví vesting, và các ví khác nhau đều có thể được đặt thông qua điều này. Cả hai tỷ lệ phí được xác thực lại so với các giới hạn trong [Giới hạn tỷ lệ](#rate-caps) trên mọi biến thể chạm vào chúng. |
+| `CreatePlatformAllowConfig` / `ClosePlatformAllowConfig` | quản trị viên nền tảng | Thêm hoặc xóa một `GlobalConfig` được phép cho nền tảng này. |
+| `CreatePlatformCurveRule` / `ClosePlatformCurveRule` | `curve_rule_manager` hoặc quản trị viên nền tảng | Tạo hoặc đóng tài khoản quy tắc của một `GlobalConfig`. |
+| `UpdatePlatformCurveRule` / `RemovePlatformCurveRule` | `curve_rule_manager` hoặc quản trị viên nền tảng | Thêm, thay thế, hoặc xóa một nhóm kiểm tra. Tài khoản được thay đổi kích thước, vì vậy tiền thuê theo nội dung. |
+| `ClaimPlatformFee` | `platform_fee_wallet` | Quét phí nền tảng cho mỗi pool từ `PoolState.quote_vault`. |
+| `ClaimPlatformFeeFromVault` | `platform_fee_wallet` | Quét vault phí cho mỗi nền tảng (PDA tại `[platform_config, quote_mint]`). |
+
+Các xoay ví (`platform_fee_wallet`, `platform_nft_wallet`, `platform_vesting_wallet`, `platform_cp_creator`, `transfer_fee_extension_auth`, `cpswap_config`) đều đi qua `UpdatePlatformConfig`. Đọc bảng gửi `update_platform_config` của source để biết các mã `param` chính xác.
+
+## Những cạm bẫy phổ biến
+
+- **`restrict_curve_param` được bật trước khi builder được cập nhật.** Trong khi nó là `1`, PDA quy tắc phải nằm trong `remaining_accounts` trên mọi launch, thậm chí đối với một config không có tài khoản quy tắc — một tài khoản bị thiếu là `NotEnoughRemainingAccounts`, không phải một lượt qua. Gửi thay đổi builder trước, sau đó lật cờ.
+- **`restrict_curve_param` được bật với một quy tắc trống.** Một quy tắc giữ không nhóm, hoặc một nhóm giữ không ràng buộc, cho phép mọi thứ. Bật cờ không phải là tự nó một hạn chế; viết các nhóm trước, xác minh chúng với [kiểm tra SDK](/docs/i18n/vi/products/launchlab/curve-rules#check-before-you-send), và tập luyện toàn bộ chuỗi trên devnet.
+- **Làm tròn chia sẻ NFT.** Ba tỷ lệ phải cộng lại chính xác `1_000_000`. Lỗi off-by-one tại `CreatePlatformConfig` hoàn nguyên; off-by-one tại thời gian chạy sẽ mint hoặc đốt một đơn vị LP bổ sung, đó là những gì kiểm tra bằng nhau nghiêm ngặt ở đó để ngăn chặn.
+- **Phân bổ kép vesting nền tảng.** Nếu `platform_vesting_scale > 0`, nền tảng phải gọi `CreatePlatformVestingAccount` một lần sau khi giai đoạn gây quỹ của launch kết thúc; nếu nó quên, chia sẻ đó vẫn chưa được phân bổ và không hoạt động mãi mãi (ngân sách `total_locked_amount` của launch được tiêu thụ nhưng nền tảng không bao giờ yêu cầu).
+- **Sự mơ hồ `platform_cp_creator`.** Khi được đặt thành `Pubkey::default()`, creator launch được ghi là `pool_creator` của pool CPMM sau tốt nghiệp; khi được đặt thành một khóa thực, khóa đó được ghi thay thế. Điều này xác định người thụ hưởng của các phí creator CPMM sau tốt nghiệp và ai có thể ký đường dẫn `CPMM::CollectCreatorFee` gốc. Đường dẫn bộ sưu tập không có quyền vẫn trả các ATA chính tắc của khóa được ghi này. Quyết định tại thời gian tạo cấu hình nền tảng mô hình nào bạn muốn.
+- **`transfer_fee_extension_auth` được đặt muộn hoặc xoay.** Trường được đọc hai lần cho mỗi launch Token-2022 — một lần khi tạo mint cho `withdraw_withheld_authority`, một lần khi tốt nghiệp cho `transfer_fee_config_authority` — vì vậy một giá trị thay đổi giữa hai thời điểm đó để lại hai quyền hạn trên các khóa khác nhau. Xem [Quyền hạn transfer-fee Token-2022](#token-2022-transfer-fee-authorities).
+- **Hạn chế mà không có tài khoản cho phép.** Bật `restrict_global_config` trước khi tạo `PlatformAllowConfig` cần thiết chặn các launch mới chọn config đó.
+
+## Con trỏ
+
+- [`products/launchlab/global-config`](/docs/i18n/vi/products/launchlab/global-config) — các quy tắc phía giao thức mà launch phải thỏa mãn.
+- [`products/launchlab/vesting`](/docs/i18n/vi/products/launchlab/vesting) — cơ chế `platform_vesting_scale`.
+- [`products/launchlab/creator-fees`](/docs/i18n/vi/products/launchlab/creator-fees) — phí creator so với quyền Fee Key nền tảng.
+- [`products/launchlab/platforms`](/docs/i18n/vi/products/launchlab/platforms) — hướng dẫn của người tích hợp nền tảng.
+
+Nguồn:
+
+- `raydium-launch/programs/launchpad/src/states/platform_config.rs` — `PlatformConfig`, `PlatformParams`, `MigrateNftInfo`, `is_curve_rule_manager`, `is_platform_admin`.
+- `raydium-launch/programs/launchpad/src/states/platform_curve_rule.rs` — `PlatformCurveRule`, `CurveRuleGroup`, `ParamConstraint`.
+- `raydium-launch/programs/launchpad/src/states/platform_allow_config.rs` — `PlatformAllowConfig`.
+- `raydium-launch/programs/launchpad/src/instructions/platform/update_platform_config.rs` — gửi `PlatformConfigParam` và các setter cho mỗi trường thực thi các giới hạn tỷ lệ thời gian cập nhật.
+- `raydium-launch/programs/launchpad/src/lib.rs` — các điểm vào cấu hình nền tảng và allow-config.
+- `raydium-launch/programs/launchpad/src/instructions/initialize_with_token_2022.rs` — nơi `transfer_fee_extension_auth` được viết vào `TransferFeeConfig` của mint mới.
+- `raydium-launch/programs/launchpad/src/instructions/admin/migrate_to_cpswap.rs` — bàn giao quyền hạn thời gian tốt nghiệp và bảo vệ `get_withdraw_withheld_authority` của nó.

@@ -6,9 +6,9 @@ Tooling for the Raydium docs repo. Currently:
 
 ## `translate.py` — batch translator
 
-Walks the English source at the repo root and writes a translated MDX file under each target locale's directory (`zh/`, `zh-Hant/`, `ja/`, `ko/`, `ru/`, `es/`, `de/`, `fr/`).
+Walks the English source under `docs/en` and writes translated files under each target locale in `docs/i18n` (`docs/i18n/zh/`, `docs/i18n/zh-Hant/`, `docs/i18n/ja/`, `docs/i18n/ko/`, `docs/i18n/ru/`, `docs/i18n/es/`, `docs/i18n/de/`, `docs/i18n/fr/`, etc.).
 
-It preserves frontmatter keys, code fences, JSX components, internal-link structure, Solana program IDs and account/instruction names. It rewrites internal `/<path>` links to `/<locale>/<path>` and inserts the AI-translation banner at the top of every translated page.
+It preserves frontmatter keys, code fences, JSX components, internal-link structure, Solana program IDs and account/instruction names. It rewrites internal `/docs/en/<path>` links to `/docs/i18n/<locale>/<path>` and inserts the AI-translation banner at the top of every translated page.
 
 ### Setup
 
@@ -37,7 +37,7 @@ python3 scripts/translate.py --locales ja
 
 ```bash
 python3 scripts/translate.py \
-  --paths products/cpmm/overview.mdx,products/clmm/overview.mdx \
+  --paths docs/en/products/cpmm/overview.mdx,docs/en/products/clmm/overview.mdx \
   --locales zh,zh-Hant
 ```
 
@@ -72,7 +72,7 @@ Every run appends to `scripts/translate.log` with timestamp, locales, page count
 
 **Not translated:** code fences, inline code, frontmatter keys (other than title/description), JSX prop names, JSX prop values that look like URLs/identifiers/icons, Solana addresses, PDA names, instruction/account/struct names, math expressions.
 
-**Internal-link rewriting:** `[X](/foo)` becomes `[X-translated](/<locale>/foo)`. Anchor-only and external links untouched. Already-localized links untouched.
+**Internal-link rewriting:** `[X](/docs/en/foo)` becomes `[X-translated](/docs/i18n/<locale>/foo)`. Anchor-only and external links untouched. Already-localized links untouched.
 
 ### When to re-run
 

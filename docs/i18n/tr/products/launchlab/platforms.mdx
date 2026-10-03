@@ -1,0 +1,124 @@
+---
+title: "LaunchLab platformları"
+description: "Üçüncü tarafların LaunchLab'de Platform PDA'sını nasıl kaydettiklerini, kendi markalı token-başlatma deneyimi sunmalarını, platform ücretlerini belirlemelerini ve göç sonrası parametreleri yapılandırmalarını öğrenin."
+---
+
+<Info>
+  **Bu sayfa yapay zekâ tarafından otomatik olarak çevrilmiştir. İngilizce sürüm esas alınır.**
+
+  [İngilizce sürümü görüntüle →](/docs/en/products/launchlab/platforms)
+</Info>
+
+<Info>
+  LaunchLab'deki bir **Platform**, Raydium'un LaunchLab programının üzerine inşa edilmiş üçüncü taraf başlatma ortamıdır. Platformlar kendilerini markalandırabilir, kendi ücretlerini talep edebilir ve her bir token başlatması için bonding-curve göç sonrası parametrelerini yapılandırabilir — ayrı bir zincir üstü program çalıştırmadan. Raydium'un kendi başlatma arayüzü, birçok platform arasında sadece birisidir.
+</Info>
+
+## Platformların neden var olduğu
+
+Raydium, LaunchLab'in **paylaşılan bir ilkel** olmasını istedi, tek bir markalı ürün değil. Platform PDA sistemi, ekosistemler, araçlama sağlayıcıları, topluluklar ve meme takımlarının, hepsi aynı temel LaunchLab bonding-curve programına ve CPMM göç sonrası havuzuna yerleşen küratörlü veya markalı başlatma deneyimleri sunmasını sağlar.
+
+Gerçek dünyada görebileceğiniz platform örnekleri:
+
+- **Raydium'un kendi LaunchLab arayüzü** raydium.io/launchpad'de — referans uygulaması.
+- **İş ortağı launchpad'ler** — kendi Platform PDA'sını kaydettiren ve başlatma deneyimini markalandıran üçüncü taraflar.
+- **Niş platformlar** — örneğin, belirli bir temaya bağlı meme coinleri başlatan ve hazinesini finanse eden özel ücret payı olan topluluk özel platformu.
+
+Tüm bu tokenler hala aynı LaunchLab programında yaşar, aynı CPMM programına geçer ve aynı toplayıcılar tarafından yönlendirilebilir.
+
+## Platform PDA'sı
+
+Her platform, LaunchLab programında depolanan bir Platform PDA tarafından temsil edilir. Alanlar şunları içerir:
+
+| Alan | Açıklama |
+|---|---|
+| `platform_key` | Platform PDA'sını türetmek için kullanılan seed / tanımlayıcı. |
+| `platform_fee_destination` | Göç öncesi ve sonrası işlem ücretlerinin platform payını alan hesap. |
+| `platform_fee_bps` | Göç öncesi swaplarda platform ücret payı (platforma göre değişir). |
+| `creator_fee_rate` | Bonding-curve işlemi sırasında yaratıcı ücret oranı. |
+| `platform_scale`, `creator_scale`, `burn_scale` | Depolanan LP ölçekleri. Yükseltmeden önce, yaratıcı ölçeği bir yaratıcı Ücret Anahtarına gitti. Bundan sonra yürütülen göçler için, ilk ikisi platformun kilitli LP payına birleşir; `burn_scale` yakılır. |
+| `cp_config_id` | Göç sonrası hedef CPMM ise, hangi `AmmConfig` kullanılacak — ücret katmanını seçer. |
+| `restrict_global_config` | Başlatmaların seçilen `GlobalConfig` için platform tarafından oluşturulan izin PDA'sını sunması gerekip gerekmediği. |
+| `name`, `description`, `image_url` | Platform markalandırmasını destekleyen cüzdanlar ve arayüzler tarafından kullanılan görüntüleme meta verileri. |
+| `tokens_launched` | Bu platform altında oluşturulan tokenların sayacı veya zincir üstü dizini. |
+
+Tam alan adları LaunchLab IDL'sinde bulunur ([`sdk-api/anchor-idl`](/docs/i18n/tr/sdk-api/anchor-idl)). Yukarıdaki tablo açıklayıcı bir genel bakıştır.
+
+## Bir platformun kontrol edebileceği şeyler
+
+**Ücret yakalama:**
+
+- Her göç öncesi alım/satışta **platform ücret payı**.
+- **Göç sonrası payı** — 2026-08-17 yükseltmesinden önce, yaratıcı ölçeği ayrı bir yaratıcı Ücret Anahtarı üretti. Bundan sonra yürütülen göçler için, `platform_scale + creator_scale` bir platform tarafından sahip olunan kilitli LP pozisyonu haline gelir ve `burn_scale` yakılır.
+
+**Göç sonrası hedef:**
+
+- `cp_config_id` aracılığıyla seçilen `AmmConfig` ile **CPMM**. Tüm yeni başlatılan başlatmalar CPMM kullanır.
+- **AMM v4** yalnızca eski göç türü ile oluşturulan mevcut başlatma durumu için geçiş yolu olarak kalır.
+
+**Kullanıcı deneyimi:**
+
+- Raydium uygulaması ve LaunchLab tokenlarını yüzeyleyen herhangi bir cüzdan / explorer tarafından kullanılan **markalandırma meta verileri**.
+- **Başlatma sayfası özelleştirmesi** — kendi ön ucu barındıran platformlar, tokenları yalnızca kendi platformunun başlatmalarını gösterecek şekilde filtreleyebilir.
+
+## Bir platformun kontrol edemediği şeyler
+
+- **Bonding-curve matematiği.** Eğri şekli (lojistik, üstel, vb.) LaunchLab programının kendisinin parçasıdır. Platformlar desteklenen eğrilerden seçim yapar; keyfi özel eğriler ekleyemezler.
+- **Göç eşiği mantığı.** CPMM'ye geçişi tetikleyen koşul program tarafından uygulanır.
+- **Temel güvenlik / denetim duruşu.** Her platform LaunchLab'in denetim geçmişini devralır; kötü niyetli bir platform programı değiştirerek bunu atlatamaz.
+
+## Platform kaydı
+
+LaunchLab programı bir `create_platform` talimatını ortaya koymaktadır (IDL'den tam ad). Arayanlar şunları iletir:
+
+- Platform PDA'sını türetecek seed.
+- Ücret hedef hesabı.
+- İstenen ücret bps (program düzeyinde sınırlara tabi).
+- Göç sonrası yapılandırma (uygulanabilirse CPMM `AmmConfig` ID'si).
+- Markalandırma meta verileri.
+
+Platform PDA'sı için kira yaratıcı tarafından ödenir. Markalandırma ve bazı ücret parametrelerine yapılan güncellemeler oluşturulduktan sonra platformun yetkilisi tarafından izin verilir; yapısal parametreler (göç hedef programı) tipik olarak izin verilmez.
+
+Mevcut LaunchLab IDL'sinde tam talimat imzası için [`products/launchlab/instructions`](/docs/i18n/tr/products/launchlab/instructions) bölümüne bakın.
+
+## Ekonomik etkileşim
+
+LaunchLab bonding eğrisinde tek bir swap, değeri kabaca şu şekilde dağıtır (tam oranlar platform tarafından ayarlanır):
+
+```
+Alıcı ödüyor:                100 SOL
+Protokol ücreti (LaunchLab): – küçük %
+Platform ücreti:             – platform_fee_bps%
+Yaratıcı ücreti (göç öncesi): – creator_fee_bps% (etkinse)
+Kalan (eğriye):              ~ geri kalan
+```
+
+Göç sonrası, LP tokenlarının iki etkili hedefi vardır:
+
+```
+Geçişte basılan LP tokenları:  100%
+  → Yakılan:                      burnScale
+  → Platform Ücret Anahtarı:      platformScale + creatorScale
+```
+
+Platform Ücret Anahtarı, kilitli likiditeyi geri çekme yeteneği olmaksızın talep edilebilir LP ücret haklarını temsil eder. Yakılan LP'nin Ücret Anahtarı sahibi yoktur.
+
+## Global yapılandırmaları kısıtlama
+
+Bir platform yöneticisi `restrict_global_config = 1` ayarlayabilir ve kabul edilen her `GlobalConfig` için bir `PlatformAllowConfig` oluşturabilir. Yeni başlatma işlemleri daha sonra eşleşen izin PDA'sını eklemelidir. Kısıtlama devre dışı bırakıldığında, platform programın diğer doğrulamalarını geçen herhangi bir yapılandırmayı kabul eder.
+
+## Entegratör notları
+
+- **Tokenları platforma göre listeleme.** Yalnızca belirli bir Platform PDA altında başlatılan tokenları listelemek için API havuz bilgisi / mint uç noktalarını `platform` filtresi ile kullanın (desteklendiğinde).
+- **Markalandırma görüntüsü.** LaunchLab tokenlarını yüzeyleyen bir cüzdan veya explorer oluşturursanız, Platform PDA'sından platformun adını / görüntü URL'sini okumak, her token için "LaunchLab" göstermekten çok daha iyi UX'dir.
+- **Ücret matematiği.** Her bonding-curve teklifi, protokol ve yaratıcı ücretlerine ek olarak platform ücretini hesaba katmalıdır. SDK'nın teklif yardımcıları, Platform PDA sağlandığında bunu otomatik olarak yapar.
+
+## Sonraki adımlar
+
+- [`products/launchlab/overview`](/docs/i18n/tr/products/launchlab/overview) — LaunchLab program modeli.
+- [`products/launchlab/creator-fees`](/docs/i18n/tr/products/launchlab/creator-fees) — yaratıcı ve platform ücretlerinin göç sonrası nasıl etkileşim kurduğu.
+- [`user-flows/burn-and-earn`](/docs/i18n/tr/user-flows/burn-and-earn) — göç sonrası LP'nin kullandığı kilit mekanizması.
+
+Kaynaklar:
+
+- Raydium SDK v2'de paketlenmiş LaunchLab program IDL'si: [`raydium-io/raydium-sdk-V2`](https://github.com/raydium-io/raydium-sdk-V2) `src/raydium/launchpad/` altında.
+- `api-v3.raydium.io/launchlab/platforms` uç noktaları (mevcut olduğunda).

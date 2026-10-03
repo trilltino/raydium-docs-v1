@@ -1,0 +1,184 @@
+---
+title: "Ticks 與 Positions"
+description: "CLMM 如何將價格離散化為 ticks、tick 陣列如何壓縮儲存，以及管理 position 位置的規則。"
+---
+
+<Info>
+  **本頁內容由 AI 自動翻譯，所有內容以英文版本為準。**
+
+  [查看英文版 →](/docs/en/products/clmm/ticks-and-positions)
+</Info>
+
+## 為什麼需要 ticks
+
+CLMM 的流動性集中在價格範圍內。為了在鏈上使範圍易於處理，價格被量化為整數 **ticks**，其中每個 tick 是前一個的常數倍數：
+
+$$
+\text{price}(i) = 1.0001^{\,i}
+$$
+
+一個 tick 對應 0.01% 的價格變動，或約 1 個基點。映射關係如下：
+
+| Tick 索引 `i` | 價格倍數 |
+|---|---|
+| `0` | `1.0000` |
+| `100` | `1.0100` (≈ +1.00%) |
+| `-100` | `0.9900` (≈ −0.99%) |
+| `10000` | `2.7181` (≈ e) |
+| `MAX_TICK = 443636` | ≈ `1.84e19` |
+| `MIN_TICK = -443636` | ≈ `5.42e-20` |
+
+`MIN_TICK` 和 `MAX_TICK` 的選擇確保 `sqrt_price_x64` 在兩端都能適配 `u128`。每個 pool 都強制 `tick_lower >= MIN_TICK` 和 `tick_upper <= MAX_TICK`。實際上，web UI 會將範圍限制在更窄的範圍內，以防止使用者將流動性鎖定在無法到達的 ticks。
+
+## Tick 間距
+
+pool 的 `AmmConfig` 固定了一個 **tick 間距** — position 唯一允許用作端點的 ticks。如果 `tick_spacing = 60`，只有 ticks `…, −120, −60, 0, 60, 120, …` 是有效的。嘗試開啟端點為 `31` 的 position 會因 `TickAndSpacingNotMatch` 而回滾。
+
+常見的已發佈間距：
+
+| 費用層級 | `trade_fee_rate` | Tick 間距 | 每個 tick position 最粗的價格步長 |
+|----------|------------------|--------------|---------------------------------------|
+| 0.01% | `100` | 1 | 0.01% |
+| 0.05% | `500` | 10 | 0.10% |
+| 0.25% | `2500` | 60 | 0.60% |
+| 1.00% | `10000` | 120 | 1.21% |
+
+間距越粗，需要初始化的 tick 陣列越少，開啟寬 position 的成本越低，價格邊界越模糊。波動性交易對通常位於 120 間距層級；穩定幣位於 1 間距層級。
+
+## Tick 陣列
+
+pool 不會在單獨的帳戶中儲存每個 tick 的狀態。相反，`TICK_ARRAY_SIZE` 個相鄰的 ticks（當前 Raydium CLMM 中為 60 個）被打包到單個 `TickArrayState` 中。陣列的第一個 tick 是其 `start_tick_index`，它覆蓋恰好 `TICK_ARRAY_SIZE * tick_spacing` 個整數 tick 單位。
+
+對於 `tick_spacing = 60` 和 `TICK_ARRAY_SIZE = 60`：
+
+- 每個 tick 陣列跨越 `60 × 60 = 3600` 個整數 ticks。
+- `start_tick_index` 是 3600 的倍數：`…, -7200, -3600, 0, 3600, 7200, …`。
+
+在 `tick_spacing = 60` 時，position 端點 `t = 2040` 位於 `start_tick_index = 0` 的 tick 陣列中。position 端點 `t = 4200` 位於 `start_tick_index = 3600` 的陣列中。
+
+### 何時建立陣列
+
+tick 陣列是延遲初始化的：**第一個**引用其中任何 tick 的 position 會初始化該陣列並支付租金。Swaps 不會初始化 tick 陣列 — 它們使用位圖跳過未初始化的陣列。並沒有單獨的 init-tick-array 指令：`OpenPosition*` 和 `IncreaseLiquidity*` 在內部呼叫 `TickArrayState::get_or_create_tick_array`，並以 `payer` 的費用配置缺少的陣列。你只需傳入 tick 陣列 PDA — 即使它仍未初始化且由系統擁有。
+
+### Tick 陣列不會被關閉
+
+一旦 tick 陣列被初始化，它就會在 pool 的整個生命週期內持續存在。程式**不會**公開關閉 tick 陣列的路徑，即使 `initialized_tick_count` 回到零也不會。tick 陣列沒有租金恢復；第一個接觸陣列的 position 支付的租金會永久鎖定在該帳戶中。這是一個刻意的權衡：重複使用現有 tick 陣列對每個後續 position 都是免費的，因此一個交易量大的 pool 只需為每個 `(pool, start_tick_index)` 槽位支付一次租金，無論流動性變動如何。
+
+### 位圖
+
+找到「當前 tick 左/右的下一個已初始化 tick」必須很快 — swap 可能會跨越許多 ticks。pool 在 `PoolState` 中為 tick 0 周圍**±512** 個陣列的範圍內聯存儲每個 tick 陣列 1 位的位圖（`TICK_ARRAY_BITMAP_SIZE = 512`；該欄位是 `[u64; 16]` = 1,024 位，分成 512 個負值 / 512 個正值，即陣列索引 −512 … +511）。在該範圍之外（全範圍 positions、異常設置），`TickArrayBitmapExtension` 提供溢出。
+
+swap 遍歷位圖：`lowest_set_bit_above(tick_current_array_index)` 給出 swap 正在跨越的一側的下一個具有已初始化 tick 的陣列。在該陣列內，類似的位掃描定位下一個已初始化的 tick。
+
+## `liquidity_gross` 和 `liquidity_net`
+
+每個**已初始化**的 tick 儲存兩個流動性值：
+
+- **`liquidity_gross`** — 所有將此 tick 作為任一端點引用的 positions 的 `L` 之和。當 `liquidity_gross` 達到零時，tick 變為未初始化，可以從位圖中移除。
+- **`liquidity_net`** — 當價格**向上跨越**此 tick（在 tick 空間中從左到右）時，pool 級別 `liquidity` 的*帶符號*變化。如果此 tick 是大小為 `L` 的 position 的下界，它貢獻 `+L`；如果它是該 position 的上界，它貢獻 `−L`。
+
+實例：同一 pool 上的兩個 positions。
+
+- Position A：`tick_lower = -120`，`tick_upper = 0`，流動性 `L_A = 100`。
+- Position B：`tick_lower = -60`，`tick_upper = 60`，流動性 `L_B = 50`。
+
+逐 tick 狀態：
+
+| Tick | 被觸及者 | `liquidity_gross` | `liquidity_net` |
+|------|------------|-------------------|------------------|
+| `-120` | A 下界 | 100 | +100 |
+| `-60` | B 下界 | 50 | +50 |
+| `0` | A 上界 | 100 | −100 |
+| `60` | B 上界 | 50 | −50 |
+
+不同 `tick_current` 值的 pool 級別 `liquidity`：
+
+- `tick_current = -180`：`liquidity = 0`（任何 position 之前）
+- `tick_current = -90`：`liquidity = 100`（僅在 A 內）
+- `tick_current = -30`：`liquidity = 150`（在 A 和 B 內）
+- `tick_current = 30`：`liquidity = 50`（僅在 B 內）
+- `tick_current = 90`：`liquidity = 0`（超過兩者）
+
+在 swap 期間每次 tick 跨越時，程式將 `liquidity_net`（可能為負）添加到 `PoolState.liquidity`。這正是 Uniswap v3 的機制。
+
+## Positions 作為 NFTs
+
+Raydium CLMM position 是一個 NFT。開啟 position 會將一個全新的 mint（供應量為 1）鑄造到呼叫者的錢包中，該 mint 的權限由 CLMM 程式持有。程式將 position 所有權綁定到**在 CPI 時在該 mint 的 ATA 中持有餘額的任何人**。
+
+後果：
+
+- **Positions 通常是可轉移的。** 錢包可以通過轉移 NFT 來出售或空投 position。新持有者隨後可以呼叫 `CollectRewards`、`IncreaseLiquidity` 等。例外是在受限發行人路徑下凍結的 position。
+- **Positions 在 CLMM 外可尋址。** 市場和錢包像顯示其他 NFTs 一樣顯示 positions。SDK 在 mint 元數據上設置合理的 `name`/`symbol`。
+- **Position 的 PDA 源自 NFT mint。** 你可以找到 `PersonalPositionState` 而無需知道誰當前持有它。
+
+### 受限發行人 positions
+
+每個在 2026-08 升級後建立的 position NFT mint 都會記錄其 CLMM `pool_state` 作為凍結權限。**這並不意味著每個新 position 都被凍結。** 對於普通 pools 和每個非匹配 position，NFT 代幣帳戶保持未凍結和可轉移。pool PDA 無法在 CLMM 程式外簽名，CLMM 不公開通用凍結指令。
+
+凍結需要以下兩個條件都滿足：
+
+1. position 通過 `OpenPositionV2` 或 `OpenPositionWithToken22Nft` 開啟。
+2. 至少一個 pool vault mint 從程式的硬編碼受限發行人列表中攜帶凍結權限。
+
+只有當兩個條件都滿足時，CLMM 才會在鑄造後立即凍結新建立的 position NFT 帳戶。`OpenPosition` V1 不應用此篩選器。請參閱 [`reference/program-addresses`](/docs/i18n/zh-Hant/reference/program-addresses#clmm-restricted-issuer-freeze-authorities) 以獲取當前列表。
+
+凍結的 position：
+
+- 無法將其 NFT 轉移到另一個代幣帳戶。
+- 無法更改 NFT 代幣帳戶的所有者。
+- 當記錄的所有者簽名時，仍可以增加或減少流動性並收集費用或獎勵。
+- 仍可以關閉。`ClosePosition` 使用 pool PDA 解凍 NFT 帳戶，然後在同一指令中燒毀 NFT 並關閉 position 帳戶。
+
+現有 positions 不會被遷移或追溯凍結。在升級前建立的 position NFT mints 保留其先前的凍結權限設置。
+
+<Warning>
+  關閉凍結 position 的客戶端必須將 position 的 `pool_state` 作為 `ClosePosition` 的第一個剩餘帳戶附加。聲明的 IDL 帳戶列表保持不變，因此較舊的客戶端可以成功開啟凍結 position，但稍後可能因 `AccountLack` 而無法關閉它。在支持這些 pools 之前更新 close builder。
+</Warning>
+
+### Token-2022 positions
+
+CLMM 可以通過 `OpenPositionV2` 在經典 SPL Token 下鑄造 position NFT，或通過 `OpenPositionWithToken22Nft` 在 Token-2022 下鑄造。兩個 V2 路徑都檢查 pool vault mints 並應用相同的受限發行人凍結規則。`OpenPosition` V1 是舊版經典代幣路徑，無法服務具有 Token-2022 vault mints 的 pool。錢包和市場相容性不同；Raydium 的 UI 跟蹤兩個 NFT 程式。
+
+## 允許範圍規則
+
+在 `OpenPosition` 時，程式強制執行：
+
+1. `tick_lower < tick_upper`。
+2. `tick_lower % tick_spacing == 0` 和 `tick_upper % tick_spacing == 0`。
+3. `MIN_TICK <= tick_lower` 和 `tick_upper <= MAX_TICK`。
+4. 呼叫者已提供包含 `tick_lower` 和 `tick_upper` 的 tick 陣列 PDA。它們不需要已初始化 — 程式會自行建立缺少的那一個。
+5. 位圖擴展帳戶，如果此 position 延伸到擴展範圍。
+
+如果任何檢查失敗，指令會因 `TickInvalidOrder`（規則 1）、`TickAndSpacingNotMatch`（規則 2）、`InvalidTickIndex`（規則 3）或 `MissingTickArrayBitmapExtensionAccount`（規則 5）而回滾；`NotApproved` 涵蓋的是另一種情況，即 `pool_state.status` 設定了開啟 position 的位元。請參閱 [`reference/error-codes`](/docs/i18n/zh-Hant/reference/error-codes)。
+
+## 「範圍內」vs「範圍外」
+
+當 `tick_lower <= tick_current < tick_upper` 時，position 是**範圍內**。只有範圍內的 positions 對 `PoolState.liquidity` 有貢獻，因此只有它們才能賺取 swap 費用。
+
+範圍外的 position：
+
+- 持有*一個*代幣的 100%。如果 `tick_current < tick_lower` — 價格在範圍**之下** — position 完全是 **token0**；如果 `tick_current >= tick_upper` — 價格在範圍**之上** — 它完全是 **token1**。價格以 `token1/token0` 報價，因此被上漲價格走完的 position 最終會持有報價資產。
+- **不**賺取 swap 費用。
+- **確實**如果 pool 的獎勵流向範圍外流動性發出獎勵，則繼續累積獎勵 — 但 Raydium 的預設行為是「僅向範圍內發出」，符合 Uniswap v3 慣例。請參閱 [`products/clmm/fees`](/docs/i18n/zh-Hant/products/clmm/fees)。
+
+管理 CLMM positions 的 LPs 花費大部分注意力將 positions 保持在範圍內，因為價格會移動。
+
+## 常見整合陷阱
+
+- **偏離間距的端點。** 從目標價格計算 tick 的程式碼必須在將其傳遞給 `OpenPosition` 之前對齊到 `tick_spacing` 的倍數，否則會因 `TickAndSpacingNotMatch` 而回滾。SDK 幫助程式是 `TickUtil.getPriceAndTick({ price, mintADecimals, mintBDecimals, zeroForOne, tickSpacing })`（注意：是單數的 `TickUtil`）；自製數學通常會跳過這個對齊。
+- **缺少 tick 陣列。** 開啟寬 position 會接觸兩個 tick 陣列；忘記將它們作為可寫帳戶傳遞會導致回滾。它們不需要事先存在 — 程式會建立缺少的那一個 — 但該*帳戶*必須在列表中。
+- **Swap 後的陳舊 tick。** `tick_current` 可以在一次 swap 中跨越許多 ticks。如果你的 UX 從一個 RPC 呼叫顯示「當前 tick」，然後在稍後的呼叫中開啟 position，相對於實時價格的相對 position 可能偏離數十個 ticks。在簽名前重新獲取。
+- **帶有額外元數據的 Position NFTs。** 如果你構建一個識別 Raydium positions 的錢包，使用 position PDA / 程式數據，而不是硬編碼的元數據欄位。新 position mints 在建立時使用 pool PDA 作為 mint 和凍結權限；在鑄造單個 NFT 後移除 mint 權限。
+- **假設每個 position 都是可轉移的。** 在顯示轉移、市場、託管或燒毀與賺取操作之前，讀取 NFT 代幣帳戶的 `isFrozen` 狀態。
+
+## 接下來去哪裡
+
+- [Math](/docs/i18n/zh-Hant/products/clmm/math) — swap 逐步執行和費用增長推導，tick 邊界參與其中。
+- [Accounts](/docs/i18n/zh-Hant/products/clmm/accounts) — `TickArrayState` 和 `PositionState` 佈局。
+- [Fees and rewards](/docs/i18n/zh-Hant/products/clmm/fees) — 範圍內性如何控制費用累積。
+- [`algorithms/clmm-math`](/docs/i18n/zh-Hant/algorithms/clmm-math) — 集中流動性公式的共享推導。
+
+來源：
+
+- [`raydium-io/raydium-clmm` — `tick_array`、`tick`、`position` 模組](https://github.com/raydium-io/raydium-clmm)
+- "Uniswap v3 Core" 白皮書，§6 (ticks)、§7 (fee growth)
